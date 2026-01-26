@@ -799,7 +799,7 @@ app.get('/stream', async (req, res) => {
     
     // Log errors
     ytDlpProcess.stderr.on('data', (data) => {
-      console.error('yt-dlp stderr:', data.toString());
+      // console.error('yt-dlp stderr:', data.toString());
     });
     
     ytDlpProcess.on('error', (error) => {

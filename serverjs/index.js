@@ -464,7 +464,27 @@ app.post('/tiktok', async (req, res) => {
 
   } catch (error) {
     console.error('Error in TikTok handler:', error);
-    return res.status(500).json({ error: error.message || 'An error occurred processing the request' });
+    
+    // Provide user-friendly error messages
+    let errorMessage = error.message || 'An error occurred processing the request';
+    let statusCode = 500;
+    
+    // Handle specific error cases
+    if (errorMessage.includes('Unsupported URL') || errorMessage.includes('Unable to download webpage')) {
+      statusCode = 404;
+      errorMessage = 'Video not found. Please check the URL and make sure the video exists.';
+    } else if (errorMessage.includes('IP address is blocked')) {
+      statusCode = 403;
+      errorMessage = 'Access denied. The video may be private or restricted.';
+    } else if (errorMessage.includes('yt-dlp failed')) {
+      // Extract cleaner error message from yt-dlp output
+      const match = errorMessage.match(/ERROR: (.+)/);
+      if (match) {
+        errorMessage = match[1];
+      }
+    }
+    
+    return res.status(statusCode).json({ error: errorMessage });
   }
 });
 

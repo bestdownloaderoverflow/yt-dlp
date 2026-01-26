@@ -2,6 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-01-26
+
+### Added
+- ✅ **Docker Support** - Complete Docker & Docker Compose setup
+  - Dockerfile with Node.js 20, Python3, yt-dlp, ffmpeg
+  - docker-compose.yml for easy deployment
+  - .dockerignore for optimized builds
+  - Health checks configured
+  - Volume mounts for temp directory
+- ✅ **Docker Documentation** - Comprehensive Docker guide (DOCKER.md)
+  - Quick start guide
+  - Production deployment instructions
+  - Troubleshooting guide
+  - Security best practices
+
+### Technical Details
+- Base image: node:20-bullseye-slim
+- Installed: ffmpeg, python3, yt-dlp, curl
+- Health check: Every 30 seconds
+- Temp directory: Mounted as volume
+- yt-dlp wrapper: /usr/local/bin/yt-dlp.sh
+
 ## [1.2.1] - 2026-01-26
 
 ### Fixed

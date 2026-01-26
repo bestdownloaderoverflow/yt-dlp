@@ -1,0 +1,38 @@
+# Serverjs specific ignores
+serverjs/node_modules
+serverjs/npm-debug.log
+serverjs/.env
+serverjs/.env.local
+serverjs/.env.*.local
+serverjs/temp
+serverjs/*.log
+serverjs/.vscode
+serverjs/.idea
+
+# Parent directory ignores
+.git
+.gitignore
+.DS_Store
+*.md
+!README.md
+test/
+.github/
+devscripts/
+bundle/
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.vscode/
+.idea/
+
+# Keep these
+!yt-dlp.sh
+!yt_dlp/
+!serverjs/

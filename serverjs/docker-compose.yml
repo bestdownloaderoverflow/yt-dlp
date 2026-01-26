@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  yt-dlp-server:
+    build:
+      context: ..
+      dockerfile: serverjs/Dockerfile
+    container_name: yt-dlp-tiktok-server
+    restart: unless-stopped
+    ports:
+      - "3021:3021"
+    environment:
+      - NODE_ENV=production
+      - PORT=3021
+      - BASE_URL=http://localhost:3021  # Change this to your actual public URL in production
+      - ENCRYPTION_KEY=overflow  # Change this to a secure key in production
+      - YT_DLP_PATH=/usr/local/bin/yt-dlp.sh  # Uses wrapper that checks /app/yt-dlp.sh first
+      - FFMPEG_PATH=ffmpeg
+      - TEMP_DIR=./temp
+    volumes:
+      - ./temp:/app/serverjs/temp
+      # Mount yt-dlp.sh from parent directory (optional, for updates)
+      # - ../yt-dlp.sh:/app/yt-dlp.sh:ro
+    networks:
+      - tiktok_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3021/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  tiktok_network:
+    driver: bridge

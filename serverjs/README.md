@@ -15,6 +15,28 @@ Server API untuk download TikTok menggunakan yt-dlp. Output API **100% compatibl
 
 ## 🚀 Quick Start
 
+### Option 1: Using Docker (Recommended)
+
+```bash
+cd serverjs
+docker-compose up -d
+```
+
+Server akan running di `http://localhost:3021`
+
+**Check status:**
+```bash
+docker-compose ps
+docker-compose logs -f yt-dlp-server
+```
+
+**Stop:**
+```bash
+docker-compose down
+```
+
+### Option 2: Manual Installation
+
 ```bash
 cd serverjs
 npm install
@@ -23,7 +45,15 @@ npm start
 
 Server akan running di `http://localhost:3021`
 
+> 📖 **Docker Guide:** See [DOCKER.md](./DOCKER.md) for detailed Docker setup and production deployment.
+
 ## 📋 Prerequisites
+
+### For Docker:
+- Docker Engine 20.10+
+- Docker Compose 2.0+
+
+### For Manual Installation:
 
 - Node.js >= 18.0.0
 - yt-dlp (sudah tersedia di parent directory)

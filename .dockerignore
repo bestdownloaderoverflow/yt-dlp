@@ -1,0 +1,84 @@
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation
+*.md
+!README.md
+!serverjs/README.md
+
+# Test files
+test/
+*.test.js
+*.spec.js
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+serverjs/.env
+serverjs/.env.local
+
+# Logs
+*.log
+serverjs/*.log
+logs/
+
+# Temporary files
+temp/
+serverjs/temp/
+*.tmp
+
+# Node modules (will be installed in Docker)
+serverjs/node_modules/
+node_modules/
+
+# GitHub workflows
+.github/
+
+# Dev scripts
+devscripts/
+
+# Bundle files
+bundle/
+
+# Other
+.DS_Store
+.editorconfig
+.pre-commit-config.yaml
+.pre-commit-hatch.yaml
+public.key
+Makefile
+pyproject.toml
+
+# Keep these for Docker build
+!yt-dlp.sh
+!yt_dlp/
+!serverjs/package.json
+!serverjs/package-lock.json
+!serverjs/index.js
+!serverjs/encryption.js
+!serverjs/Dockerfile

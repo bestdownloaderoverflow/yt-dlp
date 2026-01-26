@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  tiktok-downloader:
+    build:
+      context: ..
+      dockerfile: serverpy/Dockerfile
+    container_name: tiktok-downloader-py
+    restart: unless-stopped
+    ports:
+      - "3021:3021"
+    environment:
+      - PORT=3021
+      - BASE_URL=http://localhost:3021
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-overflow}
+      - MAX_WORKERS=20
+      - YTDLP_TIMEOUT=30
+      - DOWNLOAD_TIMEOUT=120
+    volumes:
+      - ./temp:/app/serverpy/temp
+      - ./cookies:/app/serverpy/cookies
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:3021/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

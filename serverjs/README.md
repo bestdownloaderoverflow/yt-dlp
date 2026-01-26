@@ -9,6 +9,7 @@ Server API untuk download TikTok menggunakan yt-dlp. Output API **100% compatibl
 - ✅ Video TikTok biasa (semua kualitas)
 - ✅ Photo slideshow TikTok
 - ✅ **Slideshow Video Generation** - Convert photos to video with audio
+- ✅ **Auto Cleanup** - Scheduled cleanup of temp folders (every 15 min)
 - ✅ Enkripsi link download dengan TTL (360 detik)
 - ✅ Self-contained (no external API dependencies)
 - ✅ Auto-update support (via yt-dlp update)

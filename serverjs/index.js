@@ -10,11 +10,15 @@ import fs from 'fs-extra';
 import ffmpeg from 'fluent-ffmpeg';
 import ffmpegStatic from 'ffmpeg-static';
 import { encrypt, decrypt } from './encryption.js';
+import { cleanupFolder, initCleanupSchedule } from './cleanup.js';
 
 dotenv.config();
 
 // Set ffmpeg path
 ffmpeg.setFfmpegPath(ffmpegStatic);
+
+// Initialize cleanup schedule (runs every 15 minutes)
+initCleanupSchedule('*/15 * * * *');
 
 // Environment variables
 const PORT = process.env.PORT || 3021;
@@ -203,18 +207,8 @@ function createSlideshow(imagePaths, audioPath, outputPath, options = {}) {
   });
 }
 
-/**
- * Cleanup temporary folder
- * @param {string} folderPath - Path to folder to cleanup
- */
-async function cleanupFolder(folderPath) {
-  try {
-    await fs.remove(folderPath);
-    console.log(`Cleaned up temp folder: ${folderPath}`);
-  } catch (error) {
-    console.error(`Error cleaning up folder ${folderPath}:`, error);
-  }
-}
+// Note: cleanupFolder is now imported from cleanup.js
+// which also handles scheduled cleanup of old temp folders
 
 /**
  * Execute yt-dlp command and return JSON output

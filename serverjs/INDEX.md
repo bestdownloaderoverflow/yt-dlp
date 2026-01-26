@@ -14,9 +14,11 @@ Welcome to TikTok Downloader Server (yt-dlp) documentation!
 - **[EXAMPLES.md](EXAMPLES.md)** - Code examples in JavaScript, Python, React, etc.
 - **[COMPARISON.md](COMPARISON.md)** - How this compares to original API
 - **[SLIDESHOW.md](SLIDESHOW.md)** - Complete slideshow generation guide
+- **[CLEANUP.md](CLEANUP.md)** - Automatic cleanup mechanism
 
 ### For Developers
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** - Production deployment guide
+- **[DOCKER.md](DOCKER.md)** - Docker setup and configuration
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history and changes
 - **[RELEASE_NOTES.md](RELEASE_NOTES.md)** - v1.1.0 release notes
 
@@ -49,6 +51,7 @@ curl -X POST http://localhost:3021/tiktok \
 |------|---------|
 | `index.js` | Main server code |
 | `encryption.js` | Encryption utilities |
+| `cleanup.js` | Automatic cleanup mechanism |
 | `package.json` | Dependencies |
 | `.env` | Configuration |
 | `test.sh` | Test suite |
@@ -68,6 +71,7 @@ curl -X POST http://localhost:3021/tiktok \
 - **Features** → [README.md](README.md#-main-features)
 - **API Endpoints** → [README.md](README.md#api-endpoints)
 - **Slideshow Generation** → [SLIDESHOW.md](SLIDESHOW.md)
+- **Cleanup Mechanism** → [CLEANUP.md](CLEANUP.md)
 - **Performance** → [COMPARISON.md](COMPARISON.md#api-response-time-comparison)
 - **Security** → [DEPLOYMENT.md](DEPLOYMENT.md#security-considerations)
 - **Troubleshooting** → [README.md](README.md#-troubleshooting)

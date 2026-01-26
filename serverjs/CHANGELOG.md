@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-01-26
+
+### Added
+- ✅ **Automatic Cleanup Mechanism** - Scheduled cleanup of old temp folders
+  - New `cleanup.js` module (100% identical to downloader-bun)
+  - `cleanupFolder()` - Remove specific folder
+  - `cleanupOldFolders()` - Remove folders older than 1 hour
+  - `initCleanupSchedule()` - Run cleanup every 15 minutes using cron
+  - Automatic cleanup on server startup
+  - Manual cleanup: `node cleanup.js`
+  - Uses `node-cron` for scheduling (same as downloader-bun)
+
+### Technical Details
+- Cleanup runs every 15 minutes automatically (cron: `*/15 * * * *`)
+- Removes temp folders older than 1 hour
+- Prevents disk space issues from abandoned slideshow jobs
+- 100% identical cleanup mechanism as downloader-bun
+
 ## [1.3.0] - 2026-01-26
 
 ### Added

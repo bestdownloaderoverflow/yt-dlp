@@ -523,9 +523,13 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
                 self.encoding = 'utf-8'
                 self.mode = 'wb'
                 self.name = '<queue>'
+                self.closed = False
             
             def write(self, data):
                 """Write data to queue in chunks"""
+                if self.closed:
+                    raise ValueError("I/O operation on closed file")
+                
                 if isinstance(data, str):
                     data = data.encode('utf-8')
                 
@@ -541,16 +545,18 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
             
             def flush(self):
                 """Flush remaining buffer"""
-                if self.buffer:
+                if not self.closed and self.buffer:
                     self.queue.put(bytes(self.buffer))
                     self.buffer = bytearray()
             
             def close(self):
                 """Close and flush"""
-                self.flush()
+                if not self.closed:
+                    self.flush()
+                    self.closed = True
             
             def writable(self):
-                return True
+                return not self.closed
             
             def readable(self):
                 return False

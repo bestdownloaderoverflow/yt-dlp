@@ -458,6 +458,7 @@ app.post('/tiktok', async (req, res) => {
 
   } catch (error) {
     console.error('Error in TikTok handler:', error);
+    console.log('URL:', url);
     
     // Provide user-friendly error messages
     let errorMessage = error.message || 'An error occurred processing the request';

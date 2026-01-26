@@ -329,12 +329,13 @@ function generateJsonResponse(data, url) {
     metadata.download_link.no_watermark = encryptedImageUrls;
     
     if (audioFormat) {
+      // Use streaming to avoid 403 Forbidden errors from TikTok CDN
       const encryptedAudio = encrypt(JSON.stringify({
-        url: audioFormat.url,
-        author: author.nickname,
-        type: 'mp3'
+        url: url,  // Original TikTok URL
+        format_id: audioFormat.format_id,
+        author: author.nickname
       }), ENCRYPTION_KEY, 360);
-      metadata.download_link.mp3 = `${BASE_URL}/download?data=${encryptedAudio}`;
+      metadata.download_link.mp3 = `${BASE_URL}/stream?data=${encryptedAudio}`;
     }
     
     // Add slideshow download link
@@ -351,10 +352,15 @@ function generateJsonResponse(data, url) {
       f.vcodec && f.vcodec !== 'none' && f.acodec && f.acodec !== 'none'
     );
     
-    // Find audio format
-    const audioFormat = data.formats.find(f => 
+    // Find audio format (audio-only or any format with audio)
+    let audioFormat = data.formats.find(f => 
       f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none')
     );
+    
+    // If no audio-only format, use the first video format with audio
+    if (!audioFormat && videoFormats.length > 0) {
+      audioFormat = videoFormats[0];
+    }
     
     if (audioFormat) {
       metadata.audio = audioFormat.url;
@@ -414,8 +420,9 @@ function generateJsonResponse(data, url) {
     }
     
     // Add audio download for videos (Frontend requirement)
+    // Use streaming to avoid 403 Forbidden errors from TikTok CDN
     if (audioFormat) {
-      metadata.download_link.mp3 = generateDownloadLink(audioFormat, 'mp3', false);
+      metadata.download_link.mp3 = generateDownloadLink(audioFormat, 'mp3', true);
     }
     
     // Remove null values
@@ -518,6 +525,14 @@ app.get('/download', async (req, res) => {
           res.status(500).json({ error: error.message || 'Failed to download from source' });
         } else {
           res.end();
+        }
+      });
+      
+      // Handle client disconnect
+      req.on('close', () => {
+        if (!downloadStream.destroyed) {
+          downloadStream.destroy();
+          console.log('Download stream destroyed due to client disconnect');
         }
       });
       

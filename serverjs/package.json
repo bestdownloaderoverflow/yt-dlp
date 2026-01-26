@@ -1,6 +1,6 @@
 {
   "name": "yt-dlp-tiktok-server",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "TikTok downloader server using yt-dlp - 100% Frontend compatible - Full slideshow support",
   "type": "module",
   "main": "index.js",

@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-01-26
+
+### Fixed
+- ✅ **Audio download for videos** - MP3 button now appears for video posts
+  - Fixed audio format detection to use video formats when audio-only format not available
+  - Videos now correctly show "Download Audio" button in frontend
+- ✅ **Client disconnect handling** - Improved resource cleanup
+  - `/download` endpoint now properly handles client disconnects
+  - Prevents resource leaks when users cancel downloads
+  - All streaming endpoints now have proper cleanup on disconnect
+- ✅ **403 Forbidden errors fixed** - Audio downloads now use streaming
+  - Changed audio downloads from direct URL to `/stream` endpoint
+  - Prevents "403 Forbidden" errors from TikTok CDN
+  - Works for both video and photo posts
+
+### Technical Details
+- Audio format fallback: Uses first video format with audio if no audio-only format exists
+- Client disconnect: Added `req.on('close')` handlers to destroy streams properly
+- Resource management: Ensures all streams are destroyed when client disconnects
+- Audio streaming: All audio downloads now go through yt-dlp streaming (no direct CDN URLs)
+
 ## [1.2.0] - 2026-01-26
 
 ### Added

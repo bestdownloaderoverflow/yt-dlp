@@ -46,3 +46,6 @@ Thumbs.db
 # Cookies
 cookies/*.txt
 !cookies/.gitkeep
+
+# Gluetun VPN data
+gluetun/data/

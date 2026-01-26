@@ -1,17 +1,44 @@
-version: '3.8'
-
 services:
+  # --- VPN Container ---
+  gluetun:
+    image: qmcgaw/gluetun:v3.41
+    container_name: gluetun-serverpy
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3021:3021"  # serverpy port
+      - "8000:8000"  # gluetun control server
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=wI7JzcbETO525uB/RwzySjd7D112huquSoRfp14p9lg=
+      - WIREGUARD_ADDRESSES=10.66.4.247/32
+      - SERVER_COUNTRIES=Singapore
+      - DNS_ADDRESS=10.64.0.1
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=on
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"secretpassword\"}"
+    volumes:
+      - ./gluetun/data:/gluetun
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+
+  # --- ServerPY (routes through gluetun) ---
   tiktok-downloader:
     build:
       context: ..
       dockerfile: serverpy/Dockerfile
     container_name: tiktok-downloader-py
     restart: unless-stopped
-    ports:
-      - "3021:3021"
+    network_mode: "service:gluetun"  # Route traffic through VPN
+    depends_on:
+      - gluetun
     environment:
       - PORT=3021
-      - BASE_URL=http://localhost:3021
+      - BASE_URL=https://d.snaptik.fit
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-overflow}
       - MAX_WORKERS=20
       - YTDLP_TIMEOUT=30
@@ -19,14 +46,6 @@ services:
     volumes:
       - ./temp:/app/serverpy/temp
       - ./cookies:/app/serverpy/cookies
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3021/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
-    networks:
-      - tiktok-net
 
 networks:
   tiktok-net:

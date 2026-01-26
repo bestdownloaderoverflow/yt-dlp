@@ -10,7 +10,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=3021
-      - BASE_URL=https://tiktok-c.snaptik.fit  # Change this to your actual public URL in production
+      - BASE_URL=https://d.snaptik.fit  # Change this to your actual public URL in production
       - ENCRYPTION_KEY=overflow  # Change this to a secure key in production
       - YT_DLP_PATH=/usr/local/bin/yt-dlp.sh  # Uses wrapper that checks /app/yt-dlp.sh first
       - FFMPEG_PATH=ffmpeg

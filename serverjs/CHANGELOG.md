@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-01-26
+
+### Added
+- ✅ **Frontend compatibility fixes** - 100% compatible with Snaptik frontend
+- Author fields mapping (uniqueId, avatarThumb, avatarMedium, avatarLarger)
+- Statistics mapping (share_count from repost_count)
+- Audio download for videos (mp3 format)
+- FRONTEND_COMPATIBILITY.md documentation
+- INTEGRATION_GUIDE.md for easy frontend integration
+
+### Changed
+- Author object now includes all avatar variants
+- Statistics now use frontend-expected field names
+- Videos now include mp3 download link
+
+### Fixed
+- Author uniqueId now properly mapped from uploader_id
+- Statistics share_count properly mapped from repost_count
+- All avatar fields now available for frontend display
+
 ## [1.1.0] - 2026-01-26
 
 ### Added

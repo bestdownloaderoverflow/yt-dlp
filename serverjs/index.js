@@ -268,19 +268,24 @@ async function fetchTikTokData(url) {
 function generateJsonResponse(data, url) {
   const isImage = data.formats && data.formats.some(f => f.format_id && f.format_id.startsWith('image-'));
   
-  // Extract author info
+  // Extract author info (Frontend compatible format)
+  const avatarUrl = data.thumbnails?.[0]?.url || '';
   const author = {
     nickname: data.uploader || data.channel || 'unknown',
+    uniqueId: data.uploader_id || data.uploader || 'unknown',
     signature: data.description || '',
-    avatar: data.thumbnails?.[0]?.url || ''
+    avatar: avatarUrl,
+    avatarThumb: avatarUrl,
+    avatarMedium: avatarUrl,
+    avatarLarger: avatarUrl
   };
   
-  // Extract statistics
+  // Extract statistics (Frontend compatible format)
   const statistics = {
-    repost_count: data.repost_count || 0,
-    comment_count: data.comment_count || 0,
+    play_count: data.view_count || 0,
     digg_count: data.like_count || 0,
-    play_count: data.view_count || 0
+    comment_count: data.comment_count || 0,
+    share_count: data.repost_count || 0  // Map repost_count to share_count for frontend
   };
   
   // Base metadata
@@ -408,6 +413,7 @@ function generateJsonResponse(data, url) {
       }
     }
     
+    // Add audio download for videos (Frontend requirement)
     if (audioFormat) {
       metadata.download_link.mp3 = generateDownloadLink(audioFormat, 'mp3', false);
     }

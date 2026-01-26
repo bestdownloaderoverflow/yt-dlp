@@ -13,10 +13,12 @@ Welcome to TikTok Downloader Server (yt-dlp) documentation!
 ### For Users
 - **[EXAMPLES.md](EXAMPLES.md)** - Code examples in JavaScript, Python, React, etc.
 - **[COMPARISON.md](COMPARISON.md)** - How this compares to original API
+- **[SLIDESHOW.md](SLIDESHOW.md)** - Complete slideshow generation guide
 
 ### For Developers
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** - Production deployment guide
 - **[CHANGELOG.md](CHANGELOG.md)** - Version history and changes
+- **[RELEASE_NOTES.md](RELEASE_NOTES.md)** - v1.1.0 release notes
 
 ## 🎯 Quick Links
 
@@ -65,9 +67,11 @@ curl -X POST http://localhost:3021/tiktok \
 
 - **Features** → [README.md](README.md#-main-features)
 - **API Endpoints** → [README.md](README.md#api-endpoints)
+- **Slideshow Generation** → [SLIDESHOW.md](SLIDESHOW.md)
 - **Performance** → [COMPARISON.md](COMPARISON.md#api-response-time-comparison)
 - **Security** → [DEPLOYMENT.md](DEPLOYMENT.md#security-considerations)
 - **Troubleshooting** → [README.md](README.md#-troubleshooting)
+- **What's New** → [RELEASE_NOTES.md](RELEASE_NOTES.md)
 
 ## 💡 Key Concepts
 

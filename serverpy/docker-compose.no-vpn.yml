@@ -11,7 +11,7 @@ services:
       - "3021:3021"
     environment:
       - PORT=3021
-      - BASE_URL=http://localhost:3021
+      - BASE_URL=https://d.snaptik.fit
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-overflow}
       - MAX_WORKERS=20
       - YTDLP_TIMEOUT=30

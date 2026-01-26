@@ -8,13 +8,14 @@ RUN apt-get update && apt-get install -y \
 # Set working directory
 WORKDIR /app
 
-# Copy parent yt_dlp directory
-COPY ../yt_dlp /app/yt_dlp
+# Copy parent yt_dlp directory (from build context root)
+COPY yt_dlp /app/yt_dlp
 
-# Copy application files
-COPY . /app/serverpy
-
+# Copy serverpy files
 WORKDIR /app/serverpy
+COPY serverpy/requirements.txt .
+COPY serverpy/*.py .
+COPY serverpy/.env.example .env
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt

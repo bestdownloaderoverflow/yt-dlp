@@ -440,9 +440,8 @@ function generateJsonResponse(data, url) {
  * Process TikTok URL and return metadata with encrypted download links
  */
 app.post('/tiktok', async (req, res) => {
+  const { url } = req.body;
   try {
-    const { url } = req.body;
-
     if (!url) {
       return res.status(400).json({ error: 'URL parameter is required' });
     }

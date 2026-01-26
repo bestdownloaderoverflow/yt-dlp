@@ -11,6 +11,7 @@ TikTok Downloader Server using yt-dlp (Python Implementation)
 
 import sys
 import os
+import io
 from pathlib import Path
 
 # Add parent directory to path to import yt_dlp
@@ -506,9 +507,119 @@ async def download_slideshow(url: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
+    """Download using yt-dlp with stdout streaming"""
+    import sys
+    import io
+    
+    try:
+        logger.info(f"Starting yt-dlp streaming for format: {format_id}")
+        
+        # Create a custom file-like object that writes to queue
+        class QueueWriter:
+            def __init__(self, queue):
+                self.queue = queue
+                self.buffer = bytearray()
+                self.encoding = 'utf-8'
+                self.mode = 'wb'
+                self.name = '<queue>'
+            
+            def write(self, data):
+                """Write data to queue in chunks"""
+                if isinstance(data, str):
+                    data = data.encode('utf-8')
+                
+                self.buffer.extend(data)
+                
+                # Send in 8KB chunks
+                while len(self.buffer) >= 8192:
+                    chunk = bytes(self.buffer[:8192])
+                    self.buffer = self.buffer[8192:]
+                    self.queue.put(chunk)
+                
+                return len(data)
+            
+            def flush(self):
+                """Flush remaining buffer"""
+                if self.buffer:
+                    self.queue.put(bytes(self.buffer))
+                    self.buffer = bytearray()
+            
+            def close(self):
+                """Close and flush"""
+                self.flush()
+            
+            def writable(self):
+                return True
+            
+            def readable(self):
+                return False
+            
+            def seekable(self):
+                return False
+        
+        # Configure yt-dlp to output to stdout
+        queue_writer = QueueWriter(chunk_queue)
+        
+        ydl_opts = {
+            'format': format_id,
+            'quiet': True,
+            'no_warnings': True,
+            'noprogress': True,
+            'outtmpl': '-',  # Output to stdout!
+            'logtostderr': True,  # Log messages go to stderr, not stdout
+        }
+        
+        # Create YoutubeDL instance
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
+        
+        # Save original stdout
+        old_stdout = sys.stdout
+        
+        try:
+            # Create a text wrapper around our binary writer
+            # This is needed because yt-dlp expects a text stream for stdout
+            text_wrapper = io.TextIOWrapper(
+                queue_writer,
+                encoding='utf-8',
+                line_buffering=False,
+                write_through=True
+            )
+            
+            # Redirect stdout
+            sys.stdout = text_wrapper
+            
+            # Also patch yt-dlp's internal file handles
+            ydl._out_files.out = text_wrapper
+            
+            logger.info("Downloading via yt-dlp...")
+            
+            # Download - this will write to our queue_writer
+            ydl.download([url])
+            
+            # Flush everything
+            text_wrapper.flush()
+            queue_writer.flush()
+            
+            logger.info("yt-dlp download completed")
+            
+        finally:
+            # Restore stdout
+            sys.stdout = old_stdout
+        
+        # Signal end of stream
+        chunk_queue.put(None)
+        
+    except Exception as e:
+        logger.error(f"Error in yt-dlp streaming: {e}")
+        logger.exception(e)  # Log full traceback
+        error_dict['error'] = str(e)
+        chunk_queue.put(None)
+
+
 @app.get("/stream")
 async def stream_video(data: str, request: Request):
-    """Stream video directly from yt-dlp"""
+    """Stream video directly using yt-dlp stdout"""
     try:
         if not data:
             raise HTTPException(status_code=400, detail="Encrypted data parameter is required")
@@ -522,36 +633,61 @@ async def stream_video(data: str, request: Request):
                 detail="Invalid decrypted data: missing url, format_id, or author"
             )
         
-        # Extract format info
-        loop = asyncio.get_event_loop()
-        info = await loop.run_in_executor(executor, extract_video_info, stream_data['url'])
-        
-        # Find the requested format
-        requested_format = next(
-            (f for f in info.get('formats', []) if f.get('format_id') == stream_data['format_id']),
-            None
-        )
-        
-        if not requested_format:
-            raise HTTPException(status_code=404, detail="Requested format not found")
-        
         # Determine file extension and content type
         ext = 'mp3' if 'audio' in stream_data['format_id'] else 'mp4'
         content_type = 'audio/mpeg' if ext == 'mp3' else 'video/mp4'
         filename = f"{stream_data['author']}.{ext}"
         
-        # Stream from URL
-        import httpx
+        # Use queue for streaming
+        import threading
+        from queue import Queue, Empty
+        
+        chunk_queue = Queue(maxsize=20)
+        download_error = {'error': None}
+        
+        # Start download in background thread
+        download_thread = threading.Thread(
+            target=download_with_stdout_streaming,
+            args=(stream_data['url'], stream_data['format_id'], chunk_queue, download_error),
+            daemon=True
+        )
+        download_thread.start()
         
         async def stream_content():
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream('GET', requested_format['url']) as response:
-                    async for chunk in response.aiter_bytes(chunk_size=8192):
-                        yield chunk
+            """Stream chunks from queue"""
+            loop = asyncio.get_event_loop()
+            
+            while True:
+                # Check if client disconnected
+                if await request.is_disconnected():
+                    logger.info("Client disconnected during stream")
+                    break
+                
+                try:
+                    # Get chunk from queue
+                    chunk = await loop.run_in_executor(
+                        None,
+                        lambda: chunk_queue.get(timeout=30)
+                    )
+                    
+                    if chunk is None:  # End signal
+                        if download_error['error']:
+                            logger.error(f"Stream error: {download_error['error']}")
+                        break
+                    
+                    yield chunk
+                    
+                except Empty:
+                    logger.warning("Stream timeout waiting for chunk")
+                    break
+                except Exception as e:
+                    logger.error(f"Error yielding chunk: {e}")
+                    break
         
         headers = {
             'Content-Disposition': f'attachment; filename="{filename}"',
-            'X-Filename': filename
+            'X-Filename': filename,
+            'Cache-Control': 'no-cache',
         }
         
         return StreamingResponse(

@@ -1,0 +1,32 @@
+{
+  "name": "yt-dlp-tiktok-server",
+  "version": "1.0.0",
+  "description": "TikTok downloader server using yt-dlp - 100% API compatible with downloader-bun",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js",
+    "test": "./test.sh"
+  },
+  "keywords": [
+    "tiktok",
+    "downloader",
+    "yt-dlp",
+    "video",
+    "api",
+    "streaming",
+    "download"
+  ],
+  "author": "AI Assistant",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "got": "^14.6.6"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

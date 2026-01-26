@@ -125,11 +125,32 @@ else
 fi
 echo ""
 
+# Test 9: Slideshow Link Generation
+echo -e "${YELLOW}Test 9: Slideshow Link Generation${NC}"
+response=$(curl -s -X POST "$BASE_URL/tiktok" \
+    -H "Content-Type: application/json" \
+    -d '{"url": "https://www.tiktok.com/@yusuf_sufiandi24/photo/7457053391559216392"}')
+
+slideshow_link=$(echo "$response" | python3 -c "import sys, json; data = json.load(sys.stdin); print(data.get('download_slideshow_link', ''))")
+
+if [[ $slideshow_link == *"/download-slideshow?url="* ]]; then
+    echo -e "${GREEN}✓ Slideshow link generated${NC}"
+    echo "Sample link: ${slideshow_link:0:80}..."
+else
+    echo -e "${RED}✗ Slideshow link not generated${NC}"
+    echo "$slideshow_link"
+fi
+echo ""
+
 # Summary
 echo "=================================="
 echo -e "${GREEN}Test Suite Complete${NC}"
 echo "=================================="
 echo ""
-echo "Note: To test actual video download, use:"
+echo "Note: To test actual downloads, use:"
+echo "  # Video download"
 echo "  curl -o test.mp4 '<download_link_from_test_2>'"
+echo ""
+echo "  # Slideshow download (takes ~10-30 seconds)"
+echo "  curl -o slideshow.mp4 '<slideshow_link_from_test_9>'"
 echo ""

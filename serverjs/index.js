@@ -5,19 +5,34 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { createReadStream } from 'fs';
+import fs from 'fs-extra';
+import ffmpeg from 'fluent-ffmpeg';
+import ffmpegStatic from 'ffmpeg-static';
 import { encrypt, decrypt } from './encryption.js';
 
 dotenv.config();
+
+// Set ffmpeg path
+ffmpeg.setFfmpegPath(ffmpegStatic);
 
 // Environment variables
 const PORT = process.env.PORT || 3021;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3021';
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'overflow';
 const YT_DLP_PATH = process.env.YT_DLP_PATH || '../yt-dlp.sh';
+const FFMPEG_PATH = process.env.FFMPEG_PATH || ffmpegStatic;
+const TEMP_DIR = process.env.TEMP_DIR || './temp';
 
 // Get the directory name
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+
+// Temp directory path
+const tempDir = path.join(__dirname, TEMP_DIR);
+
+// Create temp directory if it doesn't exist
+fs.ensureDirSync(tempDir);
 
 // Initialize Express app
 const app = express();
@@ -37,6 +52,169 @@ const contentTypes = {
   video: ['video/mp4', 'mp4'],
   image: ['image/jpeg', 'jpg']
 };
+
+/**
+ * Download file from URL to local path
+ * @param {string} url - URL to download
+ * @param {string} outputPath - Local path to save file
+ * @param {Object} options - Options including signal for abort
+ * @returns {Promise<string>} - Path to downloaded file
+ */
+async function downloadFile(url, outputPath, options = {}) {
+  const { signal } = options;
+  const cleanupPartial = () => fs.remove(outputPath).catch(() => {});
+
+  try {
+    const { default: got } = await import('got');
+    
+    await new Promise((resolve, reject) => {
+      const writeStream = fs.createWriteStream(outputPath);
+      const downloadStream = got.stream(url, {
+        timeout: {
+          request: 120000 // 120 seconds timeout
+        },
+        retry: {
+          limit: 2
+        },
+        signal
+      });
+
+      const handleError = (error) => {
+        downloadStream.destroy();
+        writeStream.destroy();
+        cleanupPartial().finally(() => reject(error));
+      };
+
+      downloadStream.pipe(writeStream);
+
+      downloadStream.on('error', handleError);
+      writeStream.on('error', handleError);
+      writeStream.on('finish', resolve);
+    });
+
+    return outputPath;
+  } catch (error) {
+    if (error?.name === 'AbortError' || error?.name === 'CancelError') {
+      throw error;
+    }
+    throw new Error(`Failed to download file: ${error.message}`);
+  }
+}
+
+/**
+ * Create a slideshow from images and audio using ffmpeg
+ * @param {string[]} imagePaths - Array of image file paths
+ * @param {string} audioPath - Path to audio file
+ * @param {string} outputPath - Path for output video
+ * @param {Object} options - Options including signal and onCommand callback
+ * @returns {Promise<void>}
+ */
+function createSlideshow(imagePaths, audioPath, outputPath, options = {}) {
+  const { onCommand, signal } = options;
+
+  return new Promise((resolve, reject) => {
+    const command = ffmpeg();
+    let settled = false;
+
+    if (typeof onCommand === 'function') {
+      onCommand(command);
+    }
+
+    const finish = (callback) => (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      callback(value);
+    };
+
+    const onAbort = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      try {
+        command.kill('SIGKILL');
+      } catch (abortError) {
+        // Ignore kill errors; command may already be stopped
+      }
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      reject(new Error('Slideshow rendering aborted'));
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+      if (signal.aborted) {
+        onAbort();
+        return;
+      }
+    }
+
+    // Add each image as input
+    imagePaths.forEach(imagePath => {
+      command.input(imagePath).inputOptions(['-loop 1', '-t 4']);
+    });
+
+    // Add audio with loop
+    command.input(audioPath).inputOptions(['-stream_loop -1']);
+
+    // Build complex filter for scaling and concatenating images
+    const filter = [];
+
+    // Scale and pad each image
+    imagePaths.forEach((_, index) => {
+      filter.push(`[${index}:v]scale=w=1080:h=1920:force_original_aspect_ratio=decrease,` +
+        `pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v${index}]`);
+    });
+
+    // Concatenate all scaled/padded video streams
+    const concatInputs = imagePaths.map((_, i) => `[v${i}]`).join('');
+    filter.push(`${concatInputs}concat=n=${imagePaths.length}:v=1:a=0[vout]`);
+
+    // Calculate total duration
+    const videoDuration = imagePaths.length * 4;
+
+    // Add audio filter to trim the looping audio to the video duration
+    filter.push(`[${imagePaths.length}:a]atrim=0:${videoDuration}[aout]`);
+
+    command
+      .complexFilter(filter)
+      .outputOptions([
+        '-map', '[vout]',
+        '-map', '[aout]',
+        '-pix_fmt', 'yuv420p',
+        '-fps_mode', 'cfr'
+      ])
+      .videoCodec('libx264')
+      .output(outputPath)
+      .on('error', finish((err) => {
+        reject(new Error(`FFmpeg error: ${err.message}`));
+      }))
+      .on('end', finish(() => {
+        console.log('Slideshow created successfully');
+        resolve();
+      }))
+      .run();
+  });
+}
+
+/**
+ * Cleanup temporary folder
+ * @param {string} folderPath - Path to folder to cleanup
+ */
+async function cleanupFolder(folderPath) {
+  try {
+    await fs.remove(folderPath);
+    console.log(`Cleaned up temp folder: ${folderPath}`);
+  } catch (error) {
+    console.error(`Error cleaning up folder ${folderPath}:`, error);
+  }
+}
 
 /**
  * Execute yt-dlp command and return JSON output
@@ -356,24 +534,184 @@ app.get('/download', async (req, res) => {
  * Generate and download slideshow video from image post
  */
 app.get('/download-slideshow', async (req, res) => {
+  const jobAbortController = new AbortController();
+  let workDir = '';
+  let ffmpegCommand = null;
+  let fileStream = null;
+  let tempCleaned = false;
+
+  const cleanupTempDir = async () => {
+    if (tempCleaned || !workDir) {
+      return;
+    }
+    tempCleaned = true;
+    try {
+      await cleanupFolder(workDir);
+    } catch (cleanupError) {
+      console.error('Error removing temp folder:', cleanupError);
+    }
+  };
+
+  const detachListeners = () => {
+    req.removeListener('close', onRequestClose);
+    res.removeListener('close', onResponseClose);
+  };
+
+  const cancelJob = async () => {
+    if (!jobAbortController.signal.aborted) {
+      jobAbortController.abort();
+    }
+
+    if (ffmpegCommand) {
+      try {
+        ffmpegCommand.kill('SIGKILL');
+      } catch (error) {
+        // Ignore kill errors; command may have already exited
+      } finally {
+        ffmpegCommand = null;
+      }
+    }
+
+    if (fileStream) {
+      fileStream.destroy();
+      fileStream = null;
+    }
+
+    await cleanupTempDir();
+    detachListeners();
+  };
+
+  function onRequestClose() {
+    cancelJob().catch((err) => {
+      console.error('Error cancelling slideshow job:', err);
+    });
+  }
+
+  function onResponseClose() {
+    if (!res.writableEnded) {
+      onRequestClose();
+    }
+  }
+
+  req.on('close', onRequestClose);
+  res.on('close', onResponseClose);
+
   try {
     const { url: encryptedUrl } = req.query;
 
     if (!encryptedUrl) {
+      await cleanupTempDir();
+      detachListeners();
       return res.status(400).json({ error: 'URL parameter is required' });
     }
 
     const url = decrypt(encryptedUrl, ENCRYPTION_KEY);
-    
-    // For now, return error - slideshow generation requires ffmpeg
-    // This would need to be implemented similar to the original
-    return res.status(501).json({ 
-      error: 'Slideshow generation not yet implemented. Please download images individually.' 
+
+    // Fetch TikTok data using yt-dlp
+    const data = await fetchTikTokData(url);
+
+    if (!data) {
+      await cleanupTempDir();
+      detachListeners();
+      return res.status(500).json({ error: 'Invalid response from yt-dlp' });
+    }
+
+    // Check if it's an image post
+    const isImage = data.formats && data.formats.some(f => f.format_id && f.format_id.startsWith('image-'));
+
+    if (!isImage) {
+      await cleanupTempDir();
+      detachListeners();
+      return res.status(400).json({ error: 'Only image posts are supported' });
+    }
+
+    // Create work directory
+    const videoId = data.id || 'unknown';
+    const authorId = data.uploader_id || 'unknown';
+    const folderName = `${videoId}_${authorId}_${Date.now()}`;
+    workDir = path.join(tempDir, folderName);
+
+    await fs.ensureDir(workDir);
+
+    // Get image and audio URLs
+    const imageFormats = data.formats.filter(f => f.format_id && f.format_id.startsWith('image-'));
+    const audioFormat = data.formats.find(f => f.format_id === 'audio');
+
+    if (imageFormats.length === 0) {
+      throw new Error('No images found');
+    }
+
+    if (!audioFormat || !audioFormat.url) {
+      throw new Error('Could not find audio URL');
+    }
+
+    const imageURLs = imageFormats.map(f => f.url);
+    const audioURL = audioFormat.url;
+
+    // Download audio
+    const audioPath = path.join(workDir, 'audio.mp3');
+    const audioTask = downloadFile(audioURL, audioPath, { signal: jobAbortController.signal });
+
+    // Download all images
+    const imageDownloadTasks = imageURLs.map((imageUrl, index) => {
+      const imagePath = path.join(workDir, `image_${index}.jpg`);
+      return downloadFile(imageUrl, imagePath, { signal: jobAbortController.signal });
     });
+
+    // Wait for all downloads to complete
+    const [imagePaths] = await Promise.all([
+      Promise.all(imageDownloadTasks),
+      audioTask
+    ]);
+
+    // Create slideshow
+    const outputPath = path.join(workDir, 'slideshow.mp4');
+    await createSlideshow(imagePaths, audioPath, outputPath, {
+      signal: jobAbortController.signal,
+      onCommand: (command) => {
+        ffmpegCommand = command;
+      }
+    });
+    ffmpegCommand = null;
+
+    // Prepare response
+    const authorNickname = data.uploader || data.channel || 'unknown';
+    const sanitized = authorNickname.replace(/[^a-zA-Z0-9]/g, '_');
+    const filename = `${sanitized}_${Date.now()}.mp4`;
+
+    const stats = await fs.stat(outputPath);
+
+    res.setHeader('Content-Type', 'video/mp4');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', stats.size);
+
+    fileStream = createReadStream(outputPath);
+
+    fileStream.on('end', () => {
+      fileStream = null;
+      console.log('File stream ended, cleaning up folder');
+      cleanupTempDir().finally(detachListeners);
+    });
+
+    fileStream.on('error', (error) => {
+      console.error('Error streaming file:', error);
+      cancelJob().catch((err) => {
+        console.error('Error during cancellation after stream failure:', err);
+      });
+    });
+
+    fileStream.pipe(res);
 
   } catch (error) {
     console.error('Error in slideshow handler:', error);
-    
+
+    if (jobAbortController.signal.aborted) {
+      return;
+    }
+
+    await cleanupTempDir();
+    detachListeners();
+
     if (!res.headersSent) {
       return res.status(500).json({ error: error.message || 'An error occurred creating the slideshow' });
     }

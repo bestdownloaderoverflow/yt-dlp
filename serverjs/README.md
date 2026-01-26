@@ -8,10 +8,10 @@ Server API untuk download TikTok menggunakan yt-dlp. Output API **100% compatibl
 - ✅ **100% API Compatible** - Drop-in replacement untuk API asli
 - ✅ Video TikTok biasa (semua kualitas)
 - ✅ Photo slideshow TikTok
+- ✅ **Slideshow Video Generation** - Convert photos to video with audio
 - ✅ Enkripsi link download dengan TTL (360 detik)
 - ✅ Self-contained (no external API dependencies)
 - ✅ Auto-update support (via yt-dlp update)
-- ⚠️ Slideshow generation belum diimplementasi (butuh ffmpeg)
 
 ## 🚀 Quick Start
 
@@ -27,6 +27,7 @@ Server akan running di `http://localhost:3021`
 
 - Node.js >= 18.0.0
 - yt-dlp (sudah tersedia di parent directory)
+- ffmpeg (included via ffmpeg-static)
 - npm atau yarn
 
 ## ⚙️ Configuration
@@ -38,6 +39,8 @@ PORT=3021
 BASE_URL=http://localhost:3021
 ENCRYPTION_KEY=overflow
 YT_DLP_PATH=../yt-dlp.sh
+FFMPEG_PATH=ffmpeg
+TEMP_DIR=./temp
 ```
 
 **Generate strong encryption key:**

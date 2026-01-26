@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.0] - 2026-01-26
+
+### Added
+- ✅ **Slideshow generation** - Full implementation using ffmpeg
+- Download and merge photos with audio
+- Create video slideshow (4 seconds per image)
+- Scale and pad images to 1080x1920
+- Loop audio to match video duration
+- Automatic temp folder cleanup
+- Abort support for cancelled requests
+- ffmpeg-static for cross-platform support
+- fs-extra for file operations
+
+### Changed
+- Updated dependencies (added fluent-ffmpeg, ffmpeg-static, fs-extra)
+- Environment variables (added FFMPEG_PATH, TEMP_DIR)
+- Documentation updated to reflect slideshow support
+
+### Technical Details
+- Each image displayed for 4 seconds
+- Audio loops to match total video duration
+- Images scaled to 1080x1920 with black padding
+- H.264 codec for maximum compatibility
+- Automatic cleanup of temporary files
+
 ## [1.0.0] - 2026-01-26
 
 ### Added
@@ -43,15 +68,14 @@ All notable changes to this project will be documented in this file.
 - Encrypted download links with expiration
 
 ### Known Limitations
-- Slideshow generation not implemented (requires ffmpeg)
-- Slower than original API (5-10s vs 2-3s)
+- Slower than original API (5-10s vs 2-3s for metadata)
+- Slideshow generation takes time (~10-30s)
 - Higher server resource usage
 - No caching implemented yet
 
 ## [Unreleased]
 
 ### Planned Features
-- [ ] Slideshow generation with ffmpeg
 - [ ] Response caching
 - [ ] Rate limiting
 - [ ] API key authentication

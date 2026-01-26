@@ -61,7 +61,7 @@
 | Video Download | ✅ | ✅ | Sama |
 | Photo Download | ✅ | ✅ | Sama |
 | Audio Download | ✅ | ✅ | Sama |
-| Slideshow Generation | ✅ | ⚠️ | Belum diimplementasi (butuh ffmpeg) |
+| Slideshow Generation | ✅ | ✅ | **IMPLEMENTED!** |
 | Encryption | ✅ | ✅ | Sama (AES-256-GCM) |
 | TTL Links | ✅ | ✅ | Sama (360 detik) |
 | Statistics | ✅ | ✅ | Sama |
@@ -119,23 +119,20 @@ window.location.href = data.download_link.no_watermark;
 
 **Benchmark:**
 - Original: ~2-3 detik
-- yt-dlp: ~5-10 detik (first request)
+- yt-dlp: ~5-10 detik (metadata fetch)
+- Slideshow: ~10-30 detik (both similar)
 
 ### 2. Server Resources
 **Original:** Minimal (hanya proxy)
-**yt-dlp:** Higher (execute process, stream video)
-
-### 3. Slideshow Generation
-**Original:** ✅ Implemented with ffmpeg
-**yt-dlp:** ⚠️ Not implemented yet
+**yt-dlp:** Higher (execute process, stream video, ffmpeg processing)
 
 ## When to Use Which?
 
 ### Use Original API When:
 - ✅ Need fastest response time
-- ✅ Need slideshow generation
 - ✅ Have Douyin API server available
 - ✅ Client can access TikTok CDN directly
+- ✅ Want minimal server resources
 
 ### Use yt-dlp Server When:
 - ✅ Client IP restricted by TikTok
@@ -143,6 +140,7 @@ window.location.href = data.download_link.no_watermark;
 - ✅ Need specific format control
 - ✅ Don't want external dependencies
 - ✅ Want automatic TikTok API updates
+- ✅ All features including slideshow generation
 
 ## Migration from Original API
 

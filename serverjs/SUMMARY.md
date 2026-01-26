@@ -82,7 +82,7 @@ User Request → Server → yt-dlp -o - → Pipe → User
 Server yang download dari TikTok, user terima stream dari server.
 
 ### 4. GET /download-slideshow
-Generate slideshow video (not implemented yet - requires ffmpeg)
+**IMPLEMENTED!** Generate slideshow video from photos + audio using ffmpeg
 
 ### 5. GET /health
 Health check endpoint
@@ -104,6 +104,9 @@ AES-256-GCM dengan TTL 360 detik
 
 ### 5. Multiple Formats ✅
 Support berbagai kualitas video (SD, HD, watermark/no watermark)
+
+### 6. Slideshow Generation ✅
+Convert photo posts to video with audio using ffmpeg
 
 ## 🧪 Test Results
 
@@ -222,9 +225,9 @@ serverjs/
 
 ## 🐛 Known Limitations
 
-1. **Slideshow generation** - Not implemented (requires ffmpeg)
-2. **Performance** - Slower than original API (5-10s vs 2-3s)
-3. **Resources** - Higher server resource usage
+1. **Performance** - Slower than original API (5-10s vs 2-3s for metadata)
+2. **Slideshow generation** - Takes time (~10-30s depending on images)
+3. **Resources** - Higher server resource usage (especially for slideshow)
 4. **Caching** - Not implemented yet
 
 ## 🎯 Future Improvements

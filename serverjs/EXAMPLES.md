@@ -59,9 +59,25 @@ curl -X POST http://localhost:3021/tiktok \
       "http://localhost:3021/download?data=..."
     ],
     "mp3": "http://localhost:3021/download?data=..."
-  }
+  },
+  "download_slideshow_link": "http://localhost:3021/download-slideshow?url=..."
 }
 ```
+
+## 3.1. Download Slideshow Video
+
+```bash
+# Get slideshow link from previous response
+curl -o slideshow.mp4 "http://localhost:3021/download-slideshow?url=<encrypted_url>"
+```
+
+**What happens:**
+1. Server downloads all photos
+2. Server downloads audio
+3. FFmpeg creates video (4 seconds per photo)
+4. Audio loops to match video duration
+5. Video streams to client
+6. Temp files cleaned up automatically
 
 ## 4. JavaScript/Frontend Integration
 

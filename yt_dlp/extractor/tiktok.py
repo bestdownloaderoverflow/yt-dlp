@@ -309,7 +309,11 @@ class TikTokBaseIE(InfoExtractor):
         status = traverse_obj(universal_data, ('webapp.video-detail', 'statusCode', {int})) or 0
         video_data = traverse_obj(universal_data, ('webapp.video-detail', 'itemInfo', 'itemStruct', {dict}))
 
-        if not traverse_obj(video_data, ('video', {dict})) and traverse_obj(video_data, ('isContentClassified', {bool})):
+        # Check if it's a video or image post
+        has_video = traverse_obj(video_data, ('video', {dict}))
+        has_images = traverse_obj(video_data, ('imagePost', {dict}))
+        
+        if not has_video and not has_images and traverse_obj(video_data, ('isContentClassified', {bool})):
             message = 'This post may not be comfortable for some audiences. Log in for access'
             if fatal:
                 self.raise_login_required(message)
@@ -552,6 +556,41 @@ class TikTokBaseIE(InfoExtractor):
             'vcodec': 'h264',
             'acodec': 'aac',
         }
+        
+        # Check if this is an image post (photo slideshow)
+        image_post = traverse_obj(aweme_detail, ('imagePost', {dict}))
+        if image_post:
+            formats = []
+            images = traverse_obj(image_post, ('images', lambda _, v: v['imageURL']['urlList']))
+            for idx, image in enumerate(images, 1):
+                for image_url in traverse_obj(image, ('imageURL', 'urlList', ..., {url_or_none})):
+                    formats.append({
+                        'format_id': f'image-{idx}',
+                        'url': self._proto_relative_url(image_url),
+                        'ext': 'jpeg',
+                        'vcodec': 'none',
+                        'acodec': 'none',
+                        'width': int_or_none(image.get('imageWidth')),
+                        'height': int_or_none(image.get('imageHeight')),
+                    })
+                    break  # Only take the first URL from urlList
+            
+            # Add audio if available for slideshow
+            if traverse_obj(aweme_detail, ('music', 'playUrl', {url_or_none})):
+                audio_url = aweme_detail['music']['playUrl']
+                ext = traverse_obj(parse_qs(audio_url), (
+                    'mime_type', -1, {lambda x: x.replace('_', '/')}, {mimetype2ext})) or 'm4a'
+                formats.append({
+                    'format_id': 'audio',
+                    'url': self._proto_relative_url(audio_url),
+                    'ext': ext,
+                    'acodec': 'aac' if ext == 'm4a' else ext,
+                    'vcodec': 'none',
+                })
+            
+            return formats
+        
+        # Original video handling code
         video_info = traverse_obj(aweme_detail, ('video', {dict})) or {}
         play_width = int_or_none(video_info.get('width'))
         play_height = int_or_none(video_info.get('height'))
@@ -682,7 +721,7 @@ class TikTokBaseIE(InfoExtractor):
 
 
 class TikTokIE(TikTokBaseIE):
-    _VALID_URL = r'https?://www\.tiktok\.com/(?:embed|@(?P<user_id>[\w\.-]+)?/video)/(?P<id>\d+)'
+    _VALID_URL = r'https?://www\.tiktok\.com/(?:embed|@(?P<user_id>[\w\.-]+)?/(?:video|photo))/(?P<id>\d+)'
     _EMBED_REGEX = [rf'<(?:script|iframe)[^>]+\bsrc=(["\'])(?P<url>{_VALID_URL})']
 
     _TESTS = [{
@@ -956,10 +995,36 @@ class TikTokIE(TikTokBaseIE):
         # Auto-captions available
         'url': 'https://www.tiktok.com/@hankgreen1/video/7047596209028074758',
         'only_matching': True,
+    }, {
+        # Photo post/slideshow
+        'url': 'https://www.tiktok.com/@yusuf_sufiandi24/photo/7457053391559216392',
+        'info_dict': {
+            'id': '7457053391559216392',
+            'ext': 'jpeg',
+            'title': str,
+            'description': str,
+            'uploader': 'yusuf_sufiandi24',
+            'uploader_id': str,
+            'uploader_url': str,
+            'channel': str,
+            'channel_id': str,
+            'channel_url': str,
+            'timestamp': int,
+            'upload_date': str,
+            'view_count': int,
+            'like_count': int,
+            'comment_count': int,
+            'repost_count': int,
+            'save_count': int,
+        },
+        'skip': 'Photo posts require special handling',
     }]
 
     def _real_extract(self, url):
         video_id, user_id = self._match_valid_url(url).group('id', 'user_id')
+        
+        # Detect if original URL is a photo post
+        is_photo_url = '/photo/' in url
 
         if self._KNOWN_APP_INFO:
             try:
@@ -968,10 +1033,18 @@ class TikTokIE(TikTokBaseIE):
                 e.expected = True
                 self.report_warning(f'{e}; trying with webpage')
 
+        # Always use /video/ URL for web extraction as TikTok's universal data
+        # is only available under webapp.video-detail regardless of content type
         url = self._create_url(user_id, video_id)
         video_data, status = self._extract_web_data_and_status(url, video_id)
 
-        if video_data and status == 0:
+        # Check if we have valid data (either video or imagePost)
+        has_valid_data = video_data and (
+            traverse_obj(video_data, ('video', {dict})) or 
+            traverse_obj(video_data, ('imagePost', {dict}))
+        )
+        
+        if has_valid_data and status == 0:
             return self._parse_aweme_video_web(video_data, url, video_id)
         elif status in (10216, 10222):
             # 10216: private post; 10222: private account
@@ -979,6 +1052,13 @@ class TikTokIE(TikTokBaseIE):
                 'You do not have permission to view this post. Log into an account that has access')
         elif status == 10204:
             raise ExtractorError('Your IP address is blocked from accessing this post', expected=True)
+        
+        # If we have video_data but no valid content, it might be an unsupported format
+        if video_data and not has_valid_data:
+            raise ExtractorError(
+                f'Unable to extract video or image data. This might be an unsupported post type', 
+                video_id=video_id, expected=True)
+        
         raise ExtractorError(f'Video not available, status code {status}', video_id=video_id)
 
 

@@ -31,7 +31,7 @@ import logging
 from contextlib import asynccontextmanager
 import httpx
 import threading
-from queue import Queue, Empty
+from queue import Queue, Empty, Full
 import gc
 
 # Import local modules
@@ -546,7 +546,7 @@ async def download_slideshow(url: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
+def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict, stop_event):
     """Download using yt-dlp with direct streaming"""
     ydl = None
     queue_writer = None
@@ -556,14 +556,26 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
         
         # Create a custom file-like object that writes to queue
         class QueueWriter:
-            def __init__(self, queue):
+            def __init__(self, queue, stop_signal):
                 self.queue = queue
+                self.stop_signal = stop_signal
                 self.buffer = bytearray()
                 self.encoding = 'utf-8'
                 self.mode = 'wb'
                 self.name = '<queue>'
                 self.closed = False
             
+            def _put_chunk(self, chunk):
+                """Put chunk into queue with cancellation support"""
+                while True:
+                    if self.stop_signal.is_set():
+                        raise RuntimeError("Stream cancelled by client")
+                    try:
+                        self.queue.put(chunk, timeout=1)
+                        return
+                    except Full:
+                        continue
+
             def write(self, data):
                 """Write data to queue in chunks"""
                 if self.closed:
@@ -578,14 +590,14 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
                 while len(self.buffer) >= 8192:
                     chunk = bytes(self.buffer[:8192])
                     self.buffer = self.buffer[8192:]
-                    self.queue.put(chunk)
+                    self._put_chunk(chunk)
                 
                 return len(data)
             
             def flush(self):
                 """Flush remaining buffer"""
                 if not self.closed and self.buffer:
-                    self.queue.put(bytes(self.buffer))
+                    self._put_chunk(bytes(self.buffer))
                     self.buffer = bytearray()
             
             def close(self):
@@ -604,7 +616,7 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
                 return False
         
         # Configure yt-dlp to output to custom stream
-        queue_writer = QueueWriter(chunk_queue)
+        queue_writer = QueueWriter(chunk_queue, stop_event)
         
         ydl_opts = {
             'format': format_id,
@@ -629,14 +641,21 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
         
         logger.info("yt-dlp download completed")
         
-        # Signal end of stream
-        chunk_queue.put(None)
+        # Signal end of stream (non-blocking if queue is full)
+        try:
+            chunk_queue.put(None, timeout=1)
+        except Full:
+            pass
         
     except Exception as e:
         logger.error(f"Error in yt-dlp streaming: {e}")
         logger.exception(e)  # Log full traceback
         error_dict['error'] = str(e)
-        chunk_queue.put(None)
+        # Signal end of stream (non-blocking if queue is full)
+        try:
+            chunk_queue.put(None, timeout=1)
+        except Full:
+            pass
     finally:
         # CRITICAL: Close the YoutubeDL instance to release file descriptors
         if ydl:
@@ -679,11 +698,12 @@ async def stream_video(data: str, request: Request):
         
         chunk_queue = Queue(maxsize=20)
         download_error = {'error': None}
+        stop_event = threading.Event()
         
         # Start download in background thread
         download_thread = threading.Thread(
             target=download_with_stdout_streaming,
-            args=(stream_data['url'], stream_data['format_id'], chunk_queue, download_error),
+            args=(stream_data['url'], stream_data['format_id'], chunk_queue, download_error, stop_event),
             daemon=True
         )
         download_thread.start()
@@ -699,6 +719,7 @@ async def stream_video(data: str, request: Request):
                     if await request.is_disconnected():
                         logger.info("Client disconnected during stream")
                         client_disconnected = True
+                        stop_event.set()
                         break
                     
                     try:
@@ -717,12 +738,15 @@ async def stream_video(data: str, request: Request):
                         
                     except Empty:
                         logger.warning("Stream timeout waiting for chunk")
+                        stop_event.set()
                         break
                     except Exception as e:
                         logger.error(f"Error yielding chunk: {e}")
+                        stop_event.set()
                         break
             finally:
-                # Drain the queue if client disconnected to prevent blocking the thread
+                # Signal producer to stop and drain the queue if client disconnected
+                stop_event.set()
                 if client_disconnected:
                     try:
                         while True:

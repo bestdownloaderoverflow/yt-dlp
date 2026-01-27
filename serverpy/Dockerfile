@@ -15,6 +15,7 @@ COPY yt_dlp /app/yt_dlp
 WORKDIR /app/serverpy
 COPY serverpy/requirements.txt .
 COPY serverpy/*.py .
+COPY serverpy/gunicorn.conf.py .
 COPY serverpy/.env.example .env
 
 # Install Python dependencies
@@ -31,4 +32,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:3021/health')" || exit 1
 
 # Run application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "3021", "--log-level", "info"]
+CMD ["gunicorn", "-c", "gunicorn.conf.py", "main:app"]

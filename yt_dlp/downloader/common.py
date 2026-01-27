@@ -251,6 +251,9 @@ class FileDownloader:
 
     @wrap_file_access('open', fatal=True)
     def sanitize_open(self, filename, open_mode):
+        if self.params.get('output_stream'):
+            return self.params['output_stream'], filename
+
         f, filename = sanitize_open(filename, open_mode)
         if not getattr(f, 'locked', None):
             self.write_debug(f'{LockingUnsupportedError.msg}. Proceeding without locking', only_once=True)

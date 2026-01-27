@@ -508,10 +508,7 @@ async def download_slideshow(url: str, background_tasks: BackgroundTasks):
 
 
 def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
-    """Download using yt-dlp with stdout streaming"""
-    import sys
-    import io
-    
+    """Download using yt-dlp with direct streaming"""
     try:
         logger.info(f"Starting yt-dlp streaming for format: {format_id}")
         
@@ -564,7 +561,7 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
             def seekable(self):
                 return False
         
-        # Configure yt-dlp to output to stdout
+        # Configure yt-dlp to output to custom stream
         queue_writer = QueueWriter(chunk_queue)
         
         ydl_opts = {
@@ -572,46 +569,23 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
             'quiet': True,
             'no_warnings': True,
             'noprogress': True,
-            'outtmpl': '-',  # Output to stdout!
-            'logtostderr': True,  # Log messages go to stderr, not stdout
+            'outtmpl': '-',
+            'logtostderr': True,
+            'output_stream': queue_writer  # Use our custom stream!
         }
         
         # Create YoutubeDL instance
         ydl = yt_dlp.YoutubeDL(ydl_opts)
         
-        # Save original stdout
-        old_stdout = sys.stdout
+        logger.info("Downloading via yt-dlp...")
         
-        try:
-            # Create a text wrapper around our binary writer
-            # This is needed because yt-dlp expects a text stream for stdout
-            text_wrapper = io.TextIOWrapper(
-                queue_writer,
-                encoding='utf-8',
-                line_buffering=False,
-                write_through=True
-            )
-            
-            # Redirect stdout
-            sys.stdout = text_wrapper
-            
-            # Also patch yt-dlp's internal file handles
-            ydl._out_files.out = text_wrapper
-            
-            logger.info("Downloading via yt-dlp...")
-            
-            # Download - this will write to our queue_writer
-            ydl.download([url])
-            
-            # Flush everything
-            text_wrapper.flush()
-            queue_writer.flush()
-            
-            logger.info("yt-dlp download completed")
-            
-        finally:
-            # Restore stdout
-            sys.stdout = old_stdout
+        # Download - this will write to our queue_writer
+        ydl.download([url])
+        
+        # Flush everything
+        queue_writer.flush()
+        
+        logger.info("yt-dlp download completed")
         
         # Signal end of stream
         chunk_queue.put(None)

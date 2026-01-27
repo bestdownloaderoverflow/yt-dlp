@@ -50,12 +50,6 @@ logger = logging.getLogger(__name__)
 # Thread pool for blocking operations
 executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
 
-# Semaphore to limit concurrent yt-dlp extractions (prevent file descriptor exhaustion)
-# For 6 vCPU / 16GB RAM: 50 concurrent extractions is safe
-# Each yt-dlp extraction uses ~100-200MB RAM, so 50 x 200MB = 10GB max
-ytdlp_semaphore = asyncio.Semaphore(50)
-ytdlp_sync_semaphore = threading.Semaphore(50)
-
 # Global httpx client for connection pooling
 http_client: Optional[httpx.AsyncClient] = None
 
@@ -138,39 +132,37 @@ CONTENT_TYPES = {
 def extract_video_info(url: str) -> dict:
     """
     Extract video info using yt-dlp (blocking operation)
-    Runs in thread pool with semaphore to limit concurrency
+    Runs in thread pool
     """
-    # Acquire semaphore to limit concurrent extractions
-    with ytdlp_sync_semaphore:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': False,
-            'socket_timeout': 30,
-        }
-        
-        # Add cookies if available
-        cookies_path = settings.TEMP_DIR.parent / 'cookies' / 'www.tiktok.com_cookies.txt'
-        if cookies_path.exists():
-            ydl_opts['cookiefile'] = str(cookies_path)
-        
-        ydl = None
-        try:
-            ydl = yt_dlp.YoutubeDL(ydl_opts)
-            info = ydl.extract_info(url, download=False)
-            return info
-        except Exception as e:
-            logger.error(f"yt-dlp extraction failed: {e}")
-            raise
-        finally:
-            # Explicitly close the YoutubeDL instance to release file descriptors
-            if ydl:
-                try:
-                    ydl.close()
-                except Exception:
-                    pass
-            # Force garbage collection to clean up any lingering resources
-            gc.collect()
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+        'socket_timeout': 30,
+    }
+    
+    # Add cookies if available
+    cookies_path = settings.TEMP_DIR.parent / 'cookies' / 'www.tiktok.com_cookies.txt'
+    if cookies_path.exists():
+        ydl_opts['cookiefile'] = str(cookies_path)
+    
+    ydl = None
+    try:
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
+        info = ydl.extract_info(url, download=False)
+        return info
+    except Exception as e:
+        logger.error(f"yt-dlp extraction failed: {e}")
+        raise
+    finally:
+        # Explicitly close the YoutubeDL instance to release file descriptors
+        if ydl:
+            try:
+                ydl.close()
+            except Exception:
+                pass
+        # Force garbage collection to clean up any lingering resources
+        gc.collect()
 
 
 async def fetch_tiktok_data(url: str) -> dict:
@@ -559,111 +551,109 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
     ydl = None
     queue_writer = None
     
-    # Acquire semaphore to limit concurrent downloads
-    with ytdlp_sync_semaphore:
-        try:
-            logger.info(f"Starting yt-dlp streaming for format: {format_id}")
+    try:
+        logger.info(f"Starting yt-dlp streaming for format: {format_id}")
+        
+        # Create a custom file-like object that writes to queue
+        class QueueWriter:
+            def __init__(self, queue):
+                self.queue = queue
+                self.buffer = bytearray()
+                self.encoding = 'utf-8'
+                self.mode = 'wb'
+                self.name = '<queue>'
+                self.closed = False
             
-            # Create a custom file-like object that writes to queue
-            class QueueWriter:
-                def __init__(self, queue):
-                    self.queue = queue
+            def write(self, data):
+                """Write data to queue in chunks"""
+                if self.closed:
+                    raise ValueError("I/O operation on closed file")
+                
+                if isinstance(data, str):
+                    data = data.encode('utf-8')
+                
+                self.buffer.extend(data)
+                
+                # Send in 8KB chunks
+                while len(self.buffer) >= 8192:
+                    chunk = bytes(self.buffer[:8192])
+                    self.buffer = self.buffer[8192:]
+                    self.queue.put(chunk)
+                
+                return len(data)
+            
+            def flush(self):
+                """Flush remaining buffer"""
+                if not self.closed and self.buffer:
+                    self.queue.put(bytes(self.buffer))
                     self.buffer = bytearray()
-                    self.encoding = 'utf-8'
-                    self.mode = 'wb'
-                    self.name = '<queue>'
-                    self.closed = False
-                
-                def write(self, data):
-                    """Write data to queue in chunks"""
-                    if self.closed:
-                        raise ValueError("I/O operation on closed file")
-                    
-                    if isinstance(data, str):
-                        data = data.encode('utf-8')
-                    
-                    self.buffer.extend(data)
-                    
-                    # Send in 8KB chunks
-                    while len(self.buffer) >= 8192:
-                        chunk = bytes(self.buffer[:8192])
-                        self.buffer = self.buffer[8192:]
-                        self.queue.put(chunk)
-                    
-                    return len(data)
-                
-                def flush(self):
-                    """Flush remaining buffer"""
-                    if not self.closed and self.buffer:
-                        self.queue.put(bytes(self.buffer))
-                        self.buffer = bytearray()
-                
-                def close(self):
-                    """Close and flush"""
-                    if not self.closed:
-                        self.flush()
-                        self.closed = True
-                
-                def writable(self):
-                    return not self.closed
-                
-                def readable(self):
-                    return False
-                
-                def seekable(self):
-                    return False
             
-            # Configure yt-dlp to output to custom stream
-            queue_writer = QueueWriter(chunk_queue)
+            def close(self):
+                """Close and flush"""
+                if not self.closed:
+                    self.flush()
+                    self.closed = True
             
-            ydl_opts = {
-                'format': format_id,
-                'quiet': True,
-                'no_warnings': True,
-                'noprogress': True,
-                'outtmpl': '-',
-                'logtostderr': True,
-                'output_stream': queue_writer  # Use our custom stream!
-            }
+            def writable(self):
+                return not self.closed
             
-            # Create YoutubeDL instance
-            ydl = yt_dlp.YoutubeDL(ydl_opts)
+            def readable(self):
+                return False
             
-            logger.info("Downloading via yt-dlp...")
-            
-            # Download - this will write to our queue_writer
-            ydl.download([url])
-            
-            # Flush everything
-            queue_writer.flush()
-            
-            logger.info("yt-dlp download completed")
-            
-            # Signal end of stream
-            chunk_queue.put(None)
-            
-        except Exception as e:
-            logger.error(f"Error in yt-dlp streaming: {e}")
-            logger.exception(e)  # Log full traceback
-            error_dict['error'] = str(e)
-            chunk_queue.put(None)
-        finally:
-            # CRITICAL: Close the YoutubeDL instance to release file descriptors
-            if ydl:
-                try:
-                    ydl.close()
-                except Exception:
-                    pass
-            
-            # Close the queue writer
-            if queue_writer:
-                try:
-                    queue_writer.close()
-                except Exception:
-                    pass
-            
-            # Force garbage collection
-            gc.collect()
+            def seekable(self):
+                return False
+        
+        # Configure yt-dlp to output to custom stream
+        queue_writer = QueueWriter(chunk_queue)
+        
+        ydl_opts = {
+            'format': format_id,
+            'quiet': True,
+            'no_warnings': True,
+            'noprogress': True,
+            'outtmpl': '-',
+            'logtostderr': True,
+            'output_stream': queue_writer  # Use our custom stream!
+        }
+        
+        # Create YoutubeDL instance
+        ydl = yt_dlp.YoutubeDL(ydl_opts)
+        
+        logger.info("Downloading via yt-dlp...")
+        
+        # Download - this will write to our queue_writer
+        ydl.download([url])
+        
+        # Flush everything
+        queue_writer.flush()
+        
+        logger.info("yt-dlp download completed")
+        
+        # Signal end of stream
+        chunk_queue.put(None)
+        
+    except Exception as e:
+        logger.error(f"Error in yt-dlp streaming: {e}")
+        logger.exception(e)  # Log full traceback
+        error_dict['error'] = str(e)
+        chunk_queue.put(None)
+    finally:
+        # CRITICAL: Close the YoutubeDL instance to release file descriptors
+        if ydl:
+            try:
+                ydl.close()
+            except Exception:
+                pass
+        
+        # Close the queue writer
+        if queue_writer:
+            try:
+                queue_writer.close()
+            except Exception:
+                pass
+        
+        # Force garbage collection
+        gc.collect()
 
 
 @app.get("/stream")
@@ -786,10 +776,6 @@ async def health_check():
         'workers': {
             'max': settings.MAX_WORKERS,
             'active': len([t for t in executor._threads if t.is_alive()]) if hasattr(executor, '_threads') else 0
-        },
-        'semaphore': {
-            'ytdlp_available': ytdlp_sync_semaphore._value if hasattr(ytdlp_sync_semaphore, '_value') else 'unknown',
-            'limit': 50
         },
         'file_descriptors': {
             'current': fd_count,

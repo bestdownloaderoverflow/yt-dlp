@@ -780,11 +780,6 @@ async def stream_video(data: str, request: Request):
                     except Empty:
                         pass
         
-        headers = {
-            'Content-Disposition': f'attachment; filename="{filename}"',
-            'X-Filename': filename,
-            'Cache-Control': 'no-cache',
-        }
         
         headers = {
             'Content-Disposition': f'attachment; filename="{filename}"',

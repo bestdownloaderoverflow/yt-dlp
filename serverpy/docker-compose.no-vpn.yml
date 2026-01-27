@@ -13,7 +13,7 @@ services:
       - PORT=3021
       - BASE_URL=https://d.snaptik.fit
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-overflow}
-      - MAX_WORKERS=100
+      - MAX_WORKERS=200
       - YTDLP_TIMEOUT=30
       - DOWNLOAD_TIMEOUT=120
     # Increase file descriptor limits to prevent "Too many open files" errors

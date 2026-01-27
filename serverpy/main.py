@@ -300,12 +300,16 @@ def generate_json_response(data: dict, url: str) -> dict:
             if not format_obj:
                 return None
             
+            # Extract filesize
+            filesize = format_obj.get('filesize') or format_obj.get('filesize_approx') or 0
+
             if use_stream:
                 encrypted_data = encrypt(
                     json.dumps({
                         'url': url,
                         'format_id': format_obj['format_id'],
-                        'author': author['nickname']
+                        'author': author['nickname'],
+                        'filesize': filesize
                     }),
                     settings.ENCRYPTION_KEY,
                     360
@@ -317,7 +321,8 @@ def generate_json_response(data: dict, url: str) -> dict:
                         'format_id': format_obj['format_id'],
                         'author': author['nickname'],
                         'type': file_type,
-                        'url': format_obj['url']
+                        'url': format_obj['url'],
+                        'filesize': filesize
                     }),
                     settings.ENCRYPTION_KEY,
                     360
@@ -409,15 +414,32 @@ async def download_file_endpoint(data: str, request: Request):
             raise HTTPException(status_code=400, detail="Invalid file type specified")
         
         content_type, file_extension = CONTENT_TYPES[download_data['type']]
-        filename = f"{download_data['author']}.{file_extension}"
+        # Sanitize filename for iOS compatibility
+        import re
+        safe_author = re.sub(r'[^a-zA-Z0-9_]', '_', download_data['author'])
+        filename = f"{safe_author}.{file_extension}"
         
         if not download_data.get('url'):
             raise HTTPException(status_code=400, detail="No download URL provided")
         
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'X-Filename': filename
+        }
+        
+        # Set Content-Length if available in token
+        filesize = download_data.get('filesize', 0)
+        if filesize and filesize > 0:
+            headers['Content-Length'] = str(filesize)
+
         # Use global httpx client for connection pooling
         async def stream_file():
             try:
                 async with http_client.stream('GET', download_data['url']) as response:
+                    # Forward content length if available and not already set
+                    if 'content-length' in response.headers and 'Content-Length' not in headers:
+                        headers['Content-Length'] = response.headers['content-length']
+                    
                     async for chunk in response.aiter_bytes(chunk_size=8192):
                         # Check if client disconnected
                         if await request.is_disconnected():
@@ -694,7 +716,9 @@ async def stream_video(data: str, request: Request):
         # Determine file extension and content type
         ext = 'mp3' if 'audio' in stream_data['format_id'] else 'mp4'
         content_type = 'audio/mpeg' if ext == 'mp3' else 'video/mp4'
-        filename = f"{stream_data['author']}.{ext}"
+        import re
+        safe_author = re.sub(r'[^a-zA-Z0-9_]', '_', stream_data['author'])
+        filename = f"{safe_author}.{ext}"
         
         chunk_queue = Queue(maxsize=20)
         download_error = {'error': None}
@@ -761,6 +785,17 @@ async def stream_video(data: str, request: Request):
             'X-Filename': filename,
             'Cache-Control': 'no-cache',
         }
+        
+        headers = {
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'X-Filename': filename,
+            'Cache-Control': 'no-cache',
+        }
+        
+        # Set Content-Length if available (critical for iOS)
+        filesize = stream_data.get('filesize', 0)
+        if filesize and filesize > 0:
+            headers['Content-Length'] = str(filesize)
         
         return StreamingResponse(
             stream_content(),

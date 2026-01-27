@@ -12,7 +12,7 @@ backlog = 2048
 
 # Worker processes
 # Formula: (2 x CPU cores) + 1 = (2 x 6) + 1 = 13 workers
-workers = 9
+workers = 5
 worker_class = "uvicorn.workers.UvicornWorker"
 
 # Worker connections

@@ -29,6 +29,10 @@ import json
 from typing import Optional, Dict, Any
 import logging
 from contextlib import asynccontextmanager
+import httpx
+import threading
+from queue import Queue, Empty
+import gc
 
 # Import local modules
 from encryption import encrypt, decrypt
@@ -46,6 +50,15 @@ logger = logging.getLogger(__name__)
 # Thread pool for blocking operations
 executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
 
+# Semaphore to limit concurrent yt-dlp extractions (prevent file descriptor exhaustion)
+# For 6 vCPU / 16GB RAM: 50 concurrent extractions is safe
+# Each yt-dlp extraction uses ~100-200MB RAM, so 50 x 200MB = 10GB max
+ytdlp_semaphore = asyncio.Semaphore(50)
+ytdlp_sync_semaphore = threading.Semaphore(50)
+
+# Global httpx client for connection pooling
+http_client: Optional[httpx.AsyncClient] = None
+
 # Ensure temp directory exists
 settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -53,11 +66,20 @@ settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
+    global http_client
+    
     # Startup
     logger.info(f"Starting server on port {settings.PORT}")
     logger.info(f"Base URL: {settings.BASE_URL}")
     logger.info(f"Max workers: {settings.MAX_WORKERS}")
     logger.info(f"Temp directory: {settings.TEMP_DIR}")
+    
+    # Initialize global httpx client with connection pooling
+    http_client = httpx.AsyncClient(
+        timeout=httpx.Timeout(120.0, connect=10.0),
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+        follow_redirects=True
+    )
     
     # Initialize cleanup schedule (every 15 minutes)
     cleanup_task = asyncio.create_task(init_cleanup_schedule(settings.TEMP_DIR, "*/15 * * * *"))
@@ -67,6 +89,11 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down server...")
     cleanup_task.cancel()
+    
+    # Close httpx client
+    if http_client:
+        await http_client.aclose()
+    
     executor.shutdown(wait=True)
 
 
@@ -111,27 +138,39 @@ CONTENT_TYPES = {
 def extract_video_info(url: str) -> dict:
     """
     Extract video info using yt-dlp (blocking operation)
-    Runs in thread pool
+    Runs in thread pool with semaphore to limit concurrency
     """
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'extract_flat': False,
-        'socket_timeout': 30,
-    }
-    
-    # Add cookies if available
-    cookies_path = settings.TEMP_DIR.parent / 'cookies' / 'www.tiktok.com_cookies.txt'
-    if cookies_path.exists():
-        ydl_opts['cookiefile'] = str(cookies_path)
-    
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    # Acquire semaphore to limit concurrent extractions
+    with ytdlp_sync_semaphore:
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+            'socket_timeout': 30,
+        }
+        
+        # Add cookies if available
+        cookies_path = settings.TEMP_DIR.parent / 'cookies' / 'www.tiktok.com_cookies.txt'
+        if cookies_path.exists():
+            ydl_opts['cookiefile'] = str(cookies_path)
+        
+        ydl = None
+        try:
+            ydl = yt_dlp.YoutubeDL(ydl_opts)
             info = ydl.extract_info(url, download=False)
             return info
-    except Exception as e:
-        logger.error(f"yt-dlp extraction failed: {e}")
-        raise
+        except Exception as e:
+            logger.error(f"yt-dlp extraction failed: {e}")
+            raise
+        finally:
+            # Explicitly close the YoutubeDL instance to release file descriptors
+            if ydl:
+                try:
+                    ydl.close()
+                except Exception:
+                    pass
+            # Force garbage collection to clean up any lingering resources
+            gc.collect()
 
 
 async def fetch_tiktok_data(url: str) -> dict:
@@ -362,7 +401,7 @@ async def process_tiktok(request: TikTokRequest):
 
 
 @app.get("/download")
-async def download_file_endpoint(data: str):
+async def download_file_endpoint(data: str, request: Request):
     """Download file using encrypted data"""
     try:
         if not data:
@@ -383,14 +422,22 @@ async def download_file_endpoint(data: str):
         if not download_data.get('url'):
             raise HTTPException(status_code=400, detail="No download URL provided")
         
-        # Stream file from URL
-        import httpx
-        
+        # Use global httpx client for connection pooling
         async def stream_file():
-            async with httpx.AsyncClient(timeout=120.0) as client:
-                async with client.stream('GET', download_data['url']) as response:
+            try:
+                async with http_client.stream('GET', download_data['url']) as response:
                     async for chunk in response.aiter_bytes(chunk_size=8192):
+                        # Check if client disconnected
+                        if await request.is_disconnected():
+                            logger.info("Client disconnected during download")
+                            break
                         yield chunk
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error during download: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Error streaming file: {e}")
+                raise
         
         headers = {
             'Content-Disposition': f'attachment; filename="{filename}"',
@@ -509,92 +556,114 @@ async def download_slideshow(url: str, background_tasks: BackgroundTasks):
 
 def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict):
     """Download using yt-dlp with direct streaming"""
-    try:
-        logger.info(f"Starting yt-dlp streaming for format: {format_id}")
-        
-        # Create a custom file-like object that writes to queue
-        class QueueWriter:
-            def __init__(self, queue):
-                self.queue = queue
-                self.buffer = bytearray()
-                self.encoding = 'utf-8'
-                self.mode = 'wb'
-                self.name = '<queue>'
-                self.closed = False
+    ydl = None
+    queue_writer = None
+    
+    # Acquire semaphore to limit concurrent downloads
+    with ytdlp_sync_semaphore:
+        try:
+            logger.info(f"Starting yt-dlp streaming for format: {format_id}")
             
-            def write(self, data):
-                """Write data to queue in chunks"""
-                if self.closed:
-                    raise ValueError("I/O operation on closed file")
-                
-                if isinstance(data, str):
-                    data = data.encode('utf-8')
-                
-                self.buffer.extend(data)
-                
-                # Send in 8KB chunks
-                while len(self.buffer) >= 8192:
-                    chunk = bytes(self.buffer[:8192])
-                    self.buffer = self.buffer[8192:]
-                    self.queue.put(chunk)
-                
-                return len(data)
-            
-            def flush(self):
-                """Flush remaining buffer"""
-                if not self.closed and self.buffer:
-                    self.queue.put(bytes(self.buffer))
+            # Create a custom file-like object that writes to queue
+            class QueueWriter:
+                def __init__(self, queue):
+                    self.queue = queue
                     self.buffer = bytearray()
+                    self.encoding = 'utf-8'
+                    self.mode = 'wb'
+                    self.name = '<queue>'
+                    self.closed = False
+                
+                def write(self, data):
+                    """Write data to queue in chunks"""
+                    if self.closed:
+                        raise ValueError("I/O operation on closed file")
+                    
+                    if isinstance(data, str):
+                        data = data.encode('utf-8')
+                    
+                    self.buffer.extend(data)
+                    
+                    # Send in 8KB chunks
+                    while len(self.buffer) >= 8192:
+                        chunk = bytes(self.buffer[:8192])
+                        self.buffer = self.buffer[8192:]
+                        self.queue.put(chunk)
+                    
+                    return len(data)
+                
+                def flush(self):
+                    """Flush remaining buffer"""
+                    if not self.closed and self.buffer:
+                        self.queue.put(bytes(self.buffer))
+                        self.buffer = bytearray()
+                
+                def close(self):
+                    """Close and flush"""
+                    if not self.closed:
+                        self.flush()
+                        self.closed = True
+                
+                def writable(self):
+                    return not self.closed
+                
+                def readable(self):
+                    return False
+                
+                def seekable(self):
+                    return False
             
-            def close(self):
-                """Close and flush"""
-                if not self.closed:
-                    self.flush()
-                    self.closed = True
+            # Configure yt-dlp to output to custom stream
+            queue_writer = QueueWriter(chunk_queue)
             
-            def writable(self):
-                return not self.closed
+            ydl_opts = {
+                'format': format_id,
+                'quiet': True,
+                'no_warnings': True,
+                'noprogress': True,
+                'outtmpl': '-',
+                'logtostderr': True,
+                'output_stream': queue_writer  # Use our custom stream!
+            }
             
-            def readable(self):
-                return False
+            # Create YoutubeDL instance
+            ydl = yt_dlp.YoutubeDL(ydl_opts)
             
-            def seekable(self):
-                return False
-        
-        # Configure yt-dlp to output to custom stream
-        queue_writer = QueueWriter(chunk_queue)
-        
-        ydl_opts = {
-            'format': format_id,
-            'quiet': True,
-            'no_warnings': True,
-            'noprogress': True,
-            'outtmpl': '-',
-            'logtostderr': True,
-            'output_stream': queue_writer  # Use our custom stream!
-        }
-        
-        # Create YoutubeDL instance
-        ydl = yt_dlp.YoutubeDL(ydl_opts)
-        
-        logger.info("Downloading via yt-dlp...")
-        
-        # Download - this will write to our queue_writer
-        ydl.download([url])
-        
-        # Flush everything
-        queue_writer.flush()
-        
-        logger.info("yt-dlp download completed")
-        
-        # Signal end of stream
-        chunk_queue.put(None)
-        
-    except Exception as e:
-        logger.error(f"Error in yt-dlp streaming: {e}")
-        logger.exception(e)  # Log full traceback
-        error_dict['error'] = str(e)
-        chunk_queue.put(None)
+            logger.info("Downloading via yt-dlp...")
+            
+            # Download - this will write to our queue_writer
+            ydl.download([url])
+            
+            # Flush everything
+            queue_writer.flush()
+            
+            logger.info("yt-dlp download completed")
+            
+            # Signal end of stream
+            chunk_queue.put(None)
+            
+        except Exception as e:
+            logger.error(f"Error in yt-dlp streaming: {e}")
+            logger.exception(e)  # Log full traceback
+            error_dict['error'] = str(e)
+            chunk_queue.put(None)
+        finally:
+            # CRITICAL: Close the YoutubeDL instance to release file descriptors
+            if ydl:
+                try:
+                    ydl.close()
+                except Exception:
+                    pass
+            
+            # Close the queue writer
+            if queue_writer:
+                try:
+                    queue_writer.close()
+                except Exception:
+                    pass
+            
+            # Force garbage collection
+            gc.collect()
 
 
 @app.get("/stream")
@@ -618,10 +687,6 @@ async def stream_video(data: str, request: Request):
         content_type = 'audio/mpeg' if ext == 'mp3' else 'video/mp4'
         filename = f"{stream_data['author']}.{ext}"
         
-        # Use queue for streaming
-        import threading
-        from queue import Queue, Empty
-        
         chunk_queue = Queue(maxsize=20)
         download_error = {'error': None}
         
@@ -636,33 +701,46 @@ async def stream_video(data: str, request: Request):
         async def stream_content():
             """Stream chunks from queue"""
             loop = asyncio.get_event_loop()
+            client_disconnected = False
             
-            while True:
-                # Check if client disconnected
-                if await request.is_disconnected():
-                    logger.info("Client disconnected during stream")
-                    break
-                
-                try:
-                    # Get chunk from queue
-                    chunk = await loop.run_in_executor(
-                        None,
-                        lambda: chunk_queue.get(timeout=30)
-                    )
-                    
-                    if chunk is None:  # End signal
-                        if download_error['error']:
-                            logger.error(f"Stream error: {download_error['error']}")
+            try:
+                while True:
+                    # Check if client disconnected
+                    if await request.is_disconnected():
+                        logger.info("Client disconnected during stream")
+                        client_disconnected = True
                         break
                     
-                    yield chunk
-                    
-                except Empty:
-                    logger.warning("Stream timeout waiting for chunk")
-                    break
-                except Exception as e:
-                    logger.error(f"Error yielding chunk: {e}")
-                    break
+                    try:
+                        # Get chunk from queue
+                        chunk = await loop.run_in_executor(
+                            None,
+                            lambda: chunk_queue.get(timeout=30)
+                        )
+                        
+                        if chunk is None:  # End signal
+                            if download_error['error']:
+                                logger.error(f"Stream error: {download_error['error']}")
+                            break
+                        
+                        yield chunk
+                        
+                    except Empty:
+                        logger.warning("Stream timeout waiting for chunk")
+                        break
+                    except Exception as e:
+                        logger.error(f"Error yielding chunk: {e}")
+                        break
+            finally:
+                # Drain the queue if client disconnected to prevent blocking the thread
+                if client_disconnected:
+                    try:
+                        while True:
+                            chunk_queue.get_nowait()
+                            if chunk is None:
+                                break
+                    except Empty:
+                        pass
         
         headers = {
             'Content-Disposition': f'attachment; filename="{filename}"',
@@ -686,6 +764,21 @@ async def stream_video(data: str, request: Request):
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
+    import resource
+    
+    # Get current file descriptor usage
+    try:
+        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except Exception:
+        soft_limit, hard_limit = -1, -1
+    
+    # Count open file descriptors (Linux/Mac)
+    try:
+        import os
+        fd_count = len(os.listdir('/proc/self/fd')) if os.path.exists('/proc/self/fd') else -1
+    except Exception:
+        fd_count = -1
+    
     health = {
         'status': 'ok',
         'time': asyncio.get_event_loop().time(),
@@ -693,6 +786,15 @@ async def health_check():
         'workers': {
             'max': settings.MAX_WORKERS,
             'active': len([t for t in executor._threads if t.is_alive()]) if hasattr(executor, '_threads') else 0
+        },
+        'semaphore': {
+            'ytdlp_available': ytdlp_sync_semaphore._value if hasattr(ytdlp_sync_semaphore, '_value') else 'unknown',
+            'limit': 50
+        },
+        'file_descriptors': {
+            'current': fd_count,
+            'soft_limit': soft_limit,
+            'hard_limit': hard_limit
         }
     }
     
@@ -700,6 +802,9 @@ async def health_check():
         health['ytdlp'] = yt_dlp.version.__version__
     except Exception as e:
         health['ytdlp'] = f'error: {e}'
+    
+    # Trigger garbage collection on health check to help clean up
+    gc.collect()
     
     return health
 

@@ -440,7 +440,7 @@ async def download_file_endpoint(data: str, request: Request):
                     if 'content-length' in response.headers and 'Content-Length' not in headers:
                         headers['Content-Length'] = response.headers['content-length']
                     
-                    async for chunk in response.aiter_bytes(chunk_size=8192):
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
                         # Check if client disconnected
                         if await request.is_disconnected():
                             logger.info("Client disconnected during download")
@@ -608,10 +608,10 @@ def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict, stop
                 
                 self.buffer.extend(data)
                 
-                # Send in 8KB chunks
-                while len(self.buffer) >= 8192:
-                    chunk = bytes(self.buffer[:8192])
-                    self.buffer = self.buffer[8192:]
+                # Send in 64KB chunks (standard highWaterMark)
+                while len(self.buffer) >= 65536:
+                    chunk = bytes(self.buffer[:65536])
+                    self.buffer = self.buffer[65536:]
                     self._put_chunk(chunk)
                 
                 return len(data)
@@ -720,7 +720,7 @@ async def stream_video(data: str, request: Request):
         safe_author = re.sub(r'[^a-zA-Z0-9_]', '_', stream_data['author'])
         filename = f"{safe_author}.{ext}"
         
-        chunk_queue = Queue(maxsize=20)
+        chunk_queue = Queue(maxsize=32)
         download_error = {'error': None}
         stop_event = threading.Event()
         

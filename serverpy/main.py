@@ -13,6 +13,7 @@ import sys
 import os
 import io
 from pathlib import Path
+import hashlib
 
 # Add parent directory to path to import yt_dlp
 parent_dir = Path(__file__).parent.parent
@@ -33,12 +34,15 @@ import httpx
 import threading
 from queue import Queue, Empty, Full
 import gc
+import time
+import redis.asyncio as redis
 
 # Import local modules
 from encryption import encrypt, decrypt
 from cleanup import cleanup_folder, init_cleanup_schedule
 from slideshow import create_slideshow, download_file
 from config import settings
+from vpn_reconnect import VPNManager
 
 # Setup logging
 logging.basicConfig(
@@ -47,11 +51,30 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Initialize VPN manager for multi-instance setup
+vpn_manager = VPNManager()
+
+# Instance identification for multi-instance setup
+INSTANCE_ID = os.getenv('INSTANCE_ID', 'unknown')
+INSTANCE_REGION = os.getenv('INSTANCE_REGION', 'unknown')
+GLUETUN_CONTROL_PORT = int(os.getenv('GLUETUN_CONTROL_PORT', '8000'))
+GLUETUN_USERNAME = os.getenv('GLUETUN_USERNAME', 'admin')
+GLUETUN_PASSWORD = os.getenv('GLUETUN_PASSWORD', 'secretpassword')
+
+# Track VPN reconnect attempts
+last_vpn_reconnect = 0
+vpn_reconnect_attempts = 0
+VPN_RECONNECT_COOLDOWN = 30  # seconds
+VPN_MAX_RECONNECT_ATTEMPTS = 3
+
 # Thread pool for blocking operations
 executor = ThreadPoolExecutor(max_workers=settings.MAX_WORKERS)
 
 # Global httpx client for connection pooling
 http_client: Optional[httpx.AsyncClient] = None
+
+# Global Redis client for caching
+redis_client: Optional[redis.Redis] = None
 
 # Ensure temp directory exists
 settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -60,13 +83,14 @@ settings.TEMP_DIR.mkdir(parents=True, exist_ok=True)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
-    global http_client
+    global http_client, redis_client
     
     # Startup
     logger.info(f"Starting server on port {settings.PORT}")
     logger.info(f"Base URL: {settings.BASE_URL}")
     logger.info(f"Max workers: {settings.MAX_WORKERS}")
     logger.info(f"Temp directory: {settings.TEMP_DIR}")
+    logger.info(f"Instance: {INSTANCE_ID} ({INSTANCE_REGION})")
     
     # Initialize global httpx client with connection pooling
     http_client = httpx.AsyncClient(
@@ -74,6 +98,24 @@ async def lifespan(app: FastAPI):
         limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
         follow_redirects=True
     )
+    
+    # Initialize Redis client for caching
+    try:
+        redis_host = os.getenv('REDIS_HOST', 'redis')
+        redis_port = int(os.getenv('REDIS_PORT', '6379'))
+        redis_client = redis.Redis(
+            host=redis_host,
+            port=redis_port,
+            decode_responses=True,
+            socket_connect_timeout=5,
+            socket_keepalive=True
+        )
+        # Test connection
+        await redis_client.ping()
+        logger.info(f"✅ Redis connected at {redis_host}:{redis_port}")
+    except Exception as e:
+        logger.warning(f"⚠️ Redis connection failed: {e}. Caching disabled.")
+        redis_client = None
     
     # Initialize cleanup schedule (every 15 minutes)
     cleanup_task = asyncio.create_task(init_cleanup_schedule(settings.TEMP_DIR, "*/15 * * * *"))
@@ -83,6 +125,10 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down server...")
     cleanup_task.cancel()
+    
+    # Close Redis client
+    if redis_client:
+        await redis_client.aclose()
     
     # Close httpx client
     if http_client:
@@ -129,6 +175,55 @@ CONTENT_TYPES = {
 }
 
 
+def get_url_hash(url: str) -> str:
+    """Generate cache key from URL"""
+    return hashlib.md5(url.encode()).hexdigest()
+
+
+async def get_cached_metadata(url: str) -> Optional[dict]:
+    """Get cached metadata from Redis"""
+    if not redis_client:
+        return None
+    
+    try:
+        cache_key = f"tiktok:metadata:{get_url_hash(url)}"
+        cached = await redis_client.get(cache_key)
+        if cached:
+            logger.info(f"✅ Cache HIT for {url[:50]}...")
+            return json.loads(cached)
+        logger.debug(f"Cache MISS for {url[:50]}...")
+        return None
+    except Exception as e:
+        logger.warning(f"Redis get error: {e}")
+        return None
+
+
+async def set_cached_metadata(url: str, data: dict, ttl: int = 300):
+    """Cache metadata in Redis with TTL"""
+    if not redis_client:
+        return
+    
+    try:
+        cache_key = f"tiktok:metadata:{get_url_hash(url)}"
+        await redis_client.setex(cache_key, ttl, json.dumps(data))
+        logger.debug(f"Cached metadata for {url[:50]}... (TTL: {ttl}s)")
+    except Exception as e:
+        logger.warning(f"Redis set error: {e}")
+
+
+async def invalidate_cache(url: str):
+    """Invalidate cached metadata"""
+    if not redis_client:
+        return
+    
+    try:
+        cache_key = f"tiktok:metadata:{get_url_hash(url)}"
+        await redis_client.delete(cache_key)
+        logger.debug(f"Invalidated cache for {url[:50]}...")
+    except Exception as e:
+        logger.warning(f"Redis delete error: {e}")
+
+
 def extract_video_info(url: str) -> dict:
     """
     Extract video info using yt-dlp (blocking operation)
@@ -166,18 +261,106 @@ def extract_video_info(url: str) -> dict:
 
 
 async def fetch_tiktok_data(url: str) -> dict:
-    """Async wrapper for yt-dlp extraction"""
+    """Async wrapper for yt-dlp extraction with caching"""
+    # Check cache first
+    cached_data = await get_cached_metadata(url)
+    if cached_data:
+        return cached_data
+    
+    # Cache miss - fetch from TikTok
     loop = asyncio.get_event_loop()
     try:
         result = await asyncio.wait_for(
             loop.run_in_executor(executor, extract_video_info, url),
             timeout=30.0
         )
+        
+        # Cache the result
+        await set_cached_metadata(url, result, ttl=300)
+        
         return result
     except asyncio.TimeoutError:
         raise HTTPException(status_code=408, detail="Request timeout after 30 seconds")
     except Exception as e:
+        # Check if it's a 403 error (IP blocked)
+        error_str = str(e)
+        if 'HTTP Error 403' in error_str or 'Forbidden' in error_str:
+            logger.warning(f"403 Forbidden detected on {INSTANCE_ID}, triggering VPN reconnect")
+            await trigger_vpn_reconnect()
+            raise HTTPException(
+                status_code=503,
+                detail="Service temporarily unavailable due to IP block, retrying with different endpoint"
+            )
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def trigger_vpn_reconnect():
+    """Trigger VPN reconnect for this instance with retry logic"""
+    global last_vpn_reconnect, vpn_reconnect_attempts
+    
+    current_time = time.time()
+    
+    # Check if we've exceeded max retry attempts
+    if vpn_reconnect_attempts >= VPN_MAX_RECONNECT_ATTEMPTS:
+        logger.error(
+            f"❌ Max VPN reconnect attempts ({VPN_MAX_RECONNECT_ATTEMPTS}) reached for {INSTANCE_ID}. "
+            "Instance marked as unhealthy."
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=f"Service unavailable: VPN reconnect failed after {VPN_MAX_RECONNECT_ATTEMPTS} attempts"
+        )
+    
+    # Cooldown check (prevent spam)
+    if current_time - last_vpn_reconnect < VPN_RECONNECT_COOLDOWN:
+        logger.info(f"VPN reconnect cooldown active for {INSTANCE_ID}, skipping")
+        return False
+    
+    last_vpn_reconnect = current_time
+    vpn_reconnect_attempts += 1
+    
+    # Calculate exponential backoff: 5s, 10s, 20s
+    backoff_delay = min(5 * (2 ** (vpn_reconnect_attempts - 1)), 20)
+    
+    try:
+        logger.warning(
+            f"🔄 Triggering VPN reconnect for {INSTANCE_ID} ({INSTANCE_REGION}) - "
+            f"Attempt {vpn_reconnect_attempts}/{VPN_MAX_RECONNECT_ATTEMPTS}"
+        )
+        
+        # Wait for backoff delay before attempting reconnect
+        if vpn_reconnect_attempts > 1:
+            logger.info(f"🕒 Waiting {backoff_delay}s before reconnect attempt...")
+            await asyncio.sleep(backoff_delay)
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.put(
+                f'http://localhost:{GLUETUN_CONTROL_PORT}/v1/vpn/status',
+                auth=(GLUETUN_USERNAME, GLUETUN_PASSWORD),
+                json={'status': 'reconnecting'}
+            )
+            
+            if response.status_code == 200:
+                logger.info(
+                    f"✅ VPN reconnect triggered successfully for {INSTANCE_ID} "
+                    f"(attempt {vpn_reconnect_attempts}/{VPN_MAX_RECONNECT_ATTEMPTS})"
+                )
+                # Reset counter on successful reconnect
+                vpn_reconnect_attempts = 0
+                return True
+            else:
+                logger.error(
+                    f"❌ Failed to trigger VPN reconnect: HTTP {response.status_code} "
+                    f"(attempt {vpn_reconnect_attempts}/{VPN_MAX_RECONNECT_ATTEMPTS})"
+                )
+                return False
+                
+    except Exception as e:
+        logger.error(
+            f"❌ Error triggering VPN reconnect: {e} "
+            f"(attempt {vpn_reconnect_attempts}/{VPN_MAX_RECONNECT_ATTEMPTS})"
+        )
+        return False
 
 
 def generate_json_response(data: dict, url: str) -> dict:
@@ -355,6 +538,39 @@ def generate_json_response(data: dict, url: str) -> dict:
         }
 
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint with instance info and status"""
+    # Check Redis connection
+    redis_status = "disconnected"
+    if redis_client:
+        try:
+            await redis_client.ping()
+            redis_status = "connected"
+        except Exception:
+            redis_status = "error"
+    
+    return {
+        "status": "healthy",
+        "instance": {
+            "id": INSTANCE_ID,
+            "region": INSTANCE_REGION,
+            "port": settings.PORT
+        },
+        "redis": {
+            "status": redis_status,
+            "caching_enabled": redis_client is not None
+        },
+        "vpn": {
+            "reconnect_attempts": vpn_reconnect_attempts,
+            "max_attempts": VPN_MAX_RECONNECT_ATTEMPTS,
+            "last_reconnect": last_vpn_reconnect,
+            "cooldown_seconds": VPN_RECONNECT_COOLDOWN
+        },
+        "timestamp": time.time()
+    }
+
+
 @app.post("/tiktok")
 async def process_tiktok(request: TikTokRequest):
     """Process TikTok URL and return metadata with encrypted download links"""
@@ -375,7 +591,16 @@ async def process_tiktok(request: TikTokRequest):
         
         return response
     
-    except HTTPException:
+    except HTTPException as he:
+        # Check if it's a 403 error that we should handle
+        if he.status_code == 403:
+            logger.warning(f"403 Forbidden detected in handler on {INSTANCE_ID}")
+            # Return 503 to trigger nginx failover
+            raise HTTPException(
+                status_code=503,
+                detail="Service temporarily unavailable due to IP block, retrying",
+                headers={"Retry-After": "5"}
+            )
         raise
     except Exception as e:
         logger.error(f"Error in TikTok handler: {e}")
@@ -386,9 +611,12 @@ async def process_tiktok(request: TikTokRequest):
         if 'Unsupported URL' in error_message or 'Unable to download webpage' in error_message:
             status_code = 404
             error_message = 'Video not found. Please check the URL and make sure the video exists.'
-        elif 'IP address is blocked' in error_message:
-            status_code = 403
-            error_message = 'Access denied. The video may be private or restricted.'
+        elif 'IP address is blocked' in error_message or 'HTTP Error 403' in error_message:
+            # IP blocked - trigger VPN reconnect
+            logger.warning(f"IP blocked detected on {INSTANCE_ID}, triggering VPN reconnect")
+            await trigger_vpn_reconnect()
+            status_code = 503  # Return 503 for nginx failover
+            error_message = 'Service temporarily unavailable, retrying with different endpoint'
         elif 'ERROR:' in error_message:
             match = error_message.split('ERROR:')
             if len(match) > 1:
@@ -807,7 +1035,7 @@ async def stream_video(data: str, request: Request):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with instance info"""
     import resource
     
     # Get current file descriptor usage
@@ -825,6 +1053,8 @@ async def health_check():
     
     health = {
         'status': 'ok',
+        'instance_id': INSTANCE_ID,
+        'instance_region': INSTANCE_REGION,
         'time': asyncio.get_event_loop().time(),
         'ytdlp': 'unknown',
         'workers': {
@@ -842,6 +1072,26 @@ async def health_check():
         health['ytdlp'] = yt_dlp.version.__version__
     except Exception as e:
         health['ytdlp'] = f'error: {e}'
+    
+    # Check VPN connectivity if configured
+    if GLUETUN_CONTROL_PORT and GLUETUN_CONTROL_PORT != 8000:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    f'http://localhost:{GLUETUN_CONTROL_PORT}/v1/publicip/ip',
+                    auth=(GLUETUN_USERNAME, GLUETUN_PASSWORD)
+                )
+                if response.status_code == 200:
+                    ip_data = response.json()
+                    health['vpn'] = {
+                        'public_ip': ip_data.get('public_ip', 'unknown'),
+                        'status': 'connected'
+                    }
+        except Exception as e:
+            health['vpn'] = {
+                'status': 'error',
+                'error': str(e)
+            }
     
     # Trigger garbage collection on health check to help clean up
     gc.collect()

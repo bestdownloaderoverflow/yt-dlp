@@ -9,6 +9,9 @@ pydantic>=2.5.0
 httpx>=0.26.0
 requests>=2.31.0  # For sync streaming in threads
 
+# Redis cache
+redis>=5.0.0
+
 # Video/Audio processing
 # Note: FFmpeg must be installed on the system
 

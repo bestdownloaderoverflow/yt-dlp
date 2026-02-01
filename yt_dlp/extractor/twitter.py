@@ -1061,6 +1061,51 @@ class TwitterIE(TwitterBaseIE):
         # poll4choice_video card
         'url': 'https://twitter.com/SouthamptonFC/status/1347577658079641604',
         'only_matching': True,
+    }, {
+        # Photo-only tweet with multiple images
+        'url': 'https://x.com/cedric_chee/status/2017647800469885182',
+        'info_dict': {
+            'id': '2017647800469885182',
+            'title': r're:cedric - Kimi Web, a UI version of Kimi Code.+',
+            'description': r're:Kimi Web, a UI version of Kimi Code.+',
+            'channel_id': '10712132',
+            'uploader_id': 'cedric_chee',
+            'uploader': 'cedric',
+            'uploader_url': 'https://twitter.com/cedric_chee',
+            'timestamp': 1769879696,
+            'upload_date': '20250201',
+            'like_count': int,
+            'repost_count': int,
+            'comment_count': int,
+            'age_limit': 0,
+            'tags': [],
+        },
+        'playlist_count': 2,
+    }, {
+        # Single photo via /photo/1 URL
+        'url': 'https://x.com/cedric_chee/status/2017647800469885182/photo/1',
+        'info_dict': {
+            'id': '2017646591142989831',
+            'display_id': '2017647800469885182',
+            'ext': 'jpg',
+            'title': r're:cedric - Kimi Web, a UI version of Kimi Code.+',
+            'description': r're:Kimi Web, a UI version of Kimi Code.+',
+            'channel_id': '10712132',
+            'uploader_id': 'cedric_chee',
+            'uploader': 'cedric',
+            'uploader_url': 'https://twitter.com/cedric_chee',
+            'timestamp': 1769879696,
+            'upload_date': '20250201',
+            'like_count': int,
+            'repost_count': int,
+            'comment_count': int,
+            'age_limit': 0,
+            'tags': [],
+            'width': 1919,
+            'height': 1053,
+            'thumbnail': r're:https?://pbs\.twimg\.com/.+',
+        },
+        'params': {'noplaylist': True},
     }]
 
     _MEDIA_ID_RE = re.compile(r'_video/(\d+)/')
@@ -1261,6 +1306,44 @@ class TwitterIE(TwitterBaseIE):
                 '_format_sort_fields': ('res', 'proto:m3u8', 'br', 'size'),  # http format codec is unknown
             }
 
+        def extract_from_photo_info(media):
+            media_id = traverse_obj(media, 'id_str', 'id', expected_type=str_or_none)
+            self.write_debug(f'Extracting from photo info: {media_id}')
+
+            formats = []
+            media_url = media.get('media_url_https') or media.get('media_url')
+            original_info = media.get('original_info', {})
+            orig_width = int_or_none(original_info.get('width'))
+            orig_height = int_or_none(original_info.get('height'))
+
+            if media_url:
+                # Add format for original quality image
+                formats.append({
+                    'url': update_url_query(media_url, {'name': 'orig'}),
+                    'format_id': 'orig',
+                    'width': orig_width,
+                    'height': orig_height,
+                    'ext': 'jpg',
+                })
+                # Also add smaller sizes as fallback formats
+                for name, size in media.get('sizes', {}).items():
+                    if name == 'large':  # large is the best alternative to orig
+                        formats.append({
+                            'url': update_url_query(media_url, {'name': name}),
+                            'format_id': name,
+                            'width': int_or_none(size.get('w')),
+                            'height': int_or_none(size.get('h')),
+                            'ext': 'jpg',
+                        })
+
+            return {
+                'id': media_id,
+                'formats': formats,
+                'width': orig_width,
+                'height': orig_height,
+                'thumbnail': update_url_query(media_url, {'name': 'small'}) if media_url else None,
+            }
+
         def extract_from_card_info(card):
             if not card:
                 return
@@ -1337,34 +1420,53 @@ class TwitterIE(TwitterBaseIE):
 
         videos = traverse_obj(status, (
             (None, 'quoted_status'), 'extended_entities', 'media', lambda _, m: m['type'] != 'photo', {dict}))
+        photos = traverse_obj(status, (
+            (None, 'quoted_status'), 'extended_entities', 'media', lambda _, m: m['type'] == 'photo', {dict}))
 
         if self._yes_playlist(twid, selected_index, video_label='URL-specified video number'):
-            selected_entries = (*map(extract_from_video_info, videos), *extract_from_card_info(status.get('card')))
+            selected_entries = (
+                *map(extract_from_video_info, videos),
+                *map(extract_from_photo_info, photos),
+                *extract_from_card_info(status.get('card')))
         else:
             desired_obj = traverse_obj(status, (
                 (None, 'quoted_status'), 'extended_entities', 'media', int(selected_index) - 1, {dict}), get_all=False)
             if not desired_obj:
-                raise ExtractorError(f'Video #{selected_index} is unavailable', expected=True)
-            elif desired_obj.get('type') != 'video':
-                raise ExtractorError(f'Media #{selected_index} is not a video', expected=True)
+                raise ExtractorError(f'Media #{selected_index} is unavailable', expected=True)
+            elif desired_obj.get('type') == 'video':
+                # Restore original archive id and video index in title
+                for index, entry in enumerate(videos, 1):
+                    if entry.get('id') != desired_obj.get('id'):
+                        continue
+                    if index == 1:
+                        info['_old_archive_ids'] = [make_archive_id(self, twid)]
+                    if len(videos) != 1:
+                        info['title'] += f' #{index}'
+                    break
 
-            # Restore original archive id and video index in title
-            for index, entry in enumerate(videos, 1):
-                if entry.get('id') != desired_obj.get('id'):
-                    continue
-                if index == 1:
-                    info['_old_archive_ids'] = [make_archive_id(self, twid)]
-                if len(videos) != 1:
-                    info['title'] += f' #{index}'
-                break
+                return {**info, **extract_from_video_info(desired_obj), 'display_id': twid}
+            elif desired_obj.get('type') == 'photo':
+                # Restore original archive id and photo index in title
+                for index, entry in enumerate(photos, 1):
+                    if entry.get('id') != desired_obj.get('id'):
+                        continue
+                    if index == 1:
+                        info['_old_archive_ids'] = [make_archive_id(self, twid)]
+                    if len(photos) != 1:
+                        info['title'] += f' #{index}'
+                    break
 
-            return {**info, **extract_from_video_info(desired_obj), 'display_id': twid}
+                return {**info, **extract_from_photo_info(desired_obj), 'display_id': twid}
+            else:
+                raise ExtractorError(f'Media #{selected_index} has unsupported type: {desired_obj.get("type")}', expected=True)
+
+
 
         entries = [{**info, **data, 'display_id': twid} for data in selected_entries]
         if not entries:
             expanded_url = traverse_obj(status, ('entities', 'urls', 0, 'expanded_url'), expected_type=url_or_none)
             if not expanded_url or expanded_url == url:
-                self.raise_no_formats('No video could be found in this tweet', expected=True)
+                self.raise_no_formats('No video or photo could be found in this tweet', expected=True)
                 return info
 
             return self.url_result(expanded_url, display_id=twid, **info)

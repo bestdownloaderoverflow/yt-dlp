@@ -1,0 +1,273 @@
+services:
+  # =====================================================
+  # INSTANCE 1 - SINGAPORE
+  # =====================================================
+  gluetun-sg:
+    image: qmcgaw/gluetun:v3.41
+    container_name: gluetun-rs-sg
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3021:3021"  # ServerRS port
+      - "8001:8000"  # Gluetun control server
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WG_KEY_SG}
+      - WIREGUARD_ADDRESSES=10.71.102.218/32
+      - SERVER_COUNTRIES=Singapore
+      - DNS_ADDRESS=10.64.0.1
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=on
+      - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"basic","username":"admin","password":"${GLUETUN_PASSWORD}"}
+    volumes:
+      - ./gluetun/sg:/gluetun
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+
+  serverrs-sg:
+    build:
+      context: ..
+      dockerfile: serverrs/Dockerfile
+    container_name: serverrs-sg
+    restart: unless-stopped
+    network_mode: "service:gluetun-sg"
+    depends_on:
+      - gluetun-sg
+    environment:
+      - INSTANCE_ID=instance-sg
+      - INSTANCE_REGION=singapore
+      - PORT=3021
+      - BASE_URL=${BASE_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - TEMP_DIR=/app/temp
+      - COOKIES_PATH=/app/cookies/www.tiktok.com_cookies.txt
+      - MAX_WORKERS=${MAX_WORKERS:-200}
+      - YTDLP_TIMEOUT=30
+      - DOWNLOAD_TIMEOUT=120
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GLUETUN_CONTROL_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./temp/sg:/app/temp
+      - ./cookies:/app/cookies
+
+  # =====================================================
+  # INSTANCE 2 - SINGAPORE 2
+  # =====================================================
+  gluetun-sg2:
+    image: qmcgaw/gluetun:v3.41
+    container_name: gluetun-rs-sg2
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3022:3021"
+      - "8002:8000"
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WG_KEY_SG2}
+      - WIREGUARD_ADDRESSES=10.71.102.218/32
+      - SERVER_COUNTRIES=Singapore
+      - DNS_ADDRESS=10.64.0.1
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=on
+      - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"basic","username":"admin","password":"${GLUETUN_PASSWORD}"}
+    volumes:
+      - ./gluetun/sg2:/gluetun
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+
+  serverrs-sg2:
+    build:
+      context: ..
+      dockerfile: serverrs/Dockerfile
+    container_name: serverrs-sg2
+    restart: unless-stopped
+    network_mode: "service:gluetun-sg2"
+    depends_on:
+      - gluetun-sg2
+    environment:
+      - INSTANCE_ID=instance-sg2
+      - INSTANCE_REGION=singapore
+      - PORT=3021
+      - BASE_URL=${BASE_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - TEMP_DIR=/app/temp
+      - COOKIES_PATH=/app/cookies/www.tiktok.com_cookies.txt
+      - MAX_WORKERS=${MAX_WORKERS:-200}
+      - YTDLP_TIMEOUT=30
+      - DOWNLOAD_TIMEOUT=120
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GLUETUN_CONTROL_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./temp/sg2:/app/temp
+      - ./cookies:/app/cookies
+
+  # =====================================================
+  # INSTANCE 3 - INDONESIA
+  # =====================================================
+  gluetun-id:
+    image: qmcgaw/gluetun:v3.41
+    container_name: gluetun-rs-id
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3023:3021"
+      - "8003:8000"
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WG_KEY_ID}
+      - WIREGUARD_ADDRESSES=10.71.102.218/32
+      - SERVER_COUNTRIES=Indonesia
+      - DNS_ADDRESS=10.64.0.1
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=on
+      - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"basic","username":"admin","password":"${GLUETUN_PASSWORD}"}
+    volumes:
+      - ./gluetun/id:/gluetun
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+
+  serverrs-id:
+    build:
+      context: ..
+      dockerfile: serverrs/Dockerfile
+    container_name: serverrs-id
+    restart: unless-stopped
+    network_mode: "service:gluetun-id"
+    depends_on:
+      - gluetun-id
+    environment:
+      - INSTANCE_ID=instance-id
+      - INSTANCE_REGION=indonesia
+      - PORT=3021
+      - BASE_URL=${BASE_URL}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - TEMP_DIR=/app/temp
+      - COOKIES_PATH=/app/cookies/www.tiktok.com_cookies.txt
+      - MAX_WORKERS=${MAX_WORKERS:-200}
+      - YTDLP_TIMEOUT=30
+      - DOWNLOAD_TIMEOUT=120
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - GLUETUN_CONTROL_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD}
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./temp/id:/app/temp
+      - ./cookies:/app/cookies
+
+  # =====================================================
+  # REDIS CACHE
+  # =====================================================
+  redis:
+    image: redis:7-alpine
+    container_name: tiktok-rs-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --maxmemory 2gb --maxmemory-policy allkeys-lru --appendonly yes
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # =====================================================
+  # NGINX LOAD BALANCER
+  # =====================================================
+  nginx:
+    image: nginx:alpine
+    container_name: tiktok-rs-nginx
+    ports:
+      - "6068:80"
+      - "443:443"
+    volumes:
+      - ./nginx.multi.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - serverrs-sg
+      - serverrs-sg2
+      - serverrs-id
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+
+  # =====================================================
+  # PROMETHEUS MONITORING (Optional)
+  # =====================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tiktok-rs-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+    profiles:
+      - monitoring
+
+  # =====================================================
+  # GRAFANA DASHBOARD (Optional)
+  # =====================================================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tiktok-rs-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+    profiles:
+      - monitoring
+
+networks:
+  tiktok-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  prometheus-data:
+  grafana-data:

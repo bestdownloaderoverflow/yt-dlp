@@ -1,0 +1,5 @@
+/target
+.env
+temp/
+cookies/
+__pycache__/

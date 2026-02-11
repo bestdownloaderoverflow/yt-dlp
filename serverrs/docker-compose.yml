@@ -1,0 +1,60 @@
+services:
+  # --- VPN Container ---
+  gluetun:
+    image: qmcgaw/gluetun:v3.41
+    container_name: gluetun-serverrs
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "3021:3021"  # serverrs port
+      - "8000:8000"  # gluetun control server
+    environment:
+      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
+      - WIREGUARD_ADDRESSES=${WIREGUARD_ADDRESSES}
+      - SERVER_COUNTRIES=Singapore
+      - DNS_ADDRESS=10.64.0.1
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=on
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"secretpassword\"}"
+    volumes:
+      - ./gluetun/data:/gluetun
+    restart: unless-stopped
+    networks:
+      - tiktok-net
+
+  # --- ServerRS (routes through gluetun) ---
+  tiktok-downloader:
+    build:
+      context: ..
+      dockerfile: serverrs/Dockerfile
+    container_name: tiktok-downloader-rs
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+      - PORT=3021
+      - BASE_URL=https://d.snaptik.fit
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-overflow}
+      - TEMP_DIR=/app/temp
+      - COOKIES_PATH=/app/cookies/www.tiktok.com_cookies.txt
+      - MAX_WORKERS=100
+      - YTDLP_TIMEOUT=30
+      - DOWNLOAD_TIMEOUT=120
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./temp:/app/temp
+      - ./cookies:/app/cookies
+
+networks:
+  tiktok-net:
+    driver: bridge

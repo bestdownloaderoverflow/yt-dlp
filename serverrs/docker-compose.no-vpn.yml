@@ -1,0 +1,31 @@
+services:
+  tiktok-downloader:
+    build:
+      context: ..
+      dockerfile: serverrs/Dockerfile
+    container_name: tiktok-downloader-rs
+    restart: unless-stopped
+    ports:
+      - "3021:3021"
+    environment:
+      - PORT=3021
+      - BASE_URL=https://d.snaptik.fit
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-overflow}
+      - TEMP_DIR=/app/temp
+      - COOKIES_PATH=/app/cookies/www.tiktok.com_cookies.txt
+      - MAX_WORKERS=200
+      - YTDLP_TIMEOUT=30
+      - DOWNLOAD_TIMEOUT=120
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - ./temp:/app/temp
+      - ./cookies:/app/cookies
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3021/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

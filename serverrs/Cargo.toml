@@ -1,0 +1,21 @@
+[package]
+name = "serverrs"
+version = "1.0.0"
+edition = "2021"
+
+[dependencies]
+axum = { version = "0.8", features = ["macros"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+pyo3 = { version = "0.23", features = ["auto-initialize"] }
+tower-http = { version = "0.6", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+regex-lite = "0.1"
+reqwest = { version = "0.12", features = ["stream", "blocking"] }
+futures-util = "0.3"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+base64 = "0.22"
+md-5 = "0.10"

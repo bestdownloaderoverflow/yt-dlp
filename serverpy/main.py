@@ -11,7 +11,7 @@ TikTok Downloader Server using yt-dlp (Python Implementation)
 
 import sys
 import os
-import io
+import re
 from pathlib import Path
 import hashlib
 
@@ -31,8 +31,6 @@ from typing import Optional, Dict, Any
 import logging
 from contextlib import asynccontextmanager
 import httpx
-import threading
-from queue import Queue, Empty, Full
 import gc
 import time
 import redis.asyncio as redis
@@ -227,7 +225,8 @@ async def invalidate_cache(url: str):
 def extract_video_info(url: str) -> dict:
     """
     Extract video info using yt-dlp (blocking operation)
-    Runs in thread pool
+    Runs in thread pool.
+    Also extracts per-format cookies from ydl.cookiejar before closing.
     """
     ydl_opts = {
         'quiet': True,
@@ -245,6 +244,20 @@ def extract_video_info(url: str) -> dict:
     try:
         ydl = yt_dlp.YoutubeDL(ydl_opts)
         info = ydl.extract_info(url, download=False)
+        
+        # Extract per-format cookies from cookiejar before closing ydl.
+        # After extract_info, each format already has 'http_headers' (Referer, etc.)
+        # but Cookie is stripped from headers. We extract it separately.
+        for fmt in info.get('formats', []):
+            fmt_url = fmt.get('url')
+            if fmt_url and hasattr(ydl, 'cookiejar'):
+                try:
+                    cookie_header = ydl.cookiejar.get_cookie_header(fmt_url)
+                    if cookie_header:
+                        fmt['_cookies'] = cookie_header
+                except Exception:
+                    pass
+        
         return info
     except Exception as e:
         logger.error(f"yt-dlp extraction failed: {e}")
@@ -432,11 +445,19 @@ def generate_json_response(data: dict, url: str) -> dict:
         metadata['download_link']['no_watermark'] = encrypted_image_urls
         
         if audio_format:
+            audio_stream_headers = {}
+            if audio_format.get('http_headers'):
+                audio_stream_headers = dict(audio_format['http_headers'])
+            if audio_format.get('_cookies'):
+                audio_stream_headers['Cookie'] = audio_format['_cookies']
+            
             encrypted_audio = encrypt(
                 json.dumps({
-                    'url': url,
-                    'format_id': audio_format['format_id'],
-                    'author': author['nickname']
+                    'url': audio_format['url'],
+                    'author': author['nickname'],
+                    'filesize': audio_format.get('filesize') or 0,
+                    'http_headers': audio_stream_headers,
+                    'type': 'mp3'
                 }),
                 settings.ENCRYPTION_KEY,
                 360
@@ -487,12 +508,22 @@ def generate_json_response(data: dict, url: str) -> dict:
             filesize = format_obj.get('filesize') or format_obj.get('filesize_approx') or 0
 
             if use_stream:
+                # Embed CDN URL + auth headers + cookies directly for httpx streaming.
+                # This avoids a second yt-dlp extraction in /stream.
+                stream_headers = {}
+                if format_obj.get('http_headers'):
+                    stream_headers = dict(format_obj['http_headers'])
+                # Add cookies extracted from ydl.cookiejar
+                if format_obj.get('_cookies'):
+                    stream_headers['Cookie'] = format_obj['_cookies']
+                
                 encrypted_data = encrypt(
                     json.dumps({
-                        'url': url,
-                        'format_id': format_obj['format_id'],
+                        'url': format_obj['url'],
                         'author': author['nickname'],
-                        'filesize': filesize
+                        'filesize': filesize,
+                        'http_headers': stream_headers,
+                        'type': file_type
                     }),
                     settings.ENCRYPTION_KEY,
                     360
@@ -536,39 +567,6 @@ def generate_json_response(data: dict, url: str) -> dict:
             'status': 'tunnel',
             **metadata
         }
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint with instance info and status"""
-    # Check Redis connection
-    redis_status = "disconnected"
-    if redis_client:
-        try:
-            await redis_client.ping()
-            redis_status = "connected"
-        except Exception:
-            redis_status = "error"
-    
-    return {
-        "status": "healthy",
-        "instance": {
-            "id": INSTANCE_ID,
-            "region": INSTANCE_REGION,
-            "port": settings.PORT
-        },
-        "redis": {
-            "status": redis_status,
-            "caching_enabled": redis_client is not None
-        },
-        "vpn": {
-            "reconnect_attempts": vpn_reconnect_attempts,
-            "max_attempts": VPN_MAX_RECONNECT_ATTEMPTS,
-            "last_reconnect": last_vpn_reconnect,
-            "cooldown_seconds": VPN_RECONNECT_COOLDOWN
-        },
-        "timestamp": time.time()
-    }
 
 
 @app.post("/tiktok")
@@ -643,7 +641,6 @@ async def download_file_endpoint(data: str, request: Request):
         
         content_type, file_extension = CONTENT_TYPES[download_data['type']]
         # Sanitize filename for iOS compatibility
-        import re
         safe_author = re.sub(r'[^a-zA-Z0-9_]', '_', download_data['author'])
         filename = f"{safe_author}.{file_extension}"
         
@@ -680,11 +677,6 @@ async def download_file_endpoint(data: str, request: Request):
             except Exception as e:
                 logger.error(f"Error streaming file: {e}")
                 raise
-        
-        headers = {
-            'Content-Disposition': f'attachment; filename="{filename}"',
-            'X-Filename': filename
-        }
         
         return StreamingResponse(
             stream_file(),
@@ -796,138 +788,14 @@ async def download_slideshow(url: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def download_with_stdout_streaming(url, format_id, chunk_queue, error_dict, stop_event):
-    """Download using yt-dlp with direct streaming"""
-    ydl = None
-    queue_writer = None
-    
-    try:
-        logger.info(f"Starting yt-dlp streaming for format: {format_id}")
-        
-        # Create a custom file-like object that writes to queue
-        class QueueWriter:
-            def __init__(self, queue, stop_signal):
-                self.queue = queue
-                self.stop_signal = stop_signal
-                self.buffer = bytearray()
-                self.encoding = 'utf-8'
-                self.mode = 'wb'
-                self.name = '<queue>'
-                self.closed = False
-            
-            def _put_chunk(self, chunk):
-                """Put chunk into queue with cancellation support"""
-                while True:
-                    if self.stop_signal.is_set():
-                        raise RuntimeError("Stream cancelled by client")
-                    try:
-                        self.queue.put(chunk, timeout=1)
-                        return
-                    except Full:
-                        continue
-
-            def write(self, data):
-                """Write data to queue in chunks"""
-                if self.closed:
-                    raise ValueError("I/O operation on closed file")
-                
-                if isinstance(data, str):
-                    data = data.encode('utf-8')
-                
-                self.buffer.extend(data)
-                
-                # Send in 64KB chunks (standard highWaterMark)
-                while len(self.buffer) >= 65536:
-                    chunk = bytes(self.buffer[:65536])
-                    self.buffer = self.buffer[65536:]
-                    self._put_chunk(chunk)
-                
-                return len(data)
-            
-            def flush(self):
-                """Flush remaining buffer"""
-                if not self.closed and self.buffer:
-                    self._put_chunk(bytes(self.buffer))
-                    self.buffer = bytearray()
-            
-            def close(self):
-                """Close and flush"""
-                if not self.closed:
-                    self.flush()
-                    self.closed = True
-            
-            def writable(self):
-                return not self.closed
-            
-            def readable(self):
-                return False
-            
-            def seekable(self):
-                return False
-        
-        # Configure yt-dlp to output to custom stream
-        queue_writer = QueueWriter(chunk_queue, stop_event)
-        
-        ydl_opts = {
-            'format': format_id,
-            'quiet': True,
-            'no_warnings': True,
-            'noprogress': True,
-            'outtmpl': '-',
-            'logtostderr': True,
-            'output_stream': queue_writer  # Use our custom stream!
-        }
-        
-        # Create YoutubeDL instance
-        ydl = yt_dlp.YoutubeDL(ydl_opts)
-        
-        logger.info("Downloading via yt-dlp...")
-        
-        # Download - this will write to our queue_writer
-        ydl.download([url])
-        
-        # Flush everything
-        queue_writer.flush()
-        
-        logger.info("yt-dlp download completed")
-        
-        # Signal end of stream (non-blocking if queue is full)
-        try:
-            chunk_queue.put(None, timeout=1)
-        except Full:
-            pass
-        
-    except Exception as e:
-        logger.error(f"Error in yt-dlp streaming: {e}")
-        logger.exception(e)  # Log full traceback
-        error_dict['error'] = str(e)
-        # Signal end of stream (non-blocking if queue is full)
-        try:
-            chunk_queue.put(None, timeout=1)
-        except Full:
-            pass
-    finally:
-        # CRITICAL: Close the YoutubeDL instance to release file descriptors
-        if ydl:
-            try:
-                ydl.close()
-            except Exception:
-                pass
-        
-        # Close the queue writer
-        if queue_writer:
-            try:
-                queue_writer.close()
-            except Exception:
-                pass
-        
-        # Force garbage collection
-        gc.collect()
-
-
 @app.get("/stream")
 async def stream_video(data: str, request: Request):
-    """Stream video directly using yt-dlp stdout"""
+    """Stream video/audio directly via httpx using pre-extracted CDN URL and auth headers.
+    
+    The encrypted data contains the CDN URL, http_headers (including cookies),
+    and metadata — all extracted during /tiktok via yt-dlp's extract_info().
+    No second yt-dlp instance is needed.
+    """
     try:
         if not data:
             raise HTTPException(status_code=400, detail="Encrypted data parameter is required")
@@ -935,79 +803,28 @@ async def stream_video(data: str, request: Request):
         decrypted_data = decrypt(data, settings.ENCRYPTION_KEY)
         stream_data = json.loads(decrypted_data)
         
-        if not stream_data.get('url') or not stream_data.get('format_id') or not stream_data.get('author'):
+        if not stream_data.get('url') or not stream_data.get('author'):
             raise HTTPException(
                 status_code=400,
-                detail="Invalid decrypted data: missing url, format_id, or author"
+                detail="Invalid decrypted data: missing url or author"
             )
         
-        # Determine file extension and content type
-        ext = 'mp3' if 'audio' in stream_data['format_id'] else 'mp4'
-        content_type = 'audio/mpeg' if ext == 'mp3' else 'video/mp4'
-        import re
+        # Determine file extension and content type from type field
+        file_type = stream_data.get('type', 'video')
+        if file_type == 'mp3' or file_type == 'audio':
+            ext = 'mp3'
+            content_type = 'audio/mpeg'
+        else:
+            ext = 'mp4'
+            content_type = 'video/mp4'
+        
         safe_author = re.sub(r'[^a-zA-Z0-9_]', '_', stream_data['author'])
         filename = f"{safe_author}.{ext}"
         
-        chunk_queue = Queue(maxsize=32)
-        download_error = {'error': None}
-        stop_event = threading.Event()
-        
-        # Start download in background thread
-        download_thread = threading.Thread(
-            target=download_with_stdout_streaming,
-            args=(stream_data['url'], stream_data['format_id'], chunk_queue, download_error, stop_event),
-            daemon=True
-        )
-        download_thread.start()
-        
-        async def stream_content():
-            """Stream chunks from queue"""
-            loop = asyncio.get_event_loop()
-            client_disconnected = False
-            
-            try:
-                while True:
-                    # Check if client disconnected
-                    if await request.is_disconnected():
-                        logger.info("Client disconnected during stream")
-                        client_disconnected = True
-                        stop_event.set()
-                        break
-                    
-                    try:
-                        # Get chunk from queue
-                        chunk = await loop.run_in_executor(
-                            None,
-                            lambda: chunk_queue.get(timeout=30)
-                        )
-                        
-                        if chunk is None:  # End signal
-                            if download_error['error']:
-                                logger.error(f"Stream error: {download_error['error']}")
-                            break
-                        
-                        yield chunk
-                        
-                    except Empty:
-                        logger.warning("Stream timeout waiting for chunk")
-                        stop_event.set()
-                        break
-                    except Exception as e:
-                        logger.error(f"Error yielding chunk: {e}")
-                        stop_event.set()
-                        break
-            finally:
-                # Signal producer to stop and drain the queue if client disconnected
-                stop_event.set()
-                if client_disconnected:
-                    try:
-                        while True:
-                            chunk_queue.get_nowait()
-                            if chunk is None:
-                                break
-                    except Empty:
-                        pass
-        
+        # Build request headers from pre-extracted auth data
+        req_headers = {}
+        if stream_data.get('http_headers'):
+            req_headers = dict(stream_data['http_headers'])
         
         headers = {
             'Content-Disposition': f'attachment; filename="{filename}"',
@@ -1019,6 +836,28 @@ async def stream_video(data: str, request: Request):
         filesize = stream_data.get('filesize', 0)
         if filesize and filesize > 0:
             headers['Content-Length'] = str(filesize)
+        
+        async def stream_content():
+            """Stream chunks directly from CDN via httpx"""
+            try:
+                async with http_client.stream('GET', stream_data['url'], headers=req_headers) as response:
+                    response.raise_for_status()
+                    
+                    # Forward content length if available and not already set
+                    if 'content-length' in response.headers and 'Content-Length' not in headers:
+                        headers['Content-Length'] = response.headers['content-length']
+                    
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
+                        if await request.is_disconnected():
+                            logger.info("Client disconnected during stream")
+                            break
+                        yield chunk
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error during stream: {e.response.status_code} for {stream_data['url'][:80]}")
+                raise
+            except Exception as e:
+                logger.error(f"Error streaming from CDN: {e}")
+                raise
         
         return StreamingResponse(
             stream_content(),
@@ -1035,7 +874,7 @@ async def stream_video(data: str, request: Request):
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint with instance info"""
+    """Health check endpoint with instance info, Redis, VPN, and resource usage"""
     import resource
     
     # Get current file descriptor usage
@@ -1046,20 +885,34 @@ async def health_check():
     
     # Count open file descriptors (Linux/Mac)
     try:
-        import os
         fd_count = len(os.listdir('/proc/self/fd')) if os.path.exists('/proc/self/fd') else -1
     except Exception:
         fd_count = -1
+    
+    # Check Redis connection
+    redis_status = "disconnected"
+    if redis_client:
+        try:
+            await redis_client.ping()
+            redis_status = "connected"
+        except Exception:
+            redis_status = "error"
     
     health = {
         'status': 'ok',
         'instance_id': INSTANCE_ID,
         'instance_region': INSTANCE_REGION,
+        'port': settings.PORT,
         'time': asyncio.get_event_loop().time(),
+        'timestamp': time.time(),
         'ytdlp': 'unknown',
         'workers': {
             'max': settings.MAX_WORKERS,
             'active': len([t for t in executor._threads if t.is_alive()]) if hasattr(executor, '_threads') else 0
+        },
+        'redis': {
+            'status': redis_status,
+            'caching_enabled': redis_client is not None
         },
         'file_descriptors': {
             'current': fd_count,

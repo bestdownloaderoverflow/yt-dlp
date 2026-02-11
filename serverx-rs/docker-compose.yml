@@ -1,0 +1,21 @@
+services:
+  serverx-rs:
+    build:
+      context: ..           # Parent directory (so yt_dlp is accessible)
+      dockerfile: serverx-rs/Dockerfile
+    ports:
+      - "8025:8025"
+    environment:
+      - PORT=8025
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8025/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

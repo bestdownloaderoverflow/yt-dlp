@@ -1,0 +1,776 @@
+use axum::{
+    extract::Json,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Router,
+};
+use pyo3::prelude::*;
+use pyo3::types::{PyDict, PyList};
+use serde::{Deserialize, Serialize};
+use std::env;
+use tower_http::cors::{Any, CorsLayer};
+use tracing::{error, info};
+
+// ============= Request/Response Models =============
+
+#[derive(Deserialize)]
+struct DownloadRequest {
+    url: String,
+}
+
+#[derive(Serialize, Clone)]
+struct VideoFormat {
+    quality: String,
+    resolution: String,
+    url: String,
+    size_bytes: Option<i64>,
+    format_id: String,
+}
+
+#[derive(Serialize, Clone)]
+struct MediaEntry {
+    entry_id: String,
+    title: Option<String>,
+    thumbnail: Option<String>,
+    width: Option<i64>,
+    height: Option<i64>,
+    duration_seconds: Option<f64>,
+    duration_formatted: Option<String>,
+    media_type: String,
+    formats: Vec<VideoFormat>,
+    best_url: Option<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct VideoData {
+    platform: String,
+    content_type: String,
+    video_id: String,
+    title: Option<String>,
+    description: Option<String>,
+    author_name: Option<String>,
+    author_username: Option<String>,
+    author_avatar: Option<String>,
+    thumbnail: Option<String>,
+    duration_seconds: Option<f64>,
+    duration_formatted: Option<String>,
+    stats: serde_json::Value,
+    created_at: Option<String>,
+    original_url: String,
+    is_playlist: bool,
+    playlist_count: Option<usize>,
+    entries: Vec<MediaEntry>,
+}
+
+#[derive(Serialize)]
+struct DownloadResponse {
+    success: bool,
+    message: String,
+    data: Option<VideoData>,
+    video_formats: Vec<VideoFormat>,
+    audio_formats: Vec<VideoFormat>,
+    image_formats: Vec<VideoFormat>,
+    best_video_url: Option<String>,
+    best_audio_url: Option<String>,
+    best_image_url: Option<String>,
+    extracted_at: String,
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    success: bool,
+    message: String,
+    error_code: Option<String>,
+}
+
+#[derive(Serialize)]
+struct HealthResponse {
+    status: String,
+    timestamp: String,
+    version: String,
+}
+
+// ============= Helper Functions =============
+
+fn format_duration(seconds: Option<f64>) -> Option<String> {
+    let secs = seconds?;
+    if secs <= 0.0 {
+        return None;
+    }
+    let total = secs as u64;
+    let h = total / 3600;
+    let m = (total % 3600) / 60;
+    let s = total % 60;
+    if h > 0 {
+        Some(format!("{h}:{m:02}:{s:02}"))
+    } else {
+        Some(format!("{m}:{s:02}"))
+    }
+}
+
+fn detect_platform(url: &str, extractor: &str) -> String {
+    let url_lower = url.to_lowercase();
+    let ext_lower = extractor.to_lowercase();
+    if url_lower.contains("tiktok.com") || url_lower.contains("douyin.com") {
+        "tiktok".into()
+    } else if url_lower.contains("twitter.com")
+        || url_lower.contains("x.com")
+        || ext_lower.contains("twitter")
+    {
+        "x".into()
+    } else {
+        "unknown".into()
+    }
+}
+
+fn now_utc() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+}
+
+// ============= PyO3 yt-dlp Integration =============
+
+/// Call yt_dlp.YoutubeDL.extract_info() via PyO3 and return raw JSON string.
+/// This runs inside spawn_blocking — Tokio auto-manages the thread pool.
+fn extract_with_ytdlp(url: &str) -> Result<String, String> {
+    Python::with_gil(|py| {
+        // import yt_dlp
+        let yt_dlp = py.import("yt_dlp").map_err(|e| format!("Failed to import yt_dlp: {e}"))?;
+
+        // Build options dict
+        let opts = PyDict::new(py);
+        opts.set_item("quiet", true).unwrap();
+        opts.set_item("no_warnings", true).unwrap();
+        opts.set_item("extract_flat", false).unwrap();
+        opts.set_item("socket_timeout", 30).unwrap();
+
+        // ydl = yt_dlp.YoutubeDL(opts)
+        let ydl_class = yt_dlp
+            .getattr("YoutubeDL")
+            .map_err(|e| format!("Failed to get YoutubeDL: {e}"))?;
+        let ydl = ydl_class
+            .call1((opts,))
+            .map_err(|e| format!("Failed to create YoutubeDL: {e}"))?;
+
+        // info = ydl.extract_info(url, download=False)
+        let kwargs = PyDict::new(py);
+        kwargs.set_item("download", false).unwrap();
+        let info = ydl
+            .call_method("extract_info", (url,), Some(&kwargs))
+            .map_err(|e| {
+                let err_str = e.to_string();
+                // Map common yt-dlp errors
+                if err_str.to_lowercase().contains("not found")
+                    || err_str.to_lowercase().contains("unable to download")
+                {
+                    format!("NOT_FOUND:{err_str}")
+                } else if err_str.contains("403") || err_str.to_lowercase().contains("forbidden") {
+                    format!("FORBIDDEN:{err_str}")
+                } else if err_str.to_lowercase().contains("login")
+                    || err_str.to_lowercase().contains("authentication")
+                {
+                    format!("AUTH_REQUIRED:{err_str}")
+                } else if err_str.to_lowercase().contains("unsupported url") {
+                    format!("UNSUPPORTED:{err_str}")
+                } else {
+                    format!("EXTRACTION_FAILED:{err_str}")
+                }
+            })?;
+
+        // Convert Python dict to JSON string via json.dumps()
+        let json_mod = py
+            .import("json")
+            .map_err(|e| format!("Failed to import json: {e}"))?;
+        let json_str = json_mod
+            .call_method1("dumps", (info,))
+            .map_err(|e| format!("Failed to serialize: {e}"))?
+            .extract::<String>()
+            .map_err(|e| format!("Failed to extract string: {e}"))?;
+
+        Ok(json_str)
+    })
+}
+
+// ============= Format Parsing (Pure Rust — fast) =============
+
+fn parse_formats(
+    formats: &[serde_json::Value],
+) -> (Vec<VideoFormat>, Vec<VideoFormat>, Vec<VideoFormat>) {
+    let mut video_formats = Vec::new();
+    let mut audio_formats = Vec::new();
+    let mut image_formats = Vec::new();
+    let mut progressive_formats = Vec::new();
+
+    let mut seen_video: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_audio: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_progressive: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    let mut seen_image: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    let audio_re = regex_lite::Regex::new(r"audio-(\d+)").unwrap();
+
+    for fmt in formats {
+        let format_id = fmt["format_id"].as_str().unwrap_or("");
+        let vcodec = fmt["vcodec"].as_str().unwrap_or("none").to_lowercase();
+        let acodec = fmt["acodec"].as_str().unwrap_or("none").to_lowercase();
+        let height = fmt["height"].as_i64().unwrap_or(0);
+        let width = fmt["width"].as_i64().unwrap_or(0);
+        let url = fmt["url"].as_str().unwrap_or("");
+        let resolution = fmt["resolution"].as_str().unwrap_or("");
+        let video_ext = fmt["video_ext"].as_str().unwrap_or("").to_lowercase();
+        let protocol = fmt["protocol"].as_str().unwrap_or("");
+
+        if url.is_empty() {
+            continue;
+        }
+
+        let is_http = protocol == "https" || (url.starts_with("http") && !url.contains(".m3u8"));
+        let is_hls = url.to_lowercase().contains(".m3u8")
+            || protocol == "m3u8"
+            || protocol == "m3u8_native";
+
+        let is_image = matches!(video_ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif")
+            && is_http;
+        let is_audio =
+            vcodec == "none" && (format_id.to_lowercase().contains("audio") || resolution == "audio only");
+        let is_combined = is_http && height > 0 && !is_image;
+        let is_video_only = is_hls && vcodec != "none" && height > 0;
+
+        let size_bytes = fmt["filesize"]
+            .as_i64()
+            .or_else(|| fmt["filesize_approx"].as_i64());
+
+        if is_image {
+            let res_str = if width > 0 && height > 0 {
+                format!("{width}x{height}")
+            } else {
+                resolution.to_string()
+            };
+            let key = format!("{width}x{height}_{format_id}");
+            if seen_image.contains(&key) {
+                continue;
+            }
+            seen_image.insert(key);
+            let quality = if format_id.is_empty() {
+                "IMAGE".into()
+            } else {
+                format_id.to_uppercase()
+            };
+            image_formats.push(VideoFormat {
+                quality,
+                resolution: res_str,
+                url: url.to_string(),
+                size_bytes,
+                format_id: format_id.to_string(),
+            });
+        } else if is_audio {
+            let mut abr = fmt["abr"].as_f64().or_else(|| fmt["tbr"].as_f64()).unwrap_or(0.0);
+            if abr == 0.0 {
+                if let Some(caps) = audio_re.captures(&format_id.to_lowercase()) {
+                    if let Ok(v) = caps[1].parse::<f64>() {
+                        abr = v / 1000.0;
+                    }
+                }
+            }
+            let quality = if abr > 0.0 {
+                format!("{}kbps", abr as i64)
+            } else {
+                "audio".into()
+            };
+            if seen_audio.contains(&quality) {
+                continue;
+            }
+            seen_audio.insert(quality.clone());
+            audio_formats.push(VideoFormat {
+                quality,
+                resolution: "audio only".into(),
+                url: url.to_string(),
+                size_bytes,
+                format_id: format_id.to_string(),
+            });
+        } else if is_combined {
+            if seen_progressive.contains(&height) {
+                continue;
+            }
+            seen_progressive.insert(height);
+            let res_str = if width > 0 && height > 0 {
+                format!("{width}x{height}")
+            } else {
+                resolution.to_string()
+            };
+            progressive_formats.push(VideoFormat {
+                quality: format!("{height}p (progressive)"),
+                resolution: res_str,
+                url: url.to_string(),
+                size_bytes,
+                format_id: format_id.to_string(),
+            });
+        } else if is_video_only {
+            let key = format!("{height}_hls");
+            if seen_video.contains(&key) {
+                continue;
+            }
+            seen_video.insert(key);
+            let res_str = if width > 0 && height > 0 {
+                format!("{width}x{height}")
+            } else {
+                resolution.to_string()
+            };
+            video_formats.push(VideoFormat {
+                quality: format!("{height}p (hls)"),
+                resolution: res_str,
+                url: url.to_string(),
+                size_bytes,
+                format_id: format_id.to_string(),
+            });
+        }
+    }
+
+    // Sort by height descending
+    let get_height = |f: &VideoFormat| -> i64 {
+        f.quality
+            .split('p')
+            .next()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
+    };
+    progressive_formats.sort_by(|a, b| get_height(b).cmp(&get_height(a)));
+    video_formats.sort_by(|a, b| get_height(b).cmp(&get_height(a)));
+
+    let mut all_videos = progressive_formats;
+    all_videos.extend(video_formats);
+
+    audio_formats.sort_by(|a, b| {
+        let ba = a.quality.replace("kbps", "").parse::<i64>().unwrap_or(0);
+        let bb = b.quality.replace("kbps", "").parse::<i64>().unwrap_or(0);
+        bb.cmp(&ba)
+    });
+
+    let priority = |q: &str| -> i32 {
+        match q.to_lowercase().as_str() {
+            "orig" => 0,
+            "large" => 1,
+            "medium" => 2,
+            "small" => 3,
+            "thumb" => 4,
+            _ => 5,
+        }
+    };
+    image_formats.sort_by(|a, b| priority(&a.quality).cmp(&priority(&b.quality)));
+
+    (all_videos, audio_formats, image_formats)
+}
+
+// ============= Response Builder (Pure Rust — fast) =============
+
+fn build_response(info: &serde_json::Value, original_url: &str) -> DownloadResponse {
+    let platform = detect_platform(
+        original_url,
+        info["extractor"].as_str().unwrap_or(""),
+    );
+
+    let is_playlist = info["_type"].as_str() == Some("playlist");
+    let entries = info["entries"].as_array();
+
+    if is_playlist {
+        if let Some(entries_arr) = entries {
+            if !entries_arr.is_empty() {
+                return build_playlist_response(info, entries_arr, &platform, original_url);
+            }
+        }
+    }
+
+    // Single media
+    let formats_arr = info["formats"].as_array().map(|v| v.as_slice()).unwrap_or(&[]);
+    let (video_fmts, audio_fmts, image_fmts) = parse_formats(formats_arr);
+
+    let (content_type, message) = if !image_fmts.is_empty() && video_fmts.is_empty() {
+        ("photo", "Photo extracted successfully")
+    } else if !video_fmts.is_empty() {
+        ("video", "Video info extracted successfully")
+    } else if !audio_fmts.is_empty() {
+        ("audio", "Audio extracted successfully")
+    } else {
+        ("unknown", "Media extracted successfully")
+    };
+
+    let best_video = video_fmts.first().map(|f| f.url.clone());
+    let best_audio = audio_fmts.first().map(|f| f.url.clone());
+    let best_image = image_fmts.first().map(|f| f.url.clone());
+
+    let thumbnail = get_best_thumbnail(info);
+    let duration = info["duration"].as_f64();
+    let upload_date = info["upload_date"].as_str().unwrap_or("");
+    let created_at = parse_upload_date(upload_date);
+
+    let stats = build_stats(info);
+
+    let data = VideoData {
+        platform,
+        content_type: content_type.into(),
+        video_id: info["id"].as_str().unwrap_or("").into(),
+        title: str_opt(info, "title").or_else(|| str_opt(info, "fulltitle")),
+        description: str_opt(info, "description"),
+        author_name: str_opt(info, "uploader"),
+        author_username: str_opt(info, "uploader_id"),
+        author_avatar: Some(String::new()),
+        thumbnail: Some(thumbnail),
+        duration_seconds: duration,
+        duration_formatted: format_duration(duration),
+        stats,
+        created_at,
+        original_url: original_url.into(),
+        is_playlist: false,
+        playlist_count: None,
+        entries: vec![],
+    };
+
+    DownloadResponse {
+        success: true,
+        message: message.into(),
+        data: Some(data),
+        video_formats: video_fmts,
+        audio_formats: audio_fmts,
+        image_formats: image_fmts,
+        best_video_url: best_video,
+        best_audio_url: best_audio,
+        best_image_url: best_image,
+        extracted_at: now_utc(),
+    }
+}
+
+fn build_playlist_response(
+    info: &serde_json::Value,
+    entries_arr: &[serde_json::Value],
+    platform: &str,
+    original_url: &str,
+) -> DownloadResponse {
+    let mut parsed_entries = Vec::new();
+
+    for (idx, entry) in entries_arr.iter().enumerate() {
+        let fmts = entry["formats"].as_array().map(|v| v.as_slice()).unwrap_or(&[]);
+        let (vf, _af, imf) = parse_formats(fmts);
+
+        let (media_type, best_url, formats) = if !imf.is_empty() && vf.is_empty() {
+            ("photo", imf.first().map(|f| f.url.clone()), imf)
+        } else if !vf.is_empty() {
+            ("video", vf.first().map(|f| f.url.clone()), vf)
+        } else {
+            ("unknown", None, vec![])
+        };
+
+        let duration = entry["duration"].as_f64();
+        let thumb = entry["thumbnail"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        parsed_entries.push(MediaEntry {
+            entry_id: entry["id"]
+                .as_str()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("entry_{idx}")),
+            title: str_opt(entry, "title").or_else(|| str_opt(entry, "fulltitle")),
+            thumbnail: Some(thumb),
+            width: entry["width"].as_i64(),
+            height: entry["height"].as_i64(),
+            duration_seconds: duration,
+            duration_formatted: format_duration(duration),
+            media_type: media_type.into(),
+            formats,
+            best_url,
+        });
+    }
+
+    let content_types: std::collections::HashSet<&str> =
+        parsed_entries.iter().map(|e| e.media_type.as_str()).collect();
+    let (content_type, message) = if content_types.len() == 1 && content_types.contains("photo") {
+        (
+            "photo",
+            format!(
+                "Photo gallery extracted successfully ({} images)",
+                parsed_entries.len()
+            ),
+        )
+    } else if content_types.contains("photo") && content_types.contains("video") {
+        (
+            "mixed",
+            format!(
+                "Mixed media extracted successfully ({} items)",
+                parsed_entries.len()
+            ),
+        )
+    } else {
+        (
+            "playlist",
+            format!(
+                "Playlist extracted successfully ({} items)",
+                parsed_entries.len()
+            ),
+        )
+    };
+
+    let first = parsed_entries.first();
+    let (video_fmts, image_fmts) = if let Some(f) = first {
+        if f.media_type == "photo" {
+            (vec![], f.formats.clone())
+        } else {
+            (f.formats.clone(), vec![])
+        }
+    } else {
+        (vec![], vec![])
+    };
+
+    let best_video = video_fmts.first().map(|f| f.url.clone());
+    let best_image = image_fmts
+        .first()
+        .map(|f| f.url.clone())
+        .or_else(|| first.and_then(|f| f.best_url.clone()));
+
+    let created_at = parse_upload_date(info["upload_date"].as_str().unwrap_or(""));
+    let stats = build_stats(info);
+
+    let data = VideoData {
+        platform: platform.into(),
+        content_type: content_type.into(),
+        video_id: info["id"].as_str().unwrap_or("").into(),
+        title: str_opt(info, "title").or_else(|| str_opt(info, "fulltitle")),
+        description: str_opt(info, "description"),
+        author_name: str_opt(info, "uploader"),
+        author_username: str_opt(info, "uploader_id"),
+        author_avatar: Some(String::new()),
+        thumbnail: first.and_then(|f| f.thumbnail.clone()),
+        duration_seconds: None,
+        duration_formatted: None,
+        stats,
+        created_at,
+        original_url: original_url.into(),
+        is_playlist: true,
+        playlist_count: Some(parsed_entries.len()),
+        entries: parsed_entries,
+    };
+
+    DownloadResponse {
+        success: true,
+        message,
+        data: Some(data),
+        video_formats: video_fmts,
+        audio_formats: vec![],
+        image_formats: image_fmts,
+        best_video_url: best_video,
+        best_audio_url: None,
+        best_image_url: best_image,
+        extracted_at: now_utc(),
+    }
+}
+
+fn str_opt(v: &serde_json::Value, key: &str) -> Option<String> {
+    v[key].as_str().map(|s| s.to_string())
+}
+
+fn get_best_thumbnail(info: &serde_json::Value) -> String {
+    if let Some(thumbs) = info["thumbnails"].as_array() {
+        if let Some(best) = thumbs.iter().max_by_key(|t| {
+            let w = t["width"].as_i64().unwrap_or(0);
+            let h = t["height"].as_i64().unwrap_or(0);
+            w * h
+        }) {
+            if let Some(url) = best["url"].as_str() {
+                return url.to_string();
+            }
+        }
+    }
+    info["thumbnail"].as_str().unwrap_or("").to_string()
+}
+
+fn parse_upload_date(date: &str) -> Option<String> {
+    if date.len() == 8 {
+        Some(format!("{}-{}-{}", &date[..4], &date[4..6], &date[6..]))
+    } else {
+        None
+    }
+}
+
+fn build_stats(info: &serde_json::Value) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    for (key, field) in [
+        ("views", "view_count"),
+        ("likes", "like_count"),
+        ("comments", "comment_count"),
+        ("shares", "repost_count"),
+    ] {
+        if let Some(v) = info[field].as_i64() {
+            map.insert(key.into(), serde_json::Value::Number(v.into()));
+        }
+    }
+    serde_json::Value::Object(map)
+}
+
+// ============= API Handlers =============
+
+async fn root() -> impl IntoResponse {
+    Json(serde_json::json!({
+        "name": "TikTok/X Video Downloader API (Rust)",
+        "version": "2.0.0",
+        "endpoints": {
+            "POST /download": "Extract video/photo info - body: {\"url\": \"media_url\"}",
+            "GET /health": "Health check"
+        },
+        "supported_platforms": ["TikTok", "X (Twitter)"],
+        "runtime": "Rust + Tokio + PyO3 (yt-dlp)"
+    }))
+}
+
+async fn health() -> impl IntoResponse {
+    Json(HealthResponse {
+        status: "healthy".into(),
+        timestamp: now_utc(),
+        version: "2.0.0".into(),
+    })
+}
+
+async fn download(Json(req): Json<DownloadRequest>) -> impl IntoResponse {
+    let url = req.url.trim().to_string();
+
+    if url.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                message: "URL is required".into(),
+                error_code: Some("HTTP_400".into()),
+            })
+            .unwrap()),
+        );
+    }
+
+    let url_lower = url.to_lowercase();
+    let supported = ["tiktok.com", "douyin.com", "twitter.com", "x.com"];
+    if !supported.iter().any(|d| url_lower.contains(d)) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::to_value(ErrorResponse {
+                success: false,
+                message: "Unsupported URL. Only TikTok and X (Twitter) URLs are supported.".into(),
+                error_code: Some("HTTP_400".into()),
+            })
+            .unwrap()),
+        );
+    }
+
+    // spawn_blocking — Tokio auto-manages thread pool, NO hardcoded worker count
+    let url_clone = url.clone();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(45),
+        tokio::task::spawn_blocking(move || extract_with_ytdlp(&url_clone)),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(Ok(json_str))) => {
+            // Parse JSON from yt-dlp (pure Rust, fast)
+            match serde_json::from_str::<serde_json::Value>(&json_str) {
+                Ok(info) => {
+                    let response = build_response(&info, &url);
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::to_value(response).unwrap()),
+                    )
+                }
+                Err(e) => {
+                    error!("JSON parse error: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::to_value(ErrorResponse {
+                            success: false,
+                            message: "Failed to parse extraction result".into(),
+                            error_code: Some("INTERNAL_ERROR".into()),
+                        })
+                        .unwrap()),
+                    )
+                }
+            }
+        }
+        Ok(Ok(Err(e))) => {
+            // yt-dlp error — map to appropriate status code
+            let (status, msg) = if e.starts_with("NOT_FOUND:") {
+                (StatusCode::NOT_FOUND, "Video not found or may be private/deleted")
+            } else if e.starts_with("FORBIDDEN:") {
+                (StatusCode::FORBIDDEN, "Access forbidden - video may be private or region-restricted")
+            } else if e.starts_with("AUTH_REQUIRED:") {
+                (StatusCode::UNAUTHORIZED, "This content requires login/authentication")
+            } else if e.starts_with("UNSUPPORTED:") {
+                (StatusCode::BAD_REQUEST, "Unsupported or invalid URL")
+            } else {
+                error!("yt-dlp error: {e}");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Extraction failed")
+            };
+            (
+                status,
+                Json(serde_json::to_value(ErrorResponse {
+                    success: false,
+                    message: msg.into(),
+                    error_code: Some(format!("HTTP_{}", status.as_u16())),
+                })
+                .unwrap()),
+            )
+        }
+        Ok(Err(e)) => {
+            error!("Task join error: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::to_value(ErrorResponse {
+                    success: false,
+                    message: "Internal server error".into(),
+                    error_code: Some("INTERNAL_ERROR".into()),
+                })
+                .unwrap()),
+            )
+        }
+        Err(_) => {
+            // Timeout
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::to_value(ErrorResponse {
+                    success: false,
+                    message: "Request timeout - video extraction took too long".into(),
+                    error_code: Some("HTTP_504".into()),
+                })
+                .unwrap()),
+            )
+        }
+    }
+}
+
+// ============= Main =============
+
+#[tokio::main]
+async fn main() {
+    // Setup logging
+    tracing_subscriber::fmt::init();
+
+    let port: u16 = env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8025);
+
+    // CORS
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_headers(Any);
+
+    // Router
+    let app = Router::new()
+        .route("/", get(root))
+        .route("/health", get(health))
+        .route("/download", post(download))
+        .layer(cors);
+
+    let addr = format!("0.0.0.0:{port}");
+    info!("🚀 serverx-rs listening on {addr}");
+    info!("   Runtime: Tokio (auto-managed thread pool, no manual config)");
+    info!("   Extraction: yt-dlp via PyO3 (import yt_dlp)");
+
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}

@@ -12,16 +12,26 @@ impl RedisCache {
     pub async fn connect(host: &str, port: u16) -> Option<Self> {
         let url = format!("redis://{host}:{port}");
         match redis::Client::open(url.as_str()) {
-            Ok(client) => match ConnectionManager::new(client).await {
-                Ok(conn) => {
-                    info!("✅ Redis connected at {host}:{port}");
-                    Some(Self { conn })
+            Ok(client) => {
+                // Wrap connection in a timeout to avoid hanging
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    ConnectionManager::new(client)
+                ).await {
+                    Ok(Ok(conn)) => {
+                        info!("✅ Redis connected at {host}:{port}");
+                        Some(Self { conn })
+                    }
+                    Ok(Err(e)) => {
+                        warn!("⚠️ Redis connection failed: {e}. Caching disabled.");
+                        None
+                    }
+                    Err(_) => {
+                        warn!("⚠️ Redis connection timed out after 3s. Caching disabled.");
+                        None
+                    }
                 }
-                Err(e) => {
-                    warn!("⚠️ Redis connection failed: {e}. Caching disabled.");
-                    None
-                }
-            },
+            }
             Err(e) => {
                 warn!("⚠️ Redis client creation failed: {e}. Caching disabled.");
                 None

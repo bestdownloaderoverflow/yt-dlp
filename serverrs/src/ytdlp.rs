@@ -1,6 +1,5 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use tracing::error;
 
 /// Call yt_dlp.YoutubeDL.extract_info() via PyO3 and return raw JSON string.
 /// Also extracts per-format cookies from ydl.cookiejar before closing.
@@ -61,8 +60,7 @@ pub fn extract_with_ytdlp(url: &str, cookies_path: Option<&str>) -> Result<Strin
         // After extract_info, each format has 'http_headers' but Cookie is stripped.
         // We extract it separately and inject as '_cookies' field.
         let _inject_result: Result<(), String> = (|| {
-            let formats = info.get_item("formats").ok().flatten();
-            let formats = match formats {
+            let formats = match info.get_item("formats").ok() {
                 Some(f) => f,
                 None => return Ok(()),
             };
@@ -77,7 +75,7 @@ pub fn extract_with_ytdlp(url: &str, cookies_path: Option<&str>) -> Result<Strin
                         Ok(f) => f,
                         Err(_) => continue,
                     };
-                    let fmt_url = match fmt.get_item("url").ok().flatten() {
+                    let fmt_url = match fmt.get_item("url").ok() {
                         Some(u) => u,
                         None => continue,
                     };

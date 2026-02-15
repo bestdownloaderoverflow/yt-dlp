@@ -19,10 +19,12 @@ services:
       dockerfile: serverx-rs/Dockerfile
     ports:
       - "8025:8025"
+    env_file:
+      - .env                 # Load dari .env file (bisa di-override dengan docker-compose override)
     environment:
-      - PORT=8025
-      - REDIS_URL=redis://redis:6379
-      - BASE_URL=http://localhost:8025
+      - PORT=${PORT:-8025}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - BASE_URL=${BASE_URL:-http://localhost:8025}
     restart: unless-stopped
     depends_on:
       redis:

@@ -780,20 +780,14 @@ async fn store_formats_in_session(
     let session_id = Uuid::new_v4().to_string();
     let cookies = info["cookies"].as_str().map(|s| s.to_string());
     let video_id = info["id"].as_str().unwrap_or("unknown").to_string();
-    
+
     let mut formats_map: HashMap<String, FormatInfo> = HashMap::new();
-    
-    // Process all formats
-    for fmt in video_fmts.iter().chain(audio_fmts.iter()).chain(image_fmts.iter()) {
-        // Find the original format data to get headers
-        let format_data = info["formats"]
-            .as_array()
-            .and_then(|arr| arr.iter().find(|f| f["format_id"].as_str() == Some(&fmt.format_id)))
-            .unwrap_or(&serde_json::Value::Null);
-        
-        let headers = extract_headers(format_data, info);
+
+    // Helper closure to process format and add to map
+    let mut process_format = |fmt: &VideoFormat, format_data: &serde_json::Value, source_info: &serde_json::Value| {
+        let headers = extract_headers(format_data, source_info);
         let content_type = determine_content_type(&fmt.resolution, &fmt.format_id, &fmt.quality);
-        
+
         let format_info = FormatInfo {
             url: fmt.url.clone(),
             http_headers: headers,
@@ -801,16 +795,77 @@ async fn store_formats_in_session(
             resolution: fmt.resolution.clone(),
             content_type,
         };
-        
+
         formats_map.insert(fmt.format_id.clone(), format_info);
+    };
+
+    // Process top-level formats
+    for fmt in video_fmts.iter().chain(audio_fmts.iter()).chain(image_fmts.iter()) {
+        let format_data = info["formats"]
+            .as_array()
+            .and_then(|arr| arr.iter().find(|f| f["format_id"].as_str() == Some(&fmt.format_id)))
+            .unwrap_or(&serde_json::Value::Null);
+
+        process_format(fmt, format_data, info);
     }
-    
+
+    // Process formats from entries (for playlists/galleries like Twitter/X images)
+    if let Some(entries) = info["entries"].as_array() {
+        for entry in entries {
+            if let Some(entry_formats) = entry["formats"].as_array() {
+                for fmt_data in entry_formats {
+                    let format_id = fmt_data["format_id"].as_str().unwrap_or("");
+                    if format_id.is_empty() {
+                        continue;
+                    }
+
+                    // Check if this is an image format
+                    let video_ext = fmt_data["video_ext"].as_str().unwrap_or("").to_lowercase();
+                    let protocol = fmt_data["protocol"].as_str().unwrap_or("");
+                    let url = fmt_data["url"].as_str().unwrap_or("");
+                    let is_http = protocol == "https" || (url.starts_with("http") && !url.contains(".m3u8"));
+                    let is_image = matches!(video_ext.as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif") && is_http;
+
+                    if is_image {
+                        let width = fmt_data["width"].as_i64().unwrap_or(0);
+                        let height = fmt_data["height"].as_i64().unwrap_or(0);
+                        let resolution = if width > 0 && height > 0 {
+                            format!("{}x{}", width, height)
+                        } else {
+                            fmt_data["resolution"].as_str().unwrap_or("").to_string()
+                        };
+
+                        let quality = if format_id.is_empty() {
+                            "IMAGE".to_string()
+                        } else {
+                            format_id.to_uppercase()
+                        };
+
+                        let size_bytes = fmt_data["filesize"]
+                            .as_i64()
+                            .or_else(|| fmt_data["filesize_approx"].as_i64());
+
+                        let fmt = VideoFormat {
+                            quality: quality.clone(),
+                            resolution: resolution.clone(),
+                            url: url.to_string(),
+                            size_bytes,
+                            format_id: format_id.to_string(),
+                        };
+
+                        process_format(&fmt, fmt_data, entry);
+                    }
+                }
+            }
+        }
+    }
+
     let session_data = SessionData {
         video_id,
         cookies,
         formats: formats_map,
     };
-    
+
     store_session_in_redis(redis, &session_id, &session_data).await?;
     Ok(session_id)
 }

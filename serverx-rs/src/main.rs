@@ -529,21 +529,31 @@ fn build_playlist_response(
     let mut parsed_entries = Vec::new();
 
     for (idx, entry) in entries_arr.iter().enumerate() {
+        let entry_id = entry["id"].as_str().unwrap_or("");
         let fmts = entry["formats"].as_array().map(|v| v.as_slice()).unwrap_or(&[]);
         let (vf, _af, imf) = parse_formats(fmts);
 
+        // Helper function to create prefixed format_id for entries
+        let prefixed_format_id = |format_id: &str| -> String {
+            if entry_id.is_empty() {
+                format_id.to_string()
+            } else {
+                format!("{}_{}", entry_id, format_id)
+            }
+        };
+
         let (media_type, best_url, formats) = if !imf.is_empty() && vf.is_empty() {
-            ("photo", imf.first().map(|f| format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id)), 
+            ("photo", imf.first().map(|f| format!("{}/stream?id={}&format={}", base_url, session_id, prefixed_format_id(&f.format_id))), 
              imf.iter().map(|f| {
                  let mut fmt = f.clone();
-                 fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+                 fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, prefixed_format_id(&f.format_id));
                  fmt
              }).collect())
         } else if !vf.is_empty() {
-            ("video", vf.first().map(|f| format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id)), 
+            ("video", vf.first().map(|f| format!("{}/stream?id={}&format={}", base_url, session_id, prefixed_format_id(&f.format_id))), 
              vf.iter().map(|f| {
                  let mut fmt = f.clone();
-                 fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+                 fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, prefixed_format_id(&f.format_id));
                  fmt
              }).collect())
         } else {
@@ -783,8 +793,8 @@ async fn store_formats_in_session(
 
     let mut formats_map: HashMap<String, FormatInfo> = HashMap::new();
 
-    // Helper closure to process format and add to map
-    let mut process_format = |fmt: &VideoFormat, format_data: &serde_json::Value, source_info: &serde_json::Value| {
+    // Helper closure to process format and add to map with optional prefix
+    let mut process_format = |fmt: &VideoFormat, format_data: &serde_json::Value, source_info: &serde_json::Value, format_id_prefix: Option<&str>| {
         let headers = extract_headers(format_data, source_info);
         let content_type = determine_content_type(&fmt.resolution, &fmt.format_id, &fmt.quality);
 
@@ -796,7 +806,14 @@ async fn store_formats_in_session(
             content_type,
         };
 
-        formats_map.insert(fmt.format_id.clone(), format_info);
+        // Use prefixed format_id if provided (for entries to avoid collision)
+        let key = if let Some(prefix) = format_id_prefix {
+            format!("{}_{}", prefix, fmt.format_id)
+        } else {
+            fmt.format_id.clone()
+        };
+
+        formats_map.insert(key, format_info);
     };
 
     // Process top-level formats
@@ -806,12 +823,17 @@ async fn store_formats_in_session(
             .and_then(|arr| arr.iter().find(|f| f["format_id"].as_str() == Some(&fmt.format_id)))
             .unwrap_or(&serde_json::Value::Null);
 
-        process_format(fmt, format_data, info);
+        process_format(fmt, format_data, info, None);
     }
 
     // Process formats from entries (for playlists/galleries like Twitter/X images)
     if let Some(entries) = info["entries"].as_array() {
         for entry in entries {
+            let entry_id = entry["id"].as_str().unwrap_or("");
+            if entry_id.is_empty() {
+                continue;
+            }
+
             if let Some(entry_formats) = entry["formats"].as_array() {
                 for fmt_data in entry_formats {
                     let format_id = fmt_data["format_id"].as_str().unwrap_or("");
@@ -853,7 +875,8 @@ async fn store_formats_in_session(
                             format_id: format_id.to_string(),
                         };
 
-                        process_format(&fmt, fmt_data, entry);
+                        // Use entry_id as prefix to make format_id unique
+                        process_format(&fmt, fmt_data, entry, Some(entry_id));
                     }
                 }
             }

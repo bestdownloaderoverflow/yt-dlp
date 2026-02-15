@@ -402,7 +402,7 @@ async fn get_session_from_redis(
     let data: Option<String> = redis.get(&key).await?;
     
     if let Some(json_str) = data {
-        redis.del(&key).await?;  // Delete after retrieval (one-time use)
+        // Session will auto-expire after 5 minutes (300s), don't delete immediately
         match serde_json::from_str(&json_str) {
             Ok(session_data) => Ok(Some(session_data)),
             Err(e) => {

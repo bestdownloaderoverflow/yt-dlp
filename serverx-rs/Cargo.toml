@@ -14,3 +14,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 regex-lite = "0.1"
+redis = { version = "0.24", features = ["tokio-comp"] }
+uuid = { version = "1.7", features = ["v4"] }
+reqwest = { version = "0.11", features = ["stream"] }
+getrandom = "=0.2.15"

@@ -1,4 +1,18 @@
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   serverx-rs:
     build:
       context: ..           # Parent directory (so yt_dlp is accessible)
@@ -7,7 +21,12 @@ services:
       - "8025:8025"
     environment:
       - PORT=8025
+      - REDIS_URL=redis://redis:6379
+      - BASE_URL=http://localhost:8025
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8025/health"]
       interval: 30s

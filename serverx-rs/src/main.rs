@@ -1,16 +1,22 @@
 use axum::{
-    extract::Json,
+    body::Body,
+    extract::{Json, Query},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyList};
+use pyo3::types::PyDict;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::env;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{error, info};
+use uuid::Uuid;
 
 // ============= Request/Response Models =============
 
@@ -19,11 +25,17 @@ struct DownloadRequest {
     url: String,
 }
 
+#[derive(Deserialize)]
+struct StreamRequest {
+    id: String,
+    format: Option<String>,  // Format ID to download (e.g., "http-2176", "best")
+}
+
 #[derive(Serialize, Clone)]
 struct VideoFormat {
     quality: String,
     resolution: String,
-    url: String,
+    url: String,  // This will now be the stream URL
     size_bytes: Option<i64>,
     format_id: String,
 }
@@ -67,6 +79,8 @@ struct VideoData {
 struct DownloadResponse {
     success: bool,
     message: String,
+    session_id: Option<String>,
+    expires_in: Option<u64>,
     data: Option<VideoData>,
     video_formats: Vec<VideoFormat>,
     audio_formats: Vec<VideoFormat>,
@@ -89,6 +103,7 @@ struct HealthResponse {
     status: String,
     timestamp: String,
     version: String,
+    redis_connected: bool,
 }
 
 // ============= Helper Functions =============
@@ -130,21 +145,16 @@ fn now_utc() -> String {
 
 // ============= PyO3 yt-dlp Integration =============
 
-/// Call yt_dlp.YoutubeDL.extract_info() via PyO3 and return raw JSON string.
-/// This runs inside spawn_blocking — Tokio auto-manages the thread pool.
 fn extract_with_ytdlp(url: &str) -> Result<String, String> {
     Python::with_gil(|py| {
-        // import yt_dlp
         let yt_dlp = py.import("yt_dlp").map_err(|e| format!("Failed to import yt_dlp: {e}"))?;
 
-        // Build options dict
         let opts = PyDict::new(py);
         opts.set_item("quiet", true).unwrap();
         opts.set_item("no_warnings", true).unwrap();
         opts.set_item("extract_flat", false).unwrap();
         opts.set_item("socket_timeout", 30).unwrap();
 
-        // ydl = yt_dlp.YoutubeDL(opts)
         let ydl_class = yt_dlp
             .getattr("YoutubeDL")
             .map_err(|e| format!("Failed to get YoutubeDL: {e}"))?;
@@ -152,14 +162,12 @@ fn extract_with_ytdlp(url: &str) -> Result<String, String> {
             .call1((opts,))
             .map_err(|e| format!("Failed to create YoutubeDL: {e}"))?;
 
-        // info = ydl.extract_info(url, download=False)
         let kwargs = PyDict::new(py);
         kwargs.set_item("download", false).unwrap();
         let info = ydl
             .call_method("extract_info", (url,), Some(&kwargs))
             .map_err(|e| {
                 let err_str = e.to_string();
-                // Map common yt-dlp errors
                 if err_str.to_lowercase().contains("not found")
                     || err_str.to_lowercase().contains("unable to download")
                 {
@@ -177,7 +185,6 @@ fn extract_with_ytdlp(url: &str) -> Result<String, String> {
                 }
             })?;
 
-        // Convert Python dict to JSON string via json.dumps()
         let json_mod = py
             .import("json")
             .map_err(|e| format!("Failed to import json: {e}"))?;
@@ -191,7 +198,7 @@ fn extract_with_ytdlp(url: &str) -> Result<String, String> {
     })
 }
 
-// ============= Format Parsing (Pure Rust — fast) =============
+// ============= Format Parsing =============
 
 fn parse_formats(
     formats: &[serde_json::Value],
@@ -325,7 +332,6 @@ fn parse_formats(
         }
     }
 
-    // Sort by height descending
     let get_height = |f: &VideoFormat| -> i64 {
         f.quality
             .split('p')
@@ -360,9 +366,64 @@ fn parse_formats(
     (all_videos, audio_formats, image_formats)
 }
 
-// ============= Response Builder (Pure Rust — fast) =============
+// ============= Response Builder =============
 
-fn build_response(info: &serde_json::Value, original_url: &str) -> DownloadResponse {
+#[derive(Serialize, Deserialize, Clone)]
+struct FormatInfo {
+    url: String,
+    http_headers: HashMap<String, String>,
+    quality: String,
+    resolution: String,
+    content_type: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct SessionData {
+    video_id: String,
+    cookies: Option<String>,
+    formats: HashMap<String, FormatInfo>,  // format_id -> FormatInfo
+}
+
+async fn store_session_in_redis(
+    redis: &mut redis::aio::MultiplexedConnection,
+    session_id: &str,
+    data: &SessionData,
+) -> Result<(), redis::RedisError> {
+    let json_data = serde_json::to_string(data).unwrap();
+    redis.set_ex(format!("download:{session_id}"), json_data, 300).await?;
+    Ok(())
+}
+
+async fn get_session_from_redis(
+    redis: &mut redis::aio::MultiplexedConnection,
+    session_id: &str,
+) -> Result<Option<SessionData>, redis::RedisError> {
+    let key = format!("download:{session_id}");
+    let data: Option<String> = redis.get(&key).await?;
+    
+    if let Some(json_str) = data {
+        redis.del(&key).await?;  // Delete after retrieval (one-time use)
+        match serde_json::from_str(&json_str) {
+            Ok(session_data) => Ok(Some(session_data)),
+            Err(e) => {
+                error!("Failed to parse session data: {}", e);
+                Ok(None)
+            }
+        }
+    } else {
+        Ok(None)
+    }
+}
+
+fn build_response_with_session(
+    info: &serde_json::Value,
+    original_url: &str,
+    video_fmts: &[VideoFormat],
+    audio_fmts: &[VideoFormat],
+    image_fmts: &[VideoFormat],
+    session_id: &str,
+    base_url: &str,
+) -> DownloadResponse {
     let platform = detect_platform(
         original_url,
         info["extractor"].as_str().unwrap_or(""),
@@ -374,14 +435,10 @@ fn build_response(info: &serde_json::Value, original_url: &str) -> DownloadRespo
     if is_playlist {
         if let Some(entries_arr) = entries {
             if !entries_arr.is_empty() {
-                return build_playlist_response(info, entries_arr, &platform, original_url);
+                return build_playlist_response(info, entries_arr, &platform, original_url, video_fmts, image_fmts, session_id, base_url);
             }
         }
     }
-
-    // Single media
-    let formats_arr = info["formats"].as_array().map(|v| v.as_slice()).unwrap_or(&[]);
-    let (video_fmts, audio_fmts, image_fmts) = parse_formats(formats_arr);
 
     let (content_type, message) = if !image_fmts.is_empty() && video_fmts.is_empty() {
         ("photo", "Photo extracted successfully")
@@ -393,9 +450,28 @@ fn build_response(info: &serde_json::Value, original_url: &str) -> DownloadRespo
         ("unknown", "Media extracted successfully")
     };
 
-    let best_video = video_fmts.first().map(|f| f.url.clone());
-    let best_audio = audio_fmts.first().map(|f| f.url.clone());
-    let best_image = image_fmts.first().map(|f| f.url.clone());
+    // Generate masked URLs with format parameter
+    let video_fmts_masked: Vec<VideoFormat> = video_fmts.iter().map(|f| {
+        let mut fmt = f.clone();
+        fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+        fmt
+    }).collect();
+
+    let audio_fmts_masked: Vec<VideoFormat> = audio_fmts.iter().map(|f| {
+        let mut fmt = f.clone();
+        fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+        fmt
+    }).collect();
+
+    let image_fmts_masked: Vec<VideoFormat> = image_fmts.iter().map(|f| {
+        let mut fmt = f.clone();
+        fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+        fmt
+    }).collect();
+
+    let best_video = video_fmts.first().map(|f| format!("{}/stream?id={}&format=best", base_url, session_id));
+    let best_audio = audio_fmts.first().map(|f| format!("{}/stream?id={}&format=best_audio", base_url, session_id));
+    let best_image = image_fmts.first().map(|f| format!("{}/stream?id={}&format=best_image", base_url, session_id));
 
     let thumbnail = get_best_thumbnail(info);
     let duration = info["duration"].as_f64();
@@ -427,10 +503,12 @@ fn build_response(info: &serde_json::Value, original_url: &str) -> DownloadRespo
     DownloadResponse {
         success: true,
         message: message.into(),
+        session_id: Some(session_id.to_string()),
+        expires_in: Some(300),
         data: Some(data),
-        video_formats: video_fmts,
-        audio_formats: audio_fmts,
-        image_formats: image_fmts,
+        video_formats: video_fmts_masked,
+        audio_formats: audio_fmts_masked,
+        image_formats: image_fmts_masked,
         best_video_url: best_video,
         best_audio_url: best_audio,
         best_image_url: best_image,
@@ -443,6 +521,10 @@ fn build_playlist_response(
     entries_arr: &[serde_json::Value],
     platform: &str,
     original_url: &str,
+    video_fmts: &[VideoFormat],
+    image_fmts: &[VideoFormat],
+    session_id: &str,
+    base_url: &str,
 ) -> DownloadResponse {
     let mut parsed_entries = Vec::new();
 
@@ -451,9 +533,19 @@ fn build_playlist_response(
         let (vf, _af, imf) = parse_formats(fmts);
 
         let (media_type, best_url, formats) = if !imf.is_empty() && vf.is_empty() {
-            ("photo", imf.first().map(|f| f.url.clone()), imf)
+            ("photo", imf.first().map(|f| format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id)), 
+             imf.iter().map(|f| {
+                 let mut fmt = f.clone();
+                 fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+                 fmt
+             }).collect())
         } else if !vf.is_empty() {
-            ("video", vf.first().map(|f| f.url.clone()), vf)
+            ("video", vf.first().map(|f| format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id)), 
+             vf.iter().map(|f| {
+                 let mut fmt = f.clone();
+                 fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+                 fmt
+             }).collect())
         } else {
             ("unknown", None, vec![])
         };
@@ -510,21 +602,24 @@ fn build_playlist_response(
     };
 
     let first = parsed_entries.first();
-    let (video_fmts, image_fmts) = if let Some(f) = first {
-        if f.media_type == "photo" {
-            (vec![], f.formats.clone())
-        } else {
-            (f.formats.clone(), vec![])
-        }
-    } else {
-        (vec![], vec![])
-    };
+    
+    // Use the passed format lists
+    let video_fmts_masked: Vec<VideoFormat> = video_fmts.iter().map(|f| {
+        let mut fmt = f.clone();
+        fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+        fmt
+    }).collect();
 
-    let best_video = video_fmts.first().map(|f| f.url.clone());
-    let best_image = image_fmts
+    let image_fmts_masked: Vec<VideoFormat> = image_fmts.iter().map(|f| {
+        let mut fmt = f.clone();
+        fmt.url = format!("{}/stream?id={}&format={}", base_url, session_id, f.format_id);
+        fmt
+    }).collect();
+
+    let best_video = video_fmts_masked.first().map(|f| format!("{}/stream?id={}&format=best", base_url, session_id));
+    let best_image = image_fmts_masked
         .first()
-        .map(|f| f.url.clone())
-        .or_else(|| first.and_then(|f| f.best_url.clone()));
+        .map(|f| format!("{}/stream?id={}&format=best_image", base_url, session_id));
 
     let created_at = parse_upload_date(info["upload_date"].as_str().unwrap_or(""));
     let stats = build_stats(info);
@@ -552,10 +647,12 @@ fn build_playlist_response(
     DownloadResponse {
         success: true,
         message,
+        session_id: Some(session_id.to_string()),
+        expires_in: Some(300),
         data: Some(data),
-        video_formats: video_fmts,
+        video_formats: video_fmts_masked,
         audio_formats: vec![],
-        image_formats: image_fmts,
+        image_formats: image_fmts_masked,
         best_video_url: best_video,
         best_audio_url: None,
         best_image_url: best_image,
@@ -610,25 +707,118 @@ fn build_stats(info: &serde_json::Value) -> serde_json::Value {
 async fn root() -> impl IntoResponse {
     Json(serde_json::json!({
         "name": "TikTok/X Video Downloader API (Rust)",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "endpoints": {
             "POST /download": "Extract video/photo info - body: {\"url\": \"media_url\"}",
+            "GET /stream?id=xxx": "Stream video using session_id from /download",
             "GET /health": "Health check"
         },
         "supported_platforms": ["TikTok", "X (Twitter)"],
-        "runtime": "Rust + Tokio + PyO3 (yt-dlp)"
+        "runtime": "Rust + Tokio + PyO3 (yt-dlp) + Redis"
     }))
 }
 
-async fn health() -> impl IntoResponse {
+async fn health(redis: Arc<Mutex<redis::aio::MultiplexedConnection>>) -> impl IntoResponse {
+    let mut redis_guard = redis.lock().await;
+    let redis_connected = redis::cmd("PING")
+        .query_async::<_, String>(&mut *redis_guard)
+        .await
+        .is_ok();
+
     Json(HealthResponse {
         status: "healthy".into(),
         timestamp: now_utc(),
-        version: "2.0.0".into(),
+        version: "2.1.0".into(),
+        redis_connected,
     })
 }
 
-async fn download(Json(req): Json<DownloadRequest>) -> impl IntoResponse {
+// Helper function to extract headers from format/info
+fn extract_headers(format_data: &serde_json::Value, info: &serde_json::Value) -> HashMap<String, String> {
+    let mut headers = HashMap::new();
+    
+    // Get format-level headers
+    if let Some(http_headers) = format_data["http_headers"].as_object() {
+        for (k, v) in http_headers {
+            if let Some(val) = v.as_str() {
+                headers.insert(k.clone(), val.to_string());
+            }
+        }
+    }
+    
+    // Get info-level headers if format headers are empty
+    if headers.is_empty() {
+        if let Some(http_headers) = info["http_headers"].as_object() {
+            for (k, v) in http_headers {
+                if let Some(val) = v.as_str() {
+                    headers.insert(k.clone(), val.to_string());
+                }
+            }
+        }
+    }
+    
+    headers
+}
+
+fn determine_content_type(resolution: &str, format_id: &str, quality: &str) -> String {
+    if resolution == "audio only" {
+        "audio/mp4".to_string()
+    } else if quality.contains("IMAGE") || format_id.to_lowercase().contains("thumb") {
+        "image/jpeg".to_string()
+    } else {
+        "video/mp4".to_string()
+    }
+}
+
+async fn store_formats_in_session(
+    redis: &mut redis::aio::MultiplexedConnection,
+    video_fmts: &[VideoFormat],
+    audio_fmts: &[VideoFormat],
+    image_fmts: &[VideoFormat],
+    info: &serde_json::Value,
+) -> Result<String, redis::RedisError> {
+    let session_id = Uuid::new_v4().to_string();
+    let cookies = info["cookies"].as_str().map(|s| s.to_string());
+    let video_id = info["id"].as_str().unwrap_or("unknown").to_string();
+    
+    let mut formats_map: HashMap<String, FormatInfo> = HashMap::new();
+    
+    // Process all formats
+    for fmt in video_fmts.iter().chain(audio_fmts.iter()).chain(image_fmts.iter()) {
+        // Find the original format data to get headers
+        let format_data = info["formats"]
+            .as_array()
+            .and_then(|arr| arr.iter().find(|f| f["format_id"].as_str() == Some(&fmt.format_id)))
+            .unwrap_or(&serde_json::Value::Null);
+        
+        let headers = extract_headers(format_data, info);
+        let content_type = determine_content_type(&fmt.resolution, &fmt.format_id, &fmt.quality);
+        
+        let format_info = FormatInfo {
+            url: fmt.url.clone(),
+            http_headers: headers,
+            quality: fmt.quality.clone(),
+            resolution: fmt.resolution.clone(),
+            content_type,
+        };
+        
+        formats_map.insert(fmt.format_id.clone(), format_info);
+    }
+    
+    let session_data = SessionData {
+        video_id,
+        cookies,
+        formats: formats_map,
+    };
+    
+    store_session_in_redis(redis, &session_id, &session_data).await?;
+    Ok(session_id)
+}
+
+async fn download(
+    Json(req): Json<DownloadRequest>,
+    redis: Arc<Mutex<redis::aio::MultiplexedConnection>>,
+) -> impl IntoResponse {
     let url = req.url.trim().to_string();
 
     if url.is_empty() {
@@ -657,7 +847,6 @@ async fn download(Json(req): Json<DownloadRequest>) -> impl IntoResponse {
         );
     }
 
-    // spawn_blocking — Tokio auto-manages thread pool, NO hardcoded worker count
     let url_clone = url.clone();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(45),
@@ -667,10 +856,40 @@ async fn download(Json(req): Json<DownloadRequest>) -> impl IntoResponse {
 
     match result {
         Ok(Ok(Ok(json_str))) => {
-            // Parse JSON from yt-dlp (pure Rust, fast)
             match serde_json::from_str::<serde_json::Value>(&json_str) {
                 Ok(info) => {
-                    let response = build_response(&info, &url);
+                    let base_url = env::var("BASE_URL").unwrap_or_else(|_| "http://localhost:8025".to_string());
+                    let formats_arr = info["formats"].as_array().map(|v| v.as_slice()).unwrap_or(&[]);
+                    let (video_fmts, audio_fmts, image_fmts) = parse_formats(formats_arr);
+                    
+                    // Store all formats in single Redis session
+                    let mut redis_guard = redis.lock().await;
+                    let session_id = match store_formats_in_session(&mut *redis_guard, &video_fmts, &audio_fmts, &image_fmts, &info).await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            error!("Failed to store session in Redis: {}", e);
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(serde_json::to_value(ErrorResponse {
+                                    success: false,
+                                    message: "Failed to create download session".into(),
+                                    error_code: Some("REDIS_ERROR".into()),
+                                }).unwrap()),
+                            );
+                        }
+                    };
+                    drop(redis_guard);
+                    
+                    let response = build_response_with_session(
+                        &info, 
+                        &url, 
+                        &video_fmts,
+                        &audio_fmts,
+                        &image_fmts,
+                        &session_id,
+                        &base_url
+                    );
+                    
                     (
                         StatusCode::OK,
                         Json(serde_json::to_value(response).unwrap()),
@@ -691,7 +910,6 @@ async fn download(Json(req): Json<DownloadRequest>) -> impl IntoResponse {
             }
         }
         Ok(Ok(Err(e))) => {
-            // yt-dlp error — map to appropriate status code
             let (status, msg) = if e.starts_with("NOT_FOUND:") {
                 (StatusCode::NOT_FOUND, "Video not found or may be private/deleted")
             } else if e.starts_with("FORBIDDEN:") {
@@ -727,7 +945,6 @@ async fn download(Json(req): Json<DownloadRequest>) -> impl IntoResponse {
             )
         }
         Err(_) => {
-            // Timeout
             (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(serde_json::to_value(ErrorResponse {
@@ -741,35 +958,234 @@ async fn download(Json(req): Json<DownloadRequest>) -> impl IntoResponse {
     }
 }
 
+async fn stream(
+    Query(params): Query<StreamRequest>,
+    redis: Arc<Mutex<redis::aio::MultiplexedConnection>>,
+) -> impl IntoResponse {
+    let session_id = params.id;
+    let format_id = params.format.unwrap_or_else(|| "best".to_string());
+    
+    // Get session data from Redis
+    let session_data = {
+        let mut redis_guard = redis.lock().await;
+        match get_session_from_redis(&mut *redis_guard, &session_id).await {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Redis error: {}", e);
+                None
+            }
+        }
+    };
+    
+    let session_data = match session_data {
+        Some(data) => data,
+        None => {
+            return (
+                StatusCode::GONE,
+                Json(serde_json::to_value(ErrorResponse {
+                    success: false,
+                    message: "Session expired or not found. Please extract again.".into(),
+                    error_code: Some("SESSION_EXPIRED".into()),
+                })
+                .unwrap()),
+            )
+                .into_response();
+        }
+    };
+    
+    // Select format based on format_id
+    let format_info = match format_id.as_str() {
+        "best" => {
+            // Find first video format
+            session_data.formats.values()
+                .find(|f| !f.resolution.is_empty() && f.resolution != "audio only")
+                .cloned()
+        }
+        "best_audio" => {
+            // Find first audio format
+            session_data.formats.values()
+                .find(|f| f.resolution == "audio only")
+                .cloned()
+        }
+        "best_image" => {
+            // Find first image format
+            session_data.formats.values()
+                .find(|f| f.content_type.starts_with("image/"))
+                .cloned()
+        }
+        specific_id => {
+            // Look for specific format ID
+            session_data.formats.get(specific_id).cloned()
+        }
+    };
+    
+    let format_info = match format_info {
+        Some(f) => f,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::to_value(ErrorResponse {
+                    success: false,
+                    message: format!("Format '{}' not found in session", format_id),
+                    error_code: Some("FORMAT_NOT_FOUND".into()),
+                })
+                .unwrap()),
+            )
+                .into_response();
+        }
+    };
+    
+    // Download using reqwest with yt-dlp headers
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to build reqwest client: {}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::to_value(ErrorResponse {
+                    success: false,
+                    message: "Failed to initialize download client".into(),
+                    error_code: Some("CLIENT_ERROR".into()),
+                })
+                .unwrap()),
+            )
+                .into_response();
+        }
+    };
+    
+    let mut request = client.get(&format_info.url);
+    
+    // Add headers from yt-dlp
+    for (key, value) in &format_info.http_headers {
+        if key.to_lowercase() != "cookie" {
+            request = request.header(key, value);
+        }
+    }
+    
+    // Add Accept-Encoding: identity
+    request = request.header("Accept-Encoding", "identity");
+    
+    // Add cookies if present
+    if let Some(cookies) = &session_data.cookies {
+        request = request.header("Cookie", cookies);
+    }
+    
+    // Send request
+    let response = match request.send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            error!("Failed to download from URL: {}", e);
+            return (
+                StatusCode::BAD_GATEWAY,
+                Json(serde_json::to_value(ErrorResponse {
+                    success: false,
+                    message: "Failed to download media from source".into(),
+                    error_code: Some("DOWNLOAD_ERROR".into()),
+                })
+                .unwrap()),
+            )
+                .into_response();
+        }
+    };
+    
+    // Get content type from source or use default
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(&format_info.content_type)
+        .to_string();
+    
+    // Generate filename
+    let ext = if content_type.starts_with("audio/") {
+        "m4a"
+    } else if content_type.starts_with("image/") {
+        "jpg"
+    } else {
+        "mp4"
+    };
+    let filename = format!("{}_{}_{}.{}", 
+        session_data.video_id, 
+        format_id,
+        format_info.quality.replace(|c: char| !c.is_alphanumeric(), "_"),
+        ext
+    );
+    
+    // Stream response
+    let stream = response.bytes_stream();
+    let body = Body::from_stream(stream);
+    
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", content_type)
+        .header(
+            "Content-Disposition",
+            format!("attachment; filename=\"{}\"", filename),
+        )
+        .body(body)
+        .unwrap()
+}
+
 // ============= Main =============
 
 #[tokio::main]
 async fn main() {
-    // Setup logging
     tracing_subscriber::fmt::init();
 
     let port: u16 = env::var("PORT")
         .ok()
         .and_then(|p| p.parse().ok())
         .unwrap_or(8025);
+    
+    let redis_url = env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    
+    // Connect to Redis
+    let redis_client = match redis::Client::open(redis_url.clone()) {
+        Ok(client) => client,
+        Err(e) => {
+            error!("Failed to create Redis client: {}", e);
+            std::process::exit(1);
+        }
+    };
+    
+    let redis_conn = match redis_client.get_multiplexed_async_connection().await {
+        Ok(conn) => Arc::new(Mutex::new(conn)),
+        Err(e) => {
+            error!("Failed to connect to Redis: {}", e);
+            std::process::exit(1);
+        }
+    };
 
-    // CORS
+    info!("✅ Connected to Redis at {}", redis_url);
+
     let cors = CorsLayer::new()
         .allow_origin(Any)
         .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
         .allow_headers(Any);
 
-    // Router
     let app = Router::new()
         .route("/", get(root))
-        .route("/health", get(health))
-        .route("/download", post(download))
+        .route("/health", get({
+            let redis = redis_conn.clone();
+            move || health(redis.clone())
+        }))
+        .route("/download", post({
+            let redis = redis_conn.clone();
+            move |body| download(body, redis.clone())
+        }))
+        .route("/stream", get({
+            let redis = redis_conn.clone();
+            move |query| stream(query, redis.clone())
+        }))
         .layer(cors);
 
     let addr = format!("0.0.0.0:{port}");
     info!("🚀 serverx-rs listening on {addr}");
-    info!("   Runtime: Tokio (auto-managed thread pool, no manual config)");
-    info!("   Extraction: yt-dlp via PyO3 (import yt_dlp)");
+    info!("   Runtime: Tokio + PyO3 (yt-dlp) + Redis");
+    info!("   Endpoints: /download, /stream, /health");
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();

@@ -1,5 +1,5 @@
 # Stage 1: Build Rust binary
-FROM rust:1.83-bookworm AS builder
+FROM rust:1.85-bookworm AS builder
 
 # Install Python dev headers (needed for PyO3 compilation)
 RUN apt-get update && apt-get install -y python3-dev && rm -rf /var/lib/apt/lists/*

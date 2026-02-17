@@ -1,0 +1,30 @@
+services:
+  serveryt-rs:
+    build:
+      context: ..           # Parent directory (so yt_dlp is accessible)
+      dockerfile: serveryt-rs/Dockerfile
+    ports:
+      - "8026:8026"
+    env_file:
+      - .env
+    environment:
+      - PORT=${PORT:-8026}
+      - BASE_URL=${BASE_URL:-http://localhost:8026}
+      - SIGNATURE_SECRET=${SIGNATURE_SECRET}
+      - SIGNATURE_TTL=${SIGNATURE_TTL:-120}
+      - RATE_LIMIT_REQUESTS=${RATE_LIMIT_REQUESTS:-10}
+      - RATE_LIMIT_WINDOW=${RATE_LIMIT_WINDOW:-60}
+      - YTDLP_TIMEOUT=${YTDLP_TIMEOUT:-45}
+      - DOWNLOAD_TIMEOUT=${DOWNLOAD_TIMEOUT:-300}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8026/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

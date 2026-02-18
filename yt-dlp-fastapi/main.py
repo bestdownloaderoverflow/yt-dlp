@@ -1,14 +1,18 @@
 import os
+import sys
 import json
 import asyncio
 import uuid
 import shutil
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Union
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Query
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, HttpUrl
+
+# Use local yt_dlp fork
+sys.path.insert(0, '/Users/almafazi/Documents/yt-dlp-tiktok')
 import yt_dlp
 
 app = FastAPI(title="YouTube Downloader API", version="1.0.0")
@@ -35,7 +39,7 @@ class VideoRequest(BaseModel):
 class ProcessResponse(BaseModel):
     download_id: str
     title: str
-    duration: Optional[int]
+    duration: Optional[Union[int, float]]
     thumbnail: Optional[str]
     formats: list
 
@@ -133,7 +137,7 @@ async def fetch_video_info(request: VideoRequest):
             return {
                 'title': sanitized_info.get('title'),
                 'description': sanitized_info.get('description'),
-                'duration': sanitized_info.get('duration'),
+                'duration': int(sanitized_info.get('duration')) if sanitized_info.get('duration') else None,
                 'thumbnail': sanitized_info.get('thumbnail'),
                 'uploader': sanitized_info.get('uploader'),
                 'upload_date': sanitized_info.get('upload_date'),
@@ -183,7 +187,7 @@ async def process_video(request: VideoRequest, background_tasks: BackgroundTasks
         return {
             'download_id': download_id,
             'title': sanitized_info.get('title'),
-            'duration': sanitized_info.get('duration'),
+            'duration': int(sanitized_info.get('duration')) if sanitized_info.get('duration') else None,
             'thumbnail': sanitized_info.get('thumbnail'),
             'formats': [
                 {

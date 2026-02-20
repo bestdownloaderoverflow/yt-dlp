@@ -2,14 +2,16 @@ import asyncio
 import uuid
 import shutil
 from pathlib import Path
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse
 
 import yt_dlp
 
-from app.config import YDL_BASE_OPTS, TEMP_DIR
+from app.config import YDL_BASE_OPTS, TEMP_DIR, settings
 from app.models import TikTokRequest
+from app.database import DownloadJob, JobStatus, JobMetadata
 from app.utils.cleanup import scheduled_cleanup
 from app.utils.slideshow import download_file_sync, create_slideshow
 

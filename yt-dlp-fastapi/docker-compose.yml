@@ -1,0 +1,160 @@
+services:
+  app:
+    build: .
+    container_name: yt-dlp-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://mongo:27017/yt_dlp_db
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=mongodb://mongo:27017/yt_dlp_celery_results
+      - CLEANUP_DELAY_MINUTES=1
+      - RATE_LIMIT_PER_MINUTE=10
+      - LOG_LEVEL=info
+    volumes:
+      - ./temp_downloads:/app/temp_downloads
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - yt-dlp-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  worker:
+    build: .
+    command: celery -A celery_worker.celery_app worker --loglevel=info --concurrency=4 -Q celery,download,default -n worker@%h
+    environment:
+      - MONGODB_URL=mongodb://mongo:27017/yt_dlp_db
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=mongodb://mongo:27017/yt_dlp_celery_results
+      - CLEANUP_DELAY_MINUTES=1
+      - LOG_LEVEL=info
+    volumes:
+      - ./temp_downloads:/app/temp_downloads
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - yt-dlp-network
+    restart: unless-stopped
+
+  beat:
+    build: .
+    command: celery -A celery_worker.celery_app beat --loglevel=info
+    environment:
+      - MONGODB_URL=mongodb://mongo:27017/yt_dlp_db
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=mongodb://mongo:27017/yt_dlp_celery_results
+      - CLEANUP_DELAY_MINUTES=1
+      - LOG_LEVEL=info
+    volumes:
+      - ./temp_downloads:/app/temp_downloads
+    depends_on:
+      mongo:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - yt-dlp-network
+    restart: unless-stopped
+
+  flower:
+    build: .
+    command: celery -A celery_worker.celery_app flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672/
+      - CELERY_RESULT_BACKEND=mongodb://mongo:27017/yt_dlp_celery_results
+    depends_on:
+      - rabbitmq
+      - mongo
+      - redis
+    networks:
+      - yt-dlp-network
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7-jammy
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_DATABASE=yt_dlp_db
+    volumes:
+      - mongo_data:/data/db
+      - ./init-scripts/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+    networks:
+      - yt-dlp-network
+    restart: unless-stopped
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - yt-dlp-network
+    restart: unless-stopped
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - yt-dlp-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  mongo_data:
+  rabbitmq_data:
+  redis_data:
+
+networks:
+  yt-dlp-network:
+    driver: bridge

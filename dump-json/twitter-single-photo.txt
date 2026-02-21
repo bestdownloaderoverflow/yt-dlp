@@ -1,0 +1,128 @@
+script:
+def extract_info(url):
+    """Extract info from URL and return as JSON."""
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+    }
+    
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info
+
+url: "https://x.com/MiniMax_AI/status/2024973745790877960?s=20"
+
+result:
+{
+  "id": "2024971183649947649",
+  "title": "MiniMax (official) - Nice work by @FireworksAI_HQ running MiniMax M2.5 Appreciate the benc...",
+  "description": "Nice work by @FireworksAI_HQ running MiniMax M2.5 Appreciate the benchmarks, @ArtificialAnlys \ud83e\udd73 https://t.co/bmk8aPVUuE",
+  "uploader": "MiniMax (official)",
+  "timestamp": 1771626337,
+  "channel_id": "1875078099538423808",
+  "uploader_id": "MiniMax_AI",
+  "uploader_url": "https://twitter.com/MiniMax_AI",
+  "like_count": 375,
+  "repost_count": 5,
+  "comment_count": 5,
+  "age_limit": 0,
+  "tags": [],
+  "formats": [
+    {
+      "url": "https://pbs.twimg.com/media/HBokkBHbgAEtKKs.jpg?name=large",
+      "format_id": "large",
+      "width": 1320,
+      "height": 1643,
+      "ext": "jpg",
+      "protocol": "https",
+      "video_ext": "jpg",
+      "audio_ext": "none",
+      "vbr": null,
+      "abr": null,
+      "tbr": null,
+      "resolution": "1320x1643",
+      "dynamic_range": "SDR",
+      "aspect_ratio": 0.8,
+      "filesize_approx": null,
+      "http_headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-us,en;q=0.5",
+        "Sec-Fetch-Mode": "navigate"
+      },
+      "format": "large - 1320x1643"
+    },
+    {
+      "url": "https://pbs.twimg.com/media/HBokkBHbgAEtKKs.jpg?name=orig",
+      "format_id": "orig",
+      "width": 1320,
+      "height": 1643,
+      "ext": "jpg",
+      "protocol": "https",
+      "video_ext": "jpg",
+      "audio_ext": "none",
+      "vbr": null,
+      "abr": null,
+      "tbr": null,
+      "resolution": "1320x1643",
+      "dynamic_range": "SDR",
+      "aspect_ratio": 0.8,
+      "filesize_approx": null,
+      "http_headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-us,en;q=0.5",
+        "Sec-Fetch-Mode": "navigate"
+      },
+      "format": "orig - 1320x1643"
+    }
+  ],
+  "width": 1320,
+  "height": 1643,
+  "thumbnail": "https://pbs.twimg.com/media/HBokkBHbgAEtKKs.jpg?name=small",
+  "display_id": "2024973745790877960",
+  "_old_archive_ids": [
+    "twitter 2024973745790877960"
+  ],
+  "webpage_url": "https://x.com/MiniMax_AI/status/2024973745790877960?s=20",
+  "original_url": "https://x.com/MiniMax_AI/status/2024973745790877960?s=20",
+  "webpage_url_basename": "2024973745790877960",
+  "webpage_url_domain": "x.com",
+  "extractor": "twitter",
+  "extractor_key": "Twitter",
+  "playlist": null,
+  "playlist_index": null,
+  "thumbnails": [
+    {
+      "url": "https://pbs.twimg.com/media/HBokkBHbgAEtKKs.jpg?name=small",
+      "id": "0"
+    }
+  ],
+  "fulltitle": "MiniMax (official) - Nice work by @FireworksAI_HQ running MiniMax M2.5 Appreciate the benc...",
+  "upload_date": "20260220",
+  "release_year": null,
+  "requested_subtitles": null,
+  "_has_drm": null,
+  "epoch": 1771693210,
+  "url": "https://pbs.twimg.com/media/HBokkBHbgAEtKKs.jpg?name=orig",
+  "format_id": "orig",
+  "ext": "jpg",
+  "protocol": "https",
+  "video_ext": "jpg",
+  "audio_ext": "none",
+  "vbr": null,
+  "abr": null,
+  "tbr": null,
+  "resolution": "1320x1643",
+  "dynamic_range": "SDR",
+  "aspect_ratio": 0.8,
+  "filesize_approx": null,
+  "http_headers": {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-us,en;q=0.5",
+    "Sec-Fetch-Mode": "navigate"
+  },
+  "format": "orig - 1320x1643"
+}

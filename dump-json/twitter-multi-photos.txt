@@ -1,0 +1,285 @@
+script:
+def extract_info(url):
+    """Extract info from URL and return as JSON."""
+    ydl_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'extract_flat': False,
+    }
+    
+    with YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+        return info
+
+url: "https://x.com/ai_for_success/status/2025072438430797996?s=20"
+
+result:
+{
+  "id": "2025072438430797996",
+  "title": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi...",
+  "description": "Many people do not realize that Kimi is the fastest AI company in China to reach a valuation of over 10 billion USD. They did it in roughly 2.8 years (34 months). https://t.co/21g0sWUb1Y",
+  "uploader": "AshutoshShrivastava",
+  "timestamp": 1771649868,
+  "channel_id": "1618975370488999936",
+  "uploader_id": "ai_for_success",
+  "uploader_url": "https://twitter.com/ai_for_success",
+  "like_count": 1639,
+  "repost_count": 80,
+  "comment_count": 47,
+  "age_limit": 0,
+  "tags": [],
+  "_type": "playlist",
+  "entries": [
+    {
+      "id": "2025072435884949504",
+      "title": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi... #1",
+      "description": "Many people do not realize that Kimi is the fastest AI company in China to reach a valuation of over 10 billion USD. They did it in roughly 2.8 years (34 months). https://t.co/21g0sWUb1Y",
+      "uploader": "AshutoshShrivastava",
+      "timestamp": 1771649868,
+      "channel_id": "1618975370488999936",
+      "uploader_id": "ai_for_success",
+      "uploader_url": "https://twitter.com/ai_for_success",
+      "like_count": 1639,
+      "repost_count": 80,
+      "comment_count": 47,
+      "age_limit": 0,
+      "tags": [],
+      "formats": [
+        {
+          "url": "https://pbs.twimg.com/media/HBqAprFbgAA_RfU.jpg?name=large",
+          "format_id": "large",
+          "width": 680,
+          "height": 680,
+          "ext": "jpg",
+          "protocol": "https",
+          "video_ext": "jpg",
+          "audio_ext": "none",
+          "vbr": null,
+          "abr": null,
+          "tbr": null,
+          "resolution": "680x680",
+          "dynamic_range": "SDR",
+          "aspect_ratio": 1.0,
+          "filesize_approx": null,
+          "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-us,en;q=0.5",
+            "Sec-Fetch-Mode": "navigate"
+          },
+          "format": "large - 680x680"
+        },
+        {
+          "url": "https://pbs.twimg.com/media/HBqAprFbgAA_RfU.jpg?name=orig",
+          "format_id": "orig",
+          "width": 680,
+          "height": 680,
+          "ext": "jpg",
+          "protocol": "https",
+          "video_ext": "jpg",
+          "audio_ext": "none",
+          "vbr": null,
+          "abr": null,
+          "tbr": null,
+          "resolution": "680x680",
+          "dynamic_range": "SDR",
+          "aspect_ratio": 1.0,
+          "filesize_approx": null,
+          "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-us,en;q=0.5",
+            "Sec-Fetch-Mode": "navigate"
+          },
+          "format": "orig - 680x680"
+        }
+      ],
+      "width": 680,
+      "height": 680,
+      "thumbnail": "https://pbs.twimg.com/media/HBqAprFbgAA_RfU.jpg?name=small",
+      "display_id": "2025072438430797996",
+      "_old_archive_ids": [
+        "twitter 2025072438430797996"
+      ],
+      "playlist_count": 2,
+      "playlist": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi...",
+      "playlist_id": "2025072438430797996",
+      "playlist_title": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi...",
+      "playlist_uploader": "AshutoshShrivastava",
+      "playlist_uploader_id": "ai_for_success",
+      "playlist_channel": null,
+      "playlist_channel_id": "1618975370488999936",
+      "playlist_webpage_url": "https://x.com/ai_for_success/status/2025072438430797996?s=20",
+      "n_entries": 2,
+      "webpage_url": "https://x.com/ai_for_success/status/2025072438430797996?s=20",
+      "webpage_url_basename": "2025072438430797996",
+      "webpage_url_domain": "x.com",
+      "playlist_index": 1,
+      "__last_playlist_index": 2,
+      "extractor": "twitter",
+      "extractor_key": "Twitter",
+      "playlist_autonumber": 1,
+      "thumbnails": [
+        {
+          "url": "https://pbs.twimg.com/media/HBqAprFbgAA_RfU.jpg?name=small",
+          "id": "0"
+        }
+      ],
+      "fulltitle": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi... #1",
+      "upload_date": "20260221",
+      "release_year": null,
+      "requested_subtitles": null,
+      "_has_drm": null,
+      "epoch": 1771693076,
+      "url": "https://pbs.twimg.com/media/HBqAprFbgAA_RfU.jpg?name=orig",
+      "format_id": "orig",
+      "ext": "jpg",
+      "protocol": "https",
+      "video_ext": "jpg",
+      "audio_ext": "none",
+      "vbr": null,
+      "abr": null,
+      "tbr": null,
+      "resolution": "680x680",
+      "dynamic_range": "SDR",
+      "aspect_ratio": 1.0,
+      "filesize_approx": null,
+      "http_headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-us,en;q=0.5",
+        "Sec-Fetch-Mode": "navigate"
+      },
+      "format": "orig - 680x680"
+    },
+    {
+      "id": "2025072436031684608",
+      "title": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi... #2",
+      "description": "Many people do not realize that Kimi is the fastest AI company in China to reach a valuation of over 10 billion USD. They did it in roughly 2.8 years (34 months). https://t.co/21g0sWUb1Y",
+      "uploader": "AshutoshShrivastava",
+      "timestamp": 1771649868,
+      "channel_id": "1618975370488999936",
+      "uploader_id": "ai_for_success",
+      "uploader_url": "https://twitter.com/ai_for_success",
+      "like_count": 1639,
+      "repost_count": 80,
+      "comment_count": 47,
+      "age_limit": 0,
+      "tags": [],
+      "formats": [
+        {
+          "url": "https://pbs.twimg.com/media/HBqAproagAA2UBP.jpg?name=large",
+          "format_id": "large",
+          "width": 400,
+          "height": 400,
+          "ext": "jpg",
+          "protocol": "https",
+          "video_ext": "jpg",
+          "audio_ext": "none",
+          "vbr": null,
+          "abr": null,
+          "tbr": null,
+          "resolution": "400x400",
+          "dynamic_range": "SDR",
+          "aspect_ratio": 1.0,
+          "filesize_approx": null,
+          "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-us,en;q=0.5",
+            "Sec-Fetch-Mode": "navigate"
+          },
+          "format": "large - 400x400"
+        },
+        {
+          "url": "https://pbs.twimg.com/media/HBqAproagAA2UBP.jpg?name=orig",
+          "format_id": "orig",
+          "width": 400,
+          "height": 400,
+          "ext": "jpg",
+          "protocol": "https",
+          "video_ext": "jpg",
+          "audio_ext": "none",
+          "vbr": null,
+          "abr": null,
+          "tbr": null,
+          "resolution": "400x400",
+          "dynamic_range": "SDR",
+          "aspect_ratio": 1.0,
+          "filesize_approx": null,
+          "http_headers": {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-us,en;q=0.5",
+            "Sec-Fetch-Mode": "navigate"
+          },
+          "format": "orig - 400x400"
+        }
+      ],
+      "width": 400,
+      "height": 400,
+      "thumbnail": "https://pbs.twimg.com/media/HBqAproagAA2UBP.jpg?name=small",
+      "display_id": "2025072438430797996",
+      "playlist_count": 2,
+      "playlist": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi...",
+      "playlist_id": "2025072438430797996",
+      "playlist_title": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi...",
+      "playlist_uploader": "AshutoshShrivastava",
+      "playlist_uploader_id": "ai_for_success",
+      "playlist_channel": null,
+      "playlist_channel_id": "1618975370488999936",
+      "playlist_webpage_url": "https://x.com/ai_for_success/status/2025072438430797996?s=20",
+      "n_entries": 2,
+      "webpage_url": "https://x.com/ai_for_success/status/2025072438430797996?s=20",
+      "webpage_url_basename": "2025072438430797996",
+      "webpage_url_domain": "x.com",
+      "playlist_index": 2,
+      "__last_playlist_index": 2,
+      "extractor": "twitter",
+      "extractor_key": "Twitter",
+      "playlist_autonumber": 2,
+      "thumbnails": [
+        {
+          "url": "https://pbs.twimg.com/media/HBqAproagAA2UBP.jpg?name=small",
+          "id": "0"
+        }
+      ],
+      "fulltitle": "AshutoshShrivastava - Many people do not realize that Kimi is the fastest AI company in Chi... #2",
+      "upload_date": "20260221",
+      "release_year": null,
+      "requested_subtitles": null,
+      "_has_drm": null,
+      "epoch": 1771693077,
+      "url": "https://pbs.twimg.com/media/HBqAproagAA2UBP.jpg?name=orig",
+      "format_id": "orig",
+      "ext": "jpg",
+      "protocol": "https",
+      "video_ext": "jpg",
+      "audio_ext": "none",
+      "vbr": null,
+      "abr": null,
+      "tbr": null,
+      "resolution": "400x400",
+      "dynamic_range": "SDR",
+      "aspect_ratio": 1.0,
+      "filesize_approx": null,
+      "http_headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-us,en;q=0.5",
+        "Sec-Fetch-Mode": "navigate"
+      },
+      "format": "orig - 400x400"
+    }
+  ],
+  "webpage_url": "https://x.com/ai_for_success/status/2025072438430797996?s=20",
+  "original_url": "https://x.com/ai_for_success/status/2025072438430797996?s=20",
+  "webpage_url_basename": "2025072438430797996",
+  "webpage_url_domain": "x.com",
+  "extractor": "twitter",
+  "extractor_key": "Twitter",
+  "upload_date": "20260221",
+  "release_year": null,
+  "playlist_count": 2,
+  "epoch": 1771693076
+}

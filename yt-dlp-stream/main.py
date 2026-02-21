@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from typing import Optional, AsyncIterator, Dict, Any
 from pathlib import Path
 
@@ -22,6 +23,7 @@ from urllib.parse import quote
 from ytdl_manager import ydl_manager
 from process_manager import process_manager
 from security import is_localhost, rate_limiter, create_stream_token, validate_stream_token
+from internal_tunnel import internal_tunnel
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -115,6 +117,70 @@ def _header_str(headers: dict) -> str:
             continue
         parts.append(f"{k}: {v}\r\n")
     return "".join(parts)
+
+
+def _client_id_from_request(request: Optional[FastAPIRequest]) -> str:
+    if not request:
+        return "unknown"
+    client_host = request.client.host if request.client else "unknown"
+    ua = request.headers.get("user-agent", "-")
+    return f"{client_host}:{ua}"
+
+
+def _enforce_rate_limit(request: Optional[FastAPIRequest]) -> None:
+    client_id = _client_id_from_request(request)
+    if not rate_limiter.is_allowed(client_id):
+        raise HTTPException(status_code=429, detail="Too many requests")
+
+
+def _extract_info_and_resolve(
+    url: str,
+    format_str: str,
+    proxy: Optional[str],
+    impersonate: Optional[str],
+) -> tuple[dict, list[dict], dict]:
+    """Blocking yt-dlp path used via asyncio.to_thread from async endpoints."""
+    info = ydl_manager.extract_info(url, proxy=proxy, impersonate=impersonate)
+    if not info:
+        raise ValueError("Could not extract video info")
+    global_headers = info.get("http_headers") or {}
+    resolved = ydl_manager.resolve_formats(
+        info,
+        format_str,
+        proxy=proxy,
+        impersonate=impersonate,
+    )
+    return info, resolved, global_headers
+
+
+def _build_internal_chunked_stream(
+    direct_url: str,
+    headers: dict,
+    total_size: int,
+    service: str,
+) -> AsyncIterator[bytes]:
+    """
+    Create an internal stream + signed token, then stream via internal tunnel manager.
+    """
+    stream_id = internal_tunnel.create_stream(
+        url=direct_url,
+        headers=headers,
+        service=service,
+    )
+    token = create_stream_token(stream_id)
+    is_valid, error = validate_stream_token(stream_id, token.expires_at, token.signature)
+    if not is_valid:
+        internal_tunnel.destroy_stream(stream_id)
+        raise HTTPException(status_code=500, detail=f"Failed to create internal stream token: {error}")
+
+    async def _body() -> AsyncIterator[bytes]:
+        try:
+            async for chunk in internal_tunnel.read_chunks(stream_id, total_size):
+                yield chunk
+        finally:
+            internal_tunnel.destroy_stream(stream_id)
+
+    return _body()
 
 
 def resolve_formats(info: dict, format_str: str, ydl: yt_dlp.YoutubeDL) -> list[dict]:
@@ -476,6 +542,7 @@ def stream_video(
     download: bool = Query(False, description="Force download as attachment"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
     impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+    request: FastAPIRequest = None,
 ):
     """
     Stream / download video.
@@ -485,6 +552,8 @@ def stream_video(
     - Automatically handles DASH/HLS manifests and video-only+audio merges.
     - `impersonate`: useful for TikTok and sites with TLS fingerprinting
     """
+    _enforce_rate_limit(request)
+
     if format:
         format_str = format
     elif quality:
@@ -519,10 +588,13 @@ def stream_mp3(
     download: bool = Query(False, description="Force download as attachment"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
     impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+    request: FastAPIRequest = None,
 ):
     """
     Extract best audio and stream / download as MP3 (re-encoded via libmp3lame q:2).
     """
+    _enforce_rate_limit(request)
+
     try:
         return _streaming_response(
             url=url,
@@ -608,17 +680,21 @@ async def stream_m4a(
     download: bool = Query(False, description="Force download as attachment"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
     impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+    request: FastAPIRequest = None,
 ):
     """
     Extract best audio and stream directly as m4a/webm **without ffmpeg**.
     Uses cobalt-style chunked Range requests for consistent speed regardless
     of video duration. No re-encoding — zero CPU overhead.
     """
+    _enforce_rate_limit(request)
+
     try:
-        out_filename, direct_url, http_headers, filesize, ext = stream_generator_direct(
-            url=url,
-            format_str=AUDIO_FORMAT_M4A,
-            ydl_opts=_build_ydl_opts(proxy, impersonate),
+        out_filename, direct_url, http_headers, filesize, ext = await asyncio.to_thread(
+            stream_generator_direct,
+            url,
+            AUDIO_FORMAT_M4A,
+            _build_ydl_opts(proxy, impersonate),
         )
     except yt_dlp.utils.DownloadError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -646,7 +722,12 @@ async def stream_m4a(
         response_headers["Content-Length"] = str(filesize)
 
     if filesize:
-        body = _chunked_range_generator(direct_url, safe_headers, filesize)
+        body = _build_internal_chunked_stream(
+            direct_url=direct_url,
+            headers=safe_headers,
+            total_size=filesize,
+            service="audio",
+        )
     else:
         async def _simple_stream() -> AsyncIterator[bytes]:
             async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
@@ -665,10 +746,13 @@ def stream_audio(
     download: bool = Query(False, description="Force download as attachment"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
     impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+    request: FastAPIRequest = None,
 ):
     """
     Alias for /stream/mp3 — kept for backwards compatibility.
     """
+    _enforce_rate_limit(request)
+
     try:
         return _streaming_response(
             url=url,
@@ -1054,6 +1138,7 @@ async def stream_video_chunked(
     download: bool = Query(False, description="Force download as attachment"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
     impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+    request: FastAPIRequest = None,
 ):
     """
     Stream video using Cobalt-style chunked range requests.
@@ -1072,6 +1157,8 @@ async def stream_video_chunked(
     - `download`: force attachment disposition
     - `impersonate`: browser for TLS fingerprinting
     """
+    _enforce_rate_limit(request)
+
     if format:
         format_str = format
     elif quality:
@@ -1085,24 +1172,17 @@ async def stream_video_chunked(
         format_str = QUALITY_FORMATS["1080"]
 
     ydl_opts = _build_ydl_opts(proxy, impersonate)
-    info_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        **ydl_opts,
-    }
-
     try:
-        # Gunakan singleton manager untuk session integrity
-        info = ydl_manager.extract_info(url, proxy=proxy, impersonate=impersonate)
-        if not info:
-            raise ValueError("Could not extract video info")
+        info, resolved, global_headers = await asyncio.to_thread(
+            _extract_info_and_resolve,
+            url,
+            format_str,
+            proxy,
+            impersonate,
+        )
 
         base_filename = info.get("title", "download") or "download"
         out_filename = f"{base_filename}.mp4"
-
-        global_headers = info.get("http_headers") or {}
-        resolved = ydl_manager.resolve_formats(info, format_str, proxy=proxy, impersonate=impersonate)
 
         # Check if we can use chunked download or need ffmpeg
         can_chunk = len(resolved) == 1 and can_use_chunked_streaming(resolved[0])
@@ -1388,6 +1468,7 @@ async def stream_mp3_chunked(
     download: bool = Query(False, description="Force download as attachment"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
     impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+    request: FastAPIRequest = None,
 ):
     """
     Stream MP3 using Cobalt-style chunked range requests.
@@ -1405,25 +1486,21 @@ async def stream_mp3_chunked(
     - `download`: force attachment disposition
     - `impersonate`: browser for TLS fingerprinting
     """
+    _enforce_rate_limit(request)
+
     ydl_opts = _build_ydl_opts(proxy, impersonate)
-    info_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        **ydl_opts,
-    }
 
     try:
-        # Gunakan singleton manager untuk session integrity
-        info = ydl_manager.extract_info(url, proxy=proxy, impersonate=impersonate)
-        if not info:
-            raise ValueError("Could not extract video info")
+        info, resolved, global_headers = await asyncio.to_thread(
+            _extract_info_and_resolve,
+            url,
+            AUDIO_FORMAT,
+            proxy,
+            impersonate,
+        )
 
         base_filename = info.get("title", "download") or "download"
         out_filename = f"{base_filename}.mp3"
-
-        global_headers = info.get("http_headers") or {}
-        resolved = ydl_manager.resolve_formats(info, AUDIO_FORMAT, proxy=proxy, impersonate=impersonate)
 
         # Check if we can use chunked download or need ffmpeg
         if len(resolved) == 1 and can_use_chunked_streaming(resolved[0]):
@@ -1488,8 +1565,6 @@ async def stream_mp3_chunked(
 # -----------------------------------------------------------------------------
 # Internal Tunnel Endpoints (Two-tier tunnel system)
 # -----------------------------------------------------------------------------
-
-from internal_tunnel import internal_tunnel
 
 
 @app.get("/_internal")

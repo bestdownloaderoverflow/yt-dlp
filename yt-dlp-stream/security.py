@@ -8,14 +8,27 @@ Features:
 """
 import hashlib
 import hmac
+import logging
+import os
 import time
 import secrets
 from typing import Optional, Dict, Tuple
 from dataclasses import dataclass
 
 
-# Secret key untuk HMAC (should be in env variable in production)
-SECRET_KEY = secrets.token_hex(32)
+logger = logging.getLogger("uvicorn.error")
+
+
+# Secret key untuk HMAC (use env in production for stable multi-worker tokens)
+_env_secret = os.getenv("STREAM_SECRET_KEY")
+if _env_secret:
+    SECRET_KEY = _env_secret
+else:
+    SECRET_KEY = secrets.token_hex(32)
+    logger.warning(
+        "STREAM_SECRET_KEY is not set; using ephemeral in-memory secret. "
+        "Internal stream tokens will be invalid after restart."
+    )
 
 
 @dataclass

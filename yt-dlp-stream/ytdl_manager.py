@@ -70,25 +70,29 @@ class YoutubeDLManager:
                 del self._locks[oldest_key]
             logger.info(f"Cleaned up YoutubeDL instance: {oldest_key}")
 
-    def _periodic_cleanup(self):
-        """Periodic cleanup untuk idle instances."""
+    def _periodic_cleanup_locked(self):
+        """Periodic cleanup untuk idle instances. Caller must hold _global_lock."""
         now = time.time()
         if now - self._last_cleanup < self._cleanup_interval:
             return
 
+        # Hapus instances yang idle > 1 jam
+        to_remove = []
+        for key, data in self._ydl_instances.items():
+            if now - data.get('last_used', now) > 3600:
+                to_remove.append(key)
+
+        for key in to_remove:
+            self._ydl_instances.pop(key, None)
+            self._locks.pop(key, None)
+            logger.info(f"Removed idle instance: {key}")
+
+        self._last_cleanup = now
+
+    def _periodic_cleanup(self):
+        """Periodic cleanup untuk idle instances."""
         with self._global_lock:
-            # Hapus instances yang idle > 1 jam
-            to_remove = []
-            for key, data in self._ydl_instances.items():
-                if now - data.get('last_used', now) > 3600:
-                    to_remove.append(key)
-
-            for key in to_remove:
-                self._ydl_instances.pop(key, None)
-                self._locks.pop(key, None)
-                logger.info(f"Removed idle instance: {key}")
-
-            self._last_cleanup = now
+            self._periodic_cleanup_locked()
 
     def _get_ydl(self, proxy: Optional[str] = None,
                  impersonate: Optional[str] = None) -> yt_dlp.YoutubeDL:
@@ -102,7 +106,7 @@ class YoutubeDLManager:
 
         with self._global_lock:
             # Periodic cleanup
-            self._periodic_cleanup()
+            self._periodic_cleanup_locked()
 
             if opts_key not in self._ydl_instances:
                 # Create new instance dan lock

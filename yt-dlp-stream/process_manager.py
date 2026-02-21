@@ -186,33 +186,34 @@ class ProcessManager:
                     self._processes.pop(pid, None)
 
     def _cleanup_zombies(self):
-        """Find dan cleanup zombie ffmpeg processes."""
+        """Find dan cleanup zombie/orphan ffmpeg processes owned by this service."""
         try:
-            # Find all ffmpeg processes
-            for proc in psutil.process_iter(['pid', 'name', 'status', 'create_time']):
+            parent = psutil.Process()
+            for proc in parent.children(recursive=True):
                 try:
-                    if 'ffmpeg' in proc.info['name'].lower():
-                        pid = proc.info['pid']
-                        
-                        # Skip if we're tracking it
-                        with self._process_lock:
-                            if pid in self._processes:
-                                continue
-                        
-                        # Check if zombie or very old
-                        if proc.info['status'] == psutil.STATUS_ZOMBIE:
-                            logger.warning(f"Found zombie ffmpeg process PID={pid}")
-                            try:
-                                proc.kill()
-                            except:
-                                pass
-                        elif time.time() - proc.info['create_time'] > self._max_process_age:
-                            logger.warning(f"Found orphan old ffmpeg process PID={pid}")
-                            try:
-                                proc.kill()
-                            except:
-                                pass
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    info = proc.as_dict(attrs=['pid', 'name', 'status', 'create_time'])
+                    name = (info.get('name') or '').lower()
+                    if 'ffmpeg' not in name:
+                        continue
+
+                    pid = info['pid']
+
+                    # Skip if we're already tracking it
+                    with self._process_lock:
+                        if pid in self._processes:
+                            continue
+
+                    status = info.get('status')
+                    created = info.get('create_time') or time.time()
+                    is_old = (time.time() - created) > self._max_process_age
+
+                    if status == psutil.STATUS_ZOMBIE:
+                        logger.warning(f"Found zombie child ffmpeg process PID={pid}")
+                        proc.kill()
+                    elif is_old:
+                        logger.warning(f"Found old untracked child ffmpeg process PID={pid}")
+                        proc.kill()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                     continue
         except Exception as e:
             logger.error(f"Zombie cleanup error: {e}")

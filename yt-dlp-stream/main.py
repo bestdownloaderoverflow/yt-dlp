@@ -20,6 +20,8 @@ from urllib.parse import quote
 
 # Import singleton manager untuk session integrity
 from ytdl_manager import ydl_manager
+from process_manager import process_manager
+from security import is_localhost, rate_limiter, create_stream_token, validate_stream_token
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -325,6 +327,9 @@ def stream_generator_ffmpeg(
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
+    
+    # Register process untuk automatic cleanup
+    process_manager.register_process(ffmpeg_proc, process_type="ffmpeg_stream")
 
     try:
         while True:
@@ -335,6 +340,7 @@ def stream_generator_ffmpeg(
     finally:
         ffmpeg_proc.stdout.close()
         ffmpeg_proc.wait()
+        process_manager.unregister_process(ffmpeg_proc.pid)
 
 
 def _build_ydl_opts(
@@ -417,6 +423,8 @@ def root():
             "mp3_chunked": "GET /stream/mp3-chunked?url=... (Cobalt-style, best for long audio)",
             "m4a": "GET /stream/m4a?url=... (no ffmpeg, chunked range, fastest)",
             "audio_legacy": "GET /stream/audio?url=...",
+            "health": "GET /health (health check & metrics)",
+            "stats": "GET /stats (internal statistics)",
         },
     }
 
@@ -693,10 +701,16 @@ async def _chunked_video_generator(
     Fetches the remote file in sequential Range requests so each chunk
     is independently retryable and the connection never times out on large files.
     Supports URL transplanting when URLs expire (403 Forbidden).
+    
+    Improvements:
+    - Per-chunk retry dengan exponential backoff
+    - Better error propagation ke client
+    - Detailed logging untuk debugging
     """
     read = 0
     refresh_count = 0
     max_refreshes = 10
+    max_retries_per_chunk = 3
 
     safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
 
@@ -704,36 +718,103 @@ async def _chunked_video_generator(
         while read < total_size:
             end = min(read + chunk_size - 1, total_size - 1)
             range_headers = {**safe_headers, "Range": f"bytes={read}-{end}"}
+            
+            chunk_retries = 0
+            chunk_success = False
 
-            try:
-                async with client.stream("GET", url, headers=range_headers) as resp:
-                    if resp.status_code == 403 and refresh_count < max_refreshes:
-                        # URL expired - try to refresh (transplant)
-                        logger.warning(f"URL expired at byte {read}, attempting refresh...")
+            while chunk_retries < max_retries_per_chunk and not chunk_success:
+                try:
+                    async with client.stream("GET", url, headers=range_headers) as resp:
+                        # Handle 403 - URL expired, try transplant
+                        if resp.status_code == 403:
+                            if refresh_count < max_refreshes:
+                                logger.warning(f"URL expired at byte {read}/{total_size}, attempting refresh {refresh_count+1}/{max_refreshes}...")
+                                new_url = await _refresh_url(ydl_refresh_info)
+                                if new_url:
+                                    url = new_url
+                                    refresh_count += 1
+                                    logger.info(f"URL refreshed successfully (attempt {refresh_count})")
+                                    continue  # Retry same chunk with new URL
+                                else:
+                                    logger.error("Failed to refresh URL")
+                                    raise HTTPException(
+                                        status_code=403, 
+                                        detail=f"URL expired at {read}/{total_size} bytes and could not be refreshed"
+                                    )
+                            else:
+                                raise HTTPException(
+                                    status_code=403,
+                                    detail=f"Max refresh attempts ({max_refreshes}) exceeded at {read}/{total_size} bytes"
+                                )
+
+                        # Handle other errors
+                        if resp.status_code >= 400:
+                            logger.error(f"HTTP {resp.status_code} at byte {read}/{total_size}")
+                            resp.raise_for_status()
+
+                        # Success - stream chunk data
+                        chunk_bytes_read = 0
+                        async for data in resp.aiter_bytes():
+                            yield data
+                            read += len(data)
+                            chunk_bytes_read += len(data)
+                        
+                        chunk_success = True
+                        
+                        # Log progress setiap 10%
+                        progress = (read / total_size) * 100
+                        if int(progress) % 10 == 0:
+                            logger.info(f"Download progress: {progress:.1f}% ({read}/{total_size} bytes)")
+
+                except httpx.HTTPStatusError as e:
+                    chunk_retries += 1
+                    
+                    # Special handling untuk 403
+                    if e.response.status_code == 403 and refresh_count < max_refreshes:
+                        logger.warning(f"HTTP 403 at byte {read}, attempting refresh...")
                         new_url = await _refresh_url(ydl_refresh_info)
                         if new_url:
                             url = new_url
                             refresh_count += 1
-                            logger.info(f"URL refreshed successfully (attempt {refresh_count})")
-                            continue  # Retry same chunk with new URL
-                        else:
-                            logger.error("Failed to refresh URL")
-                            raise HTTPException(status_code=403, detail="URL expired and could not be refreshed")
+                            continue
+                    
+                    # Retry lain dengan backoff
+                    if chunk_retries < max_retries_per_chunk:
+                        backoff = min(2 ** chunk_retries, 10)  # Max 10s
+                        logger.warning(f"Chunk failed (retry {chunk_retries}/{max_retries_per_chunk}), retrying in {backoff}s: {e}")
+                        await asyncio.sleep(backoff)
+                    else:
+                        logger.error(f"Chunk failed after {max_retries_per_chunk} retries at byte {read}/{total_size}: {e}")
+                        raise HTTPException(
+                            status_code=e.response.status_code,
+                            detail=f"Download failed at {read}/{total_size} bytes after {max_retries_per_chunk} retries: {str(e)}"
+                        )
 
-                    resp.raise_for_status()
-                    async for data in resp.aiter_bytes():
-                        yield data
-                        read += len(data)
+                except (httpx.TimeoutException, httpx.NetworkError) as e:
+                    chunk_retries += 1
+                    if chunk_retries < max_retries_per_chunk:
+                        backoff = min(2 ** chunk_retries, 10)
+                        logger.warning(f"Network error (retry {chunk_retries}/{max_retries_per_chunk}), retrying in {backoff}s: {e}")
+                        await asyncio.sleep(backoff)
+                    else:
+                        logger.error(f"Network error after {max_retries_per_chunk} retries at byte {read}/{total_size}: {e}")
+                        raise HTTPException(
+                            status_code=503,
+                            detail=f"Network error at {read}/{total_size} bytes after {max_retries_per_chunk} retries: {str(e)}"
+                        )
 
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 403 and refresh_count < max_refreshes:
-                    logger.warning(f"HTTP 403 at byte {read}, attempting refresh...")
-                    new_url = await _refresh_url(ydl_refresh_info)
-                    if new_url:
-                        url = new_url
-                        refresh_count += 1
-                        continue
-                raise
+                except Exception as e:
+                    logger.error(f"Unexpected error at byte {read}/{total_size}: {e}")
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Unexpected error at {read}/{total_size} bytes: {str(e)}"
+                    )
+            
+            if not chunk_success:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to download chunk at {read}/{total_size} bytes after all retries"
+                )
 
 
 async def _stream_chunked_merge(
@@ -787,6 +868,8 @@ async def _stream_chunked_merge(
                 ))
         except Exception as e:
             logger.error(f"Video download error: {e}")
+            # Propagate error ke queue dengan sentinel
+            video_queue.put(("ERROR", str(e)))
         finally:
             video_done.set()
             video_queue.put(None)
@@ -805,6 +888,8 @@ async def _stream_chunked_merge(
                 ))
         except Exception as e:
             logger.error(f"Audio download error: {e}")
+            # Propagate error ke queue dengan sentinel
+            audio_queue.put(("ERROR", str(e)))
         finally:
             audio_done.set()
             audio_queue.put(None)
@@ -839,6 +924,9 @@ async def _stream_chunked_merge(
         stderr=subprocess.DEVNULL,
         pass_fds=[audio_r],
     )
+    
+    # Register process untuk automatic cleanup
+    process_manager.register_process(ffmpeg_proc, process_type="ffmpeg_merge")
 
     # Close read end in parent
     os.close(audio_r)
@@ -850,10 +938,19 @@ async def _stream_chunked_merge(
                 chunk = video_queue.get()
                 if chunk is None:
                     break
+                # Check for error sentinel
+                if isinstance(chunk, tuple) and chunk[0] == "ERROR":
+                    logger.error(f"Video download failed: {chunk[1]}")
+                    ffmpeg_proc.terminate()
+                    break
                 ffmpeg_proc.stdin.write(chunk)
             ffmpeg_proc.stdin.close()
         except Exception as e:
             logger.error(f"Video feed error: {e}")
+            try:
+                ffmpeg_proc.terminate()
+            except:
+                pass
 
     def feed_audio():
         try:
@@ -861,10 +958,22 @@ async def _stream_chunked_merge(
                 chunk = audio_queue.get()
                 if chunk is None:
                     break
+                # Check for error sentinel
+                if isinstance(chunk, tuple) and chunk[0] == "ERROR":
+                    logger.error(f"Audio download failed: {chunk[1]}")
+                    try:
+                        ffmpeg_proc.terminate()
+                    except:
+                        pass
+                    break
                 os.write(audio_w, chunk)
             os.close(audio_w)
         except Exception as e:
             logger.error(f"Audio feed error: {e}")
+            try:
+                ffmpeg_proc.terminate()
+            except:
+                pass
 
     threading.Thread(target=feed_video, daemon=True).start()
     threading.Thread(target=feed_audio, daemon=True).start()
@@ -882,6 +991,7 @@ async def _stream_chunked_merge(
     finally:
         ffmpeg_proc.stdout.close()
         ffmpeg_proc.wait()
+        process_manager.unregister_process(ffmpeg_proc.pid)
 
 
 async def _refresh_url(ydl_refresh_info: dict) -> Optional[str]:
@@ -1213,6 +1323,9 @@ async def _stream_mp3_chunked(
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
+    
+    # Register process untuk automatic cleanup
+    process_manager.register_process(ffmpeg_proc, process_type="ffmpeg_audio")
 
     # Thread untuk feed ffmpeg stdin dari queue
     def feed_ffmpeg_stdin():
@@ -1243,6 +1356,7 @@ async def _stream_mp3_chunked(
     finally:
         ffmpeg_proc.stdout.close()
         ffmpeg_proc.wait()
+        process_manager.unregister_process(ffmpeg_proc.pid)
 
 
 async def _download_chunked_to_queue(url, headers, size, chunk_size, refresh_info, q):
@@ -1381,18 +1495,32 @@ from internal_tunnel import internal_tunnel
 @app.get("/_internal")
 async def internal_tunnel_endpoint(
     id: str = Query(..., description="Stream ID"),
+    expires: float = Query(..., description="Token expiration timestamp"),
+    sig: str = Query(..., description="HMAC signature"),
     request: FastAPIRequest = None,
 ):
     """
-    Internal tunnel endpoint - hanya accessible dari localhost.
+    Internal tunnel endpoint - hanya accessible dari localhost dengan valid signature.
 
     Digunakan oleh ffmpeg dan chunked downloader untuk akses stream
     dengan headers/cookies yang benar.
+    
+    Security:
+    - Localhost only
+    - HMAC signature validation
+    - Token expiration check
     """
     # Security: hanya allow localhost
     client_host = request.client.host if request.client else ""
-    if client_host not in ("127.0.0.1", "localhost", "::1"):
+    if not is_localhost(client_host):
+        logger.warning(f"Forbidden access to internal endpoint from {client_host}")
         raise HTTPException(status_code=403, detail="Forbidden")
+    
+    # Validate signature & expiration
+    is_valid, error = validate_stream_token(id, expires, sig)
+    if not is_valid:
+        logger.warning(f"Invalid stream token for {id}: {error}")
+        raise HTTPException(status_code=401, detail=error)
 
     stream = internal_tunnel.get_stream(id)
     if not stream:
@@ -1410,16 +1538,30 @@ async def internal_tunnel_endpoint(
 async def internal_chunked_endpoint(
     id: str = Query(..., description="Stream ID"),
     size: int = Query(..., description="Total file size"),
+    expires: float = Query(..., description="Token expiration timestamp"),
+    sig: str = Query(..., description="HMAC signature"),
     request: FastAPIRequest = None,
 ):
     """
-    Internal chunked download endpoint.
+    Internal chunked download endpoint dengan security.
 
     Streams data dalam chunks dengan URL refresh otomatis.
+    
+    Security:
+    - Localhost only
+    - HMAC signature validation
+    - Token expiration check
     """
     client_host = request.client.host if request.client else ""
-    if client_host not in ("127.0.0.1", "localhost", "::1"):
+    if not is_localhost(client_host):
+        logger.warning(f"Forbidden access to internal chunked endpoint from {client_host}")
         raise HTTPException(status_code=403, detail="Forbidden")
+    
+    # Validate signature & expiration
+    is_valid, error = validate_stream_token(id, expires, sig)
+    if not is_valid:
+        logger.warning(f"Invalid stream token for chunked {id}: {error}")
+        raise HTTPException(status_code=401, detail=error)
 
     async def chunk_generator():
         try:
@@ -1432,3 +1574,99 @@ async def internal_chunked_endpoint(
     return StreamingResponse(
         chunk_generator(), media_type="application/octet-stream"
     )
+
+
+# -----------------------------------------------------------------------------
+# Health Check & Monitoring Endpoints
+# -----------------------------------------------------------------------------
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint untuk monitoring.
+    
+    Returns:
+    - System health status
+    - Active processes count
+    - YoutubeDL manager stats
+    - Memory/CPU usage
+    """
+    import psutil
+    
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    
+    return {
+        "status": "healthy",
+        "version": "3.0.0",
+        "uptime_seconds": int(time.time() - process.create_time()),
+        "system": {
+            "cpu_percent": process.cpu_percent(interval=0.1),
+            "memory_mb": memory_info.rss / 1024 / 1024,
+            "threads": process.num_threads(),
+        },
+        "managers": {
+            "ytdl": ydl_manager.stats,
+            "processes": process_manager.stats,
+        },
+    }
+
+
+@app.get("/stats")
+async def get_stats(
+    request: FastAPIRequest = None,
+):
+    """
+    Internal statistics endpoint.
+    
+    Security: Hanya accessible dari localhost.
+    """
+    client_host = request.client.host if request.client else ""
+    if not is_localhost(client_host):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    
+    import psutil
+    
+    process = psutil.Process()
+    
+    return {
+        "ytdl_manager": ydl_manager.stats,
+        "process_manager": process_manager.stats,
+        "system": {
+            "pid": process.pid,
+            "cpu_percent": process.cpu_percent(interval=0.1),
+            "memory": {
+                "rss_mb": process.memory_info().rss / 1024 / 1024,
+                "vms_mb": process.memory_info().vms / 1024 / 1024,
+            },
+            "threads": process.num_threads(),
+            "open_files": len(process.open_files()),
+            "connections": len(process.connections()),
+        },
+    }
+
+
+@app.post("/admin/cleanup")
+async def admin_cleanup(
+    request: FastAPIRequest = None,
+):
+    """
+    Force cleanup endpoint untuk maintenance.
+    
+    Security: Hanya accessible dari localhost.
+    """
+    client_host = request.client.host if request.client else ""
+    if not is_localhost(client_host):
+        raise HTTPException(status_code=403, detail="Forbidden")
+    
+    # Cleanup YoutubeDL instances
+    ydl_manager.force_cleanup()
+    
+    # Cleanup processes (will terminate stuck processes)
+    process_manager._cleanup_old_processes()
+    process_manager._cleanup_dead_processes()
+    
+    return {
+        "status": "cleanup completed",
+        "remaining_processes": len(process_manager._processes),
+    }

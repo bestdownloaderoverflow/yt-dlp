@@ -158,6 +158,7 @@ def _build_internal_chunked_stream(
     headers: dict,
     total_size: int,
     service: str,
+    request: FastAPIRequest,
 ) -> AsyncIterator[bytes]:
     """
     Create an internal stream + signed token, then stream via internal tunnel manager.
@@ -176,6 +177,10 @@ def _build_internal_chunked_stream(
     async def _body() -> AsyncIterator[bytes]:
         try:
             async for chunk in internal_tunnel.read_chunks(stream_id, total_size):
+                # Check for client disconnect
+                if await request.is_disconnected():
+                    logger.info(f"Client disconnected, destroying internal stream {stream_id}")
+                    break
                 yield chunk
         finally:
             internal_tunnel.destroy_stream(stream_id)
@@ -426,12 +431,13 @@ def _build_ydl_opts(
     return opts
 
 
-def _streaming_response(
+async def _streaming_response(
     url: str,
     format_str: str,
     audio_only: bool,
     download: bool,
     ydl_opts: dict,
+    request: FastAPIRequest,
 ) -> StreamingResponse:
     gen = stream_generator_ffmpeg(
         url=url,
@@ -445,9 +451,19 @@ def _streaming_response(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    def chunk_generator():
-        for chunk, _ in gen:
-            yield chunk
+    async def chunk_generator():
+        try:
+            for chunk, _ in gen:
+                if await request.is_disconnected():
+                    logger.info("Client disconnected, stopping ffmpeg stream")
+                    break
+                yield chunk
+        finally:
+            # Force cleanup generator (closes ffmpeg proc)
+            try:
+                gen.close()
+            except Exception:
+                pass
 
     media_type = "audio/mpeg" if audio_only else "video/mp4"
     disposition = "attachment" if download else "inline"
@@ -535,7 +551,7 @@ def get_info(
 
 
 @app.get("/stream/video")
-def stream_video(
+async def stream_video(
     url: str = Query(..., description="Video URL"),
     quality: Optional[str] = Query(None, description="Quality preset: 1080, 720, 480, 360"),
     format: Optional[str] = Query(None, description="Custom yt-dlp format string (overrides quality)"),
@@ -567,12 +583,13 @@ def stream_video(
         format_str = QUALITY_FORMATS["1080"]
 
     try:
-        return _streaming_response(
+        return await _streaming_response(
             url=url,
             format_str=format_str,
             audio_only=False,
             download=download,
             ydl_opts=_build_ydl_opts(proxy, impersonate),
+            request=request,
         )
     except HTTPException:
         raise
@@ -583,7 +600,7 @@ def stream_video(
 
 
 @app.get("/stream/mp3")
-def stream_mp3(
+async def stream_mp3(
     url: str = Query(..., description="Video URL"),
     download: bool = Query(False, description="Force download as attachment"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
@@ -596,12 +613,13 @@ def stream_mp3(
     _enforce_rate_limit(request)
 
     try:
-        return _streaming_response(
+        return await _streaming_response(
             url=url,
             format_str=AUDIO_FORMAT,
             audio_only=True,
             download=download,
             ydl_opts=_build_ydl_opts(proxy, impersonate),
+            request=request,
         )
     except HTTPException:
         raise
@@ -727,6 +745,7 @@ async def stream_m4a(
             headers=safe_headers,
             total_size=filesize,
             service="audio",
+            request=request,
         )
     else:
         async def _simple_stream() -> AsyncIterator[bytes]:
@@ -734,6 +753,9 @@ async def stream_m4a(
                 async with client.stream("GET", direct_url, headers=safe_headers) as resp:
                     resp.raise_for_status()
                     async for data in resp.aiter_bytes(65536):
+                        if await request.is_disconnected():
+                            logger.info("Client disconnected, stopping m4a stream")
+                            break
                         yield data
         body = _simple_stream()
 
@@ -741,7 +763,7 @@ async def stream_m4a(
 
 
 @app.get("/stream/audio")
-def stream_audio(
+async def stream_audio(
     url: str = Query(..., description="Video URL"),
     download: bool = Query(False, description="Force download as attachment"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
@@ -754,12 +776,13 @@ def stream_audio(
     _enforce_rate_limit(request)
 
     try:
-        return _streaming_response(
+        return await _streaming_response(
             url=url,
             format_str=AUDIO_FORMAT,
             audio_only=True,
             download=download,
             ydl_opts=_build_ydl_opts(proxy, impersonate),
+            request=request,
         )
     except HTTPException:
         raise
@@ -773,23 +796,66 @@ def stream_audio(
 # Chunked video streaming (Cobalt-style) for consistent speed on long videos
 # -----------------------------------------------------------------------------
 
+async def _chunked_video_generator_with_disconnect(
+    url: str,
+    headers: dict,
+    total_size: int,
+    chunk_size: int,
+    ydl_refresh_info: dict,
+    request: FastAPIRequest,
+) -> AsyncIterator[bytes]:
+    """
+    Wrapper untuk _chunked_video_generator yang menambahkan client disconnect detection.
+    Menggunakan threading.Event untuk signal cancellation ke generator.
+    """
+    cancel_event = threading.Event()
+
+    async def disconnect_checker():
+        """Task untuk monitor client disconnect."""
+        while not cancel_event.is_set():
+            if await request.is_disconnected():
+                cancel_event.set()
+                logger.info("Client disconnect detected, signalling cancellation")
+                break
+            await asyncio.sleep(0.5)  # Check every 500ms
+
+    # Start disconnect checker task
+    checker_task = asyncio.create_task(disconnect_checker())
+
+    try:
+        async for chunk in _chunked_video_generator(
+            url, headers, total_size, chunk_size, ydl_refresh_info, cancel_event
+        ):
+            yield chunk
+    finally:
+        # Ensure checker task is cancelled
+        cancel_event.set()
+        checker_task.cancel()
+        try:
+            await checker_task
+        except asyncio.CancelledError:
+            pass
+
+
 async def _chunked_video_generator(
     url: str,
     headers: dict,
     total_size: int,
     chunk_size: int,
     ydl_refresh_info: dict,  # For URL transplanting
+    cancel_event: threading.Event = None,  # For client disconnect cancellation
 ) -> AsyncIterator[bytes]:
     """
     Cobalt-style chunked range download for video.
     Fetches the remote file in sequential Range requests so each chunk
     is independently retryable and the connection never times out on large files.
     Supports URL transplanting when URLs expire (403 Forbidden).
-    
+
     Improvements:
     - Per-chunk retry dengan exponential backoff
     - Better error propagation ke client
     - Detailed logging untuk debugging
+    - Client disconnect detection via cancel_event
     """
     read = 0
     refresh_count = 0
@@ -800,13 +866,23 @@ async def _chunked_video_generator(
 
     async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
         while read < total_size:
+            # Check for cancellation
+            if cancel_event and cancel_event.is_set():
+                logger.info(f"Chunked download cancelled at byte {read}/{total_size}")
+                break
+
             end = min(read + chunk_size - 1, total_size - 1)
             range_headers = {**safe_headers, "Range": f"bytes={read}-{end}"}
-            
+
             chunk_retries = 0
             chunk_success = False
 
             while chunk_retries < max_retries_per_chunk and not chunk_success:
+                # Check for cancellation before retry
+                if cancel_event and cancel_event.is_set():
+                    logger.info(f"Chunked download cancelled at byte {read}/{total_size}")
+                    break
+
                 try:
                     async with client.stream("GET", url, headers=range_headers) as resp:
                         # Handle 403 - URL expired, try transplant
@@ -822,7 +898,7 @@ async def _chunked_video_generator(
                                 else:
                                     logger.error("Failed to refresh URL")
                                     raise HTTPException(
-                                        status_code=403, 
+                                        status_code=403,
                                         detail=f"URL expired at {read}/{total_size} bytes and could not be refreshed"
                                     )
                             else:
@@ -839,12 +915,20 @@ async def _chunked_video_generator(
                         # Success - stream chunk data
                         chunk_bytes_read = 0
                         async for data in resp.aiter_bytes():
+                            # Check for cancellation during streaming
+                            if cancel_event and cancel_event.is_set():
+                                logger.info(f"Chunked download cancelled during streaming at byte {read}/{total_size}")
+                                break
                             yield data
                             read += len(data)
                             chunk_bytes_read += len(data)
-                        
+
+                        # If cancelled during streaming, exit outer loop
+                        if cancel_event and cancel_event.is_set():
+                            break
+
                         chunk_success = True
-                        
+
                         # Log progress setiap 10%
                         progress = (read / total_size) * 100
                         if int(progress) % 10 == 0:
@@ -908,6 +992,7 @@ async def _stream_chunked_merge(
     ydl_opts: dict,
     original_url: str,
     format_str: str,
+    request: FastAPIRequest,
 ) -> AsyncIterator[bytes]:
     """
     Stream video+audio merge dengan true streaming menggunakan named pipes.
@@ -932,6 +1017,9 @@ async def _stream_chunked_merge(
         "ydl_opts": ydl_opts,
     }
 
+    # Cancellation event untuk signal disconnect
+    cancel_event = threading.Event()
+
     # Queues untuk video dan audio streams
     video_queue = queue.Queue(maxsize=32)
     audio_queue = queue.Queue(maxsize=32)
@@ -941,19 +1029,21 @@ async def _stream_chunked_merge(
     def download_video_to_queue():
         """Download video dalam thread terpisah."""
         try:
+            if cancel_event.is_set():
+                return
             if video_size:
                 asyncio.run(_download_chunked_to_queue(
                     video_url, video_headers, video_size,
-                    VIDEO_CHUNK_SIZE, ydl_refresh_info, video_queue
+                    VIDEO_CHUNK_SIZE, ydl_refresh_info, video_queue, cancel_event
                 ))
             else:
                 asyncio.run(_download_simple_to_queue(
-                    video_url, video_headers, video_queue
+                    video_url, video_headers, video_queue, cancel_event
                 ))
         except Exception as e:
-            logger.error(f"Video download error: {e}")
-            # Propagate error ke queue dengan sentinel
-            video_queue.put(("ERROR", str(e)))
+            if not cancel_event.is_set():
+                logger.error(f"Video download error: {e}")
+                video_queue.put(("ERROR", str(e)))
         finally:
             video_done.set()
             video_queue.put(None)
@@ -961,19 +1051,21 @@ async def _stream_chunked_merge(
     def download_audio_to_queue():
         """Download audio dalam thread terpisah."""
         try:
+            if cancel_event.is_set():
+                return
             if audio_size:
                 asyncio.run(_download_chunked_to_queue(
                     audio_url, audio_headers, audio_size,
-                    VIDEO_CHUNK_SIZE, ydl_refresh_info, audio_queue
+                    VIDEO_CHUNK_SIZE, ydl_refresh_info, audio_queue, cancel_event
                 ))
             else:
                 asyncio.run(_download_simple_to_queue(
-                    audio_url, audio_headers, audio_queue
+                    audio_url, audio_headers, audio_queue, cancel_event
                 ))
         except Exception as e:
-            logger.error(f"Audio download error: {e}")
-            # Propagate error ke queue dengan sentinel
-            audio_queue.put(("ERROR", str(e)))
+            if not cancel_event.is_set():
+                logger.error(f"Audio download error: {e}")
+                audio_queue.put(("ERROR", str(e)))
         finally:
             audio_done.set()
             audio_queue.put(None)
@@ -1008,7 +1100,7 @@ async def _stream_chunked_merge(
         stderr=subprocess.DEVNULL,
         pass_fds=[audio_r],
     )
-    
+
     # Register process untuk automatic cleanup
     process_manager.register_process(ffmpeg_proc, process_type="ffmpeg_merge")
 
@@ -1018,7 +1110,7 @@ async def _stream_chunked_merge(
     # Threads untuk feed ffmpeg inputs
     def feed_video():
         try:
-            while True:
+            while not cancel_event.is_set():
                 chunk = video_queue.get()
                 if chunk is None:
                     break
@@ -1030,7 +1122,8 @@ async def _stream_chunked_merge(
                 ffmpeg_proc.stdin.write(chunk)
             ffmpeg_proc.stdin.close()
         except Exception as e:
-            logger.error(f"Video feed error: {e}")
+            if not cancel_event.is_set():
+                logger.error(f"Video feed error: {e}")
             try:
                 ffmpeg_proc.terminate()
             except:
@@ -1038,7 +1131,7 @@ async def _stream_chunked_merge(
 
     def feed_audio():
         try:
-            while True:
+            while not cancel_event.is_set():
                 chunk = audio_queue.get()
                 if chunk is None:
                     break
@@ -1053,7 +1146,8 @@ async def _stream_chunked_merge(
                 os.write(audio_w, chunk)
             os.close(audio_w)
         except Exception as e:
-            logger.error(f"Audio feed error: {e}")
+            if not cancel_event.is_set():
+                logger.error(f"Audio feed error: {e}")
             try:
                 ffmpeg_proc.terminate()
             except:
@@ -1062,10 +1156,16 @@ async def _stream_chunked_merge(
     threading.Thread(target=feed_video, daemon=True).start()
     threading.Thread(target=feed_audio, daemon=True).start()
 
-    # Async generator: baca dari ffmpeg stdout
+    # Async generator: baca dari ffmpeg stdout dengan disconnect detection
     try:
         loop = asyncio.get_event_loop()
         while True:
+            # Check for client disconnect
+            if await request.is_disconnected():
+                logger.info("Client disconnected, stopping chunked merge stream")
+                cancel_event.set()
+                break
+
             chunk = await loop.run_in_executor(
                 None, ffmpeg_proc.stdout.read, 65536
             )
@@ -1073,9 +1173,39 @@ async def _stream_chunked_merge(
                 break
             yield chunk
     finally:
-        ffmpeg_proc.stdout.close()
-        ffmpeg_proc.wait()
+        # Signal cancellation ke semua threads
+        cancel_event.set()
+
+        # Cleanup ffmpeg
+        try:
+            ffmpeg_proc.stdout.close()
+            ffmpeg_proc.terminate()
+            ffmpeg_proc.wait(timeout=2)
+        except:
+            try:
+                ffmpeg_proc.kill()
+                ffmpeg_proc.wait(timeout=1)
+            except:
+                pass
         process_manager.unregister_process(ffmpeg_proc.pid)
+
+        # Cleanup audio pipe
+        try:
+            os.close(audio_w)
+        except:
+            pass
+
+        # Drain queues untuk unblock threads
+        try:
+            while not video_queue.empty():
+                video_queue.get_nowait()
+        except:
+            pass
+        try:
+            while not audio_queue.empty():
+                audio_queue.get_nowait()
+        except:
+            pass
 
 
 async def _refresh_url(ydl_refresh_info: dict) -> Optional[str]:
@@ -1202,17 +1332,20 @@ async def stream_video_chunked(
                         "format_str": format_str,
                         "ydl_opts": ydl_opts,
                     }
-                    body = _chunked_video_generator(
-                        direct_url, http_headers, filesize, VIDEO_CHUNK_SIZE, ydl_refresh_info
+                    body = _chunked_video_generator_with_disconnect(
+                        direct_url, http_headers, filesize, VIDEO_CHUNK_SIZE, ydl_refresh_info, request
                     )
                 else:
-                    # No filesize - use simple streaming
+                    # No filesize - use simple streaming with disconnect detection
                     safe_headers = {k: v for k, v in http_headers.items() if k.lower() != "accept-encoding"}
                     async def _simple_stream() -> AsyncIterator[bytes]:
                         async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
                             async with client.stream("GET", direct_url, headers=safe_headers) as resp:
                                 resp.raise_for_status()
                                 async for data in resp.aiter_bytes(65536):
+                                    if await request.is_disconnected():
+                                        logger.info("Client disconnected, stopping simple video stream")
+                                        break
                                     yield data
                     body = _simple_stream()
 
@@ -1261,7 +1394,7 @@ async def stream_video_chunked(
             body = _stream_chunked_merge(
                 video_fmt, audio_fmt, global_headers,
                 {"proxy": proxy, "impersonate": impersonate},
-                url, format_str
+                url, format_str, request
             )
 
             # Build response headers dengan estimasi content length
@@ -1307,12 +1440,13 @@ async def stream_video_chunked(
         else:
             # HLS/DASH - use ffmpeg
             logger.info("Format requires ffmpeg streaming (HLS/DASH)")
-            return _streaming_response(
+            return await _streaming_response(
                 url=url,
                 format_str=format_str,
                 audio_only=False,
                 download=download,
                 ydl_opts=ydl_opts,
+                request=request,
             )
 
     except HTTPException:
@@ -1333,6 +1467,7 @@ async def _stream_mp3_chunked(
     global_headers: dict,
     ydl_opts: dict,
     original_url: str,
+    request: FastAPIRequest,
 ) -> AsyncIterator[bytes]:
     """
     Stream MP3 dengan true streaming menggunakan pipe.
@@ -1356,6 +1491,9 @@ async def _stream_mp3_chunked(
         "ydl_opts": ydl_opts,
     }
 
+    # Cancellation event untuk signal disconnect
+    cancel_event = threading.Event()
+
     # Queue untuk komunikasi antara download thread dan async generator
     download_queue = queue.Queue(maxsize=32)  # Buffer ~2MB
     download_done = threading.Event()
@@ -1364,20 +1502,23 @@ async def _stream_mp3_chunked(
     def download_to_queue():
         """Download audio dalam thread terpisah, push ke queue."""
         try:
+            if cancel_event.is_set():
+                return
             if audio_size:
                 # Use chunked download
                 asyncio.run(_download_chunked_to_queue(
                     audio_url, audio_headers, audio_size,
-                    CHUNK_SIZE, ydl_refresh_info, download_queue
+                    CHUNK_SIZE, ydl_refresh_info, download_queue, cancel_event
                 ))
             else:
                 # Simple download
                 asyncio.run(_download_simple_to_queue(
-                    audio_url, audio_headers, download_queue
+                    audio_url, audio_headers, download_queue, cancel_event
                 ))
         except Exception as e:
-            download_error[0] = e
-            logger.error(f"Download error: {e}")
+            if not cancel_event.is_set():
+                download_error[0] = e
+                logger.error(f"Download error: {e}")
         finally:
             download_done.set()
             download_queue.put(None)  # Signal EOF
@@ -1403,29 +1544,36 @@ async def _stream_mp3_chunked(
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
-    
+
     # Register process untuk automatic cleanup
     process_manager.register_process(ffmpeg_proc, process_type="ffmpeg_audio")
 
     # Thread untuk feed ffmpeg stdin dari queue
     def feed_ffmpeg_stdin():
         try:
-            while True:
+            while not cancel_event.is_set():
                 chunk = download_queue.get()
                 if chunk is None:
                     break
                 ffmpeg_proc.stdin.write(chunk)
             ffmpeg_proc.stdin.close()
         except Exception as e:
-            logger.error(f"Feed error: {e}")
+            if not cancel_event.is_set():
+                logger.error(f"Feed error: {e}")
 
     feed_thread = threading.Thread(target=feed_ffmpeg_stdin, daemon=True)
     feed_thread.start()
 
-    # Async generator: baca dari ffmpeg stdout dan yield ke client
+    # Async generator: baca dari ffmpeg stdout dan yield ke client dengan disconnect detection
     try:
         loop = asyncio.get_event_loop()
         while True:
+            # Check for client disconnect
+            if await request.is_disconnected():
+                logger.info("Client disconnected, stopping MP3 stream")
+                cancel_event.set()
+                break
+
             # Read dari stdout dalam executor agar tidak blocking
             chunk = await loop.run_in_executor(
                 None, ffmpeg_proc.stdout.read, 65536
@@ -1434,31 +1582,55 @@ async def _stream_mp3_chunked(
                 break
             yield chunk
     finally:
-        ffmpeg_proc.stdout.close()
-        ffmpeg_proc.wait()
+        # Signal cancellation ke semua threads
+        cancel_event.set()
+
+        # Cleanup ffmpeg
+        try:
+            ffmpeg_proc.stdout.close()
+            ffmpeg_proc.terminate()
+            ffmpeg_proc.wait(timeout=2)
+        except:
+            try:
+                ffmpeg_proc.kill()
+                ffmpeg_proc.wait(timeout=1)
+            except:
+                pass
         process_manager.unregister_process(ffmpeg_proc.pid)
 
+        # Drain queue untuk unblock threads
+        try:
+            while not download_queue.empty():
+                download_queue.get_nowait()
+        except:
+            pass
 
-async def _download_chunked_to_queue(url, headers, size, chunk_size, refresh_info, q):
+
+async def _download_chunked_to_queue(url, headers, size, chunk_size, refresh_info, q, cancel_event=None):
     """Helper: download chunked dan push ke queue."""
     ydl_refresh_info = refresh_info
     try:
         async for chunk in _chunked_video_generator(
-            url, headers, size, chunk_size, ydl_refresh_info
+            url, headers, size, chunk_size, ydl_refresh_info, cancel_event
         ):
+            if cancel_event and cancel_event.is_set():
+                break
             q.put(chunk)
     except Exception as e:
-        logger.error(f"Chunked download error: {e}")
+        if cancel_event is None or not cancel_event.is_set():
+            logger.error(f"Chunked download error: {e}")
         raise
 
 
-async def _download_simple_to_queue(url, headers, q):
+async def _download_simple_to_queue(url, headers, q, cancel_event=None):
     """Helper: simple download dan push ke queue."""
     safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
     async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
         async with client.stream("GET", url, headers=safe_headers) as resp:
             resp.raise_for_status()
             async for data in resp.aiter_bytes():
+                if cancel_event and cancel_event.is_set():
+                    break
                 q.put(data)
 
 
@@ -1507,7 +1679,7 @@ async def stream_mp3_chunked(
             fmt = resolved[0]
             logger.info("Using chunked download for MP3")
             body = _stream_mp3_chunked(
-                fmt, global_headers, ydl_opts, url
+                fmt, global_headers, ydl_opts, url, request
             )
 
             # Build response headers dengan estimasi content length
@@ -1545,12 +1717,13 @@ async def stream_mp3_chunked(
         else:
             # HLS/DASH - use ffmpeg streaming
             logger.info("Format requires ffmpeg streaming (HLS/DASH)")
-            return _streaming_response(
+            return await _streaming_response(
                 url=url,
                 format_str=AUDIO_FORMAT,
                 audio_only=True,
                 download=download,
                 ydl_opts=ydl_opts,
+                request=request,
             )
 
     except HTTPException:

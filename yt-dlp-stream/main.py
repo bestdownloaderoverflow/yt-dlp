@@ -1,10 +1,20 @@
+import asyncio
 import logging
+import os
 import subprocess
-from typing import Optional
+import sys
+import tempfile
+from typing import Optional, AsyncIterator
+from pathlib import Path
 
+import httpx
+
+# Use local yt_dlp fork from parent directory
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import yt_dlp
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
+from urllib.parse import quote
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -41,6 +51,10 @@ QUALITY_FORMATS = {
 }
 
 AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
+AUDIO_FORMAT_M4A = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
+
+CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB per range request (mirrors cobalt)
+VIDEO_CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB for video chunks
 
 
 def _header_str(headers: dict) -> str:
@@ -164,7 +178,7 @@ def build_ffmpeg_single_cmd(
         cmd.extend([
             "-vn",
             "-acodec", "libmp3lame",
-            "-q:a", "2",
+            "-b:a", "192k",
             "-f", "mp3",
             "pipe:1",
         ])
@@ -258,7 +272,7 @@ def stream_generator_ffmpeg(
     ffmpeg_proc = subprocess.Popen(
         ffmpeg_cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
     )
 
     try:
@@ -270,11 +284,6 @@ def stream_generator_ffmpeg(
     finally:
         ffmpeg_proc.stdout.close()
         ffmpeg_proc.wait()
-
-        if ffmpeg_proc.returncode not in (0, None):
-            stderr_out = ffmpeg_proc.stderr.read().decode(errors="replace")
-            logger.error(f"FFmpeg exited {ffmpeg_proc.returncode}: {stderr_out}")
-        ffmpeg_proc.stderr.close()
 
 
 def _build_ydl_opts(
@@ -319,13 +328,24 @@ def _streaming_response(
 
     media_type = "audio/mpeg" if audio_only else "video/mp4"
     disposition = "attachment" if download else "inline"
-    safe_name = filename.replace('"', '\\"')
+
+    # RFC 5987/RFC 6266 encoding for non-ASCII filenames
+    # filename* uses UTF-8 encoding for unicode characters
+    ascii_name = filename.encode('ascii', 'ignore').decode()
+    utf8_name = quote(filename, safe='')
+
+    if ascii_name == filename:
+        # All ASCII - use simple filename
+        cd_header = f'{disposition}; filename="{filename.replace(chr(34), chr(92)+chr(34))}"'
+    else:
+        # Contains non-ASCII - use filename* for UTF-8 support
+        cd_header = f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
 
     return StreamingResponse(
         chunk_generator(),
         media_type=media_type,
         headers={
-            "Content-Disposition": f'{disposition}; filename="{safe_name}"',
+            "Content-Disposition": cd_header,
             "X-Accel-Buffering": "no",
         },
     )
@@ -340,8 +360,11 @@ def root():
         "endpoints": {
             "info": "GET /info?url=...",
             "video": "GET /stream/video?url=...&quality=1080|720|480|360",
+            "video_chunked": "GET /stream/video-chunked?url=...&quality=1080 (Cobalt-style, best for long videos)",
             "video_custom": "GET /stream/video?url=...&format=<yt-dlp format string>",
             "mp3": "GET /stream/mp3?url=...",
+            "mp3_chunked": "GET /stream/mp3-chunked?url=... (Cobalt-style, best for long audio)",
+            "m4a": "GET /stream/m4a?url=... (no ffmpeg, chunked range, fastest)",
             "audio_legacy": "GET /stream/audio?url=...",
         },
     }
@@ -464,6 +487,123 @@ def stream_mp3(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _chunked_range_generator(
+    url: str,
+    headers: dict,
+    total_size: int,
+    chunk_size: int = CHUNK_SIZE,
+) -> AsyncIterator[bytes]:
+    """
+    Cobalt-style chunked range download: fetches the remote file in
+    sequential Range requests so each chunk is independently retryable
+    and the connection never times out on large files.
+    """
+    read = 0
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+        while read < total_size:
+            end = min(read + chunk_size - 1, total_size - 1)
+            range_headers = {**headers, "Range": f"bytes={read}-{end}"}
+            async with client.stream("GET", url, headers=range_headers) as resp:
+                resp.raise_for_status()
+                async for data in resp.aiter_bytes():
+                    yield data
+                    read += len(data)
+
+
+def stream_generator_direct(
+    url: str,
+    format_str: str,
+    ydl_opts: dict,
+):
+    """
+    Resolve the best audio URL via yt-dlp, then yield:
+      (b"", filename, http_headers, filesize, direct_url)
+    for the caller to perform a chunked range download without ffmpeg.
+    """
+    info_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        **ydl_opts,
+    }
+
+    with yt_dlp.YoutubeDL(info_opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+
+        if not info:
+            raise ValueError("Could not extract video info")
+
+        base_filename = info.get("title", "download") or "download"
+        global_headers = info.get("http_headers") or {}
+        resolved = resolve_formats(info, format_str, ydl)
+
+    fmt = resolved[0]
+    ext = fmt.get("ext") or "m4a"
+    out_filename = f"{base_filename}.{ext}"
+    direct_url = fmt["url"]
+    http_headers = fmt.get("http_headers") or global_headers
+    filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+
+    return out_filename, direct_url, http_headers, filesize, ext
+
+
+@app.get("/stream/m4a")
+async def stream_m4a(
+    url: str = Query(..., description="Video URL"),
+    download: bool = Query(False, description="Force download as attachment"),
+    proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
+    impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+):
+    """
+    Extract best audio and stream directly as m4a/webm **without ffmpeg**.
+    Uses cobalt-style chunked Range requests for consistent speed regardless
+    of video duration. No re-encoding — zero CPU overhead.
+    """
+    try:
+        out_filename, direct_url, http_headers, filesize, ext = stream_generator_direct(
+            url=url,
+            format_str=AUDIO_FORMAT_M4A,
+            ydl_opts=_build_ydl_opts(proxy, impersonate),
+        )
+    except yt_dlp.utils.DownloadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    safe_headers = {k: v for k, v in http_headers.items() if k.lower() != "accept-encoding"}
+
+    disposition = "attachment" if download else "inline"
+    ascii_name = out_filename.encode("ascii", "ignore").decode()
+    utf8_name = quote(out_filename, safe="")
+    if ascii_name == out_filename:
+        cd_header = f'{disposition}; filename="{out_filename.replace(chr(34), chr(92)+chr(34))}"'
+    else:
+        cd_header = f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
+
+    ext_to_mime = {"m4a": "audio/mp4", "webm": "audio/webm", "ogg": "audio/ogg"}
+    media_type = ext_to_mime.get(ext, "audio/mp4")
+
+    response_headers = {
+        "Content-Disposition": cd_header,
+        "X-Accel-Buffering": "no",
+    }
+    if filesize:
+        response_headers["Content-Length"] = str(filesize)
+
+    if filesize:
+        body = _chunked_range_generator(direct_url, safe_headers, filesize)
+    else:
+        async def _simple_stream() -> AsyncIterator[bytes]:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+                async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                    resp.raise_for_status()
+                    async for data in resp.aiter_bytes(65536):
+                        yield data
+        body = _simple_stream()
+
+    return StreamingResponse(body, media_type=media_type, headers=response_headers)
+
+
 @app.get("/stream/audio")
 def stream_audio(
     url: str = Query(..., description="Video URL"),
@@ -487,4 +627,558 @@ def stream_audio(
     except yt_dlp.utils.DownloadError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -----------------------------------------------------------------------------
+# Chunked video streaming (Cobalt-style) for consistent speed on long videos
+# -----------------------------------------------------------------------------
+
+async def _chunked_video_generator(
+    url: str,
+    headers: dict,
+    total_size: int,
+    chunk_size: int,
+    ydl_refresh_info: dict,  # For URL transplanting
+) -> AsyncIterator[bytes]:
+    """
+    Cobalt-style chunked range download for video.
+    Fetches the remote file in sequential Range requests so each chunk
+    is independently retryable and the connection never times out on large files.
+    Supports URL transplanting when URLs expire (403 Forbidden).
+    """
+    read = 0
+    refresh_count = 0
+    max_refreshes = 10
+
+    safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+        while read < total_size:
+            end = min(read + chunk_size - 1, total_size - 1)
+            range_headers = {**safe_headers, "Range": f"bytes={read}-{end}"}
+
+            try:
+                async with client.stream("GET", url, headers=range_headers) as resp:
+                    if resp.status_code == 403 and refresh_count < max_refreshes:
+                        # URL expired - try to refresh (transplant)
+                        logger.warning(f"URL expired at byte {read}, attempting refresh...")
+                        new_url = await _refresh_url(ydl_refresh_info)
+                        if new_url:
+                            url = new_url
+                            refresh_count += 1
+                            logger.info(f"URL refreshed successfully (attempt {refresh_count})")
+                            continue  # Retry same chunk with new URL
+                        else:
+                            logger.error("Failed to refresh URL")
+                            raise HTTPException(status_code=403, detail="URL expired and could not be refreshed")
+
+                    resp.raise_for_status()
+                    async for data in resp.aiter_bytes():
+                        yield data
+                        read += len(data)
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 403 and refresh_count < max_refreshes:
+                    logger.warning(f"HTTP 403 at byte {read}, attempting refresh...")
+                    new_url = await _refresh_url(ydl_refresh_info)
+                    if new_url:
+                        url = new_url
+                        refresh_count += 1
+                        continue
+                raise
+
+
+async def _stream_chunked_merge(
+    video_fmt: dict,
+    audio_fmt: dict,
+    global_headers: dict,
+    ydl_opts: dict,
+    original_url: str,
+    format_str: str,
+) -> AsyncIterator[bytes]:
+    """
+    Download video and audio separately using chunked method, then merge with ffmpeg.
+    This gives the benefits of chunked download (consistent speed) while still
+    supporting separate video+audio tracks.
+    """
+    import tempfile
+    import asyncio
+    import os
+
+    video_headers = video_fmt.get("http_headers") or global_headers
+    audio_headers = audio_fmt.get("http_headers") or global_headers
+    video_url = video_fmt["url"]
+    audio_url = audio_fmt["url"]
+    video_size = video_fmt.get("filesize") or video_fmt.get("filesize_approx") or 0
+    audio_size = audio_fmt.get("filesize") or audio_fmt.get("filesize_approx") or 0
+
+    ydl_refresh_info = {
+        "url": original_url,
+        "format_str": format_str,
+        "ydl_opts": ydl_opts,
+    }
+
+    # Create temp files for video and audio
+    tmpdir = tempfile.mkdtemp()
+    try:
+        video_path = os.path.join(tmpdir, "video")
+        audio_path = os.path.join(tmpdir, "audio")
+
+        # Download both in parallel
+        async def download_video():
+            video_file = open(video_path, "wb")
+            try:
+                if video_size:
+                    async for chunk in _chunked_video_generator(
+                        video_url, video_headers, video_size, VIDEO_CHUNK_SIZE, ydl_refresh_info
+                    ):
+                        video_file.write(chunk)
+                else:
+                    # No size info - simple download
+                    safe_headers = {k: v for k, v in video_headers.items() if k.lower() != "accept-encoding"}
+                    async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+                        async with client.stream("GET", video_url, headers=safe_headers) as resp:
+                            resp.raise_for_status()
+                            async for data in resp.aiter_bytes():
+                                video_file.write(data)
+            finally:
+                video_file.close()
+
+        async def download_audio():
+            audio_file = open(audio_path, "wb")
+            try:
+                if audio_size:
+                    async for chunk in _chunked_video_generator(
+                        audio_url, audio_headers, audio_size, VIDEO_CHUNK_SIZE, ydl_refresh_info
+                    ):
+                        audio_file.write(chunk)
+                else:
+                    safe_headers = {k: v for k, v in audio_headers.items() if k.lower() != "accept-encoding"}
+                    async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+                        async with client.stream("GET", audio_url, headers=safe_headers) as resp:
+                            resp.raise_for_status()
+                            async for data in resp.aiter_bytes():
+                                audio_file.write(data)
+            finally:
+                audio_file.close()
+
+        # Run downloads in parallel
+        await asyncio.gather(download_video(), download_audio())
+
+        # Merge with ffmpeg
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", video_path,
+            "-i", audio_path,
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-c:a", "aac",
+            "-movflags", "frag_keyframe+empty_moov+faststart",
+            "-f", "mp4",
+            "pipe:1",
+        ]
+
+        ffmpeg_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+        try:
+            while True:
+                chunk = ffmpeg_proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            ffmpeg_proc.stdout.close()
+            ffmpeg_proc.wait()
+
+    finally:
+        # Cleanup temp files
+        try:
+            if os.path.exists(video_path):
+                os.remove(video_path)
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            os.rmdir(tmpdir)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp files: {e}")
+
+
+async def _refresh_url(ydl_refresh_info: dict) -> Optional[str]:
+    """
+    Refresh expired URL by re-extracting info from yt-dlp.
+    This is the 'transplant' mechanism from Cobalt.
+    """
+    try:
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        def _extract():
+            with yt_dlp.YoutubeDL(ydl_refresh_info["ydl_opts"]) as ydl:
+                info = ydl.extract_info(ydl_refresh_info["url"], download=False)
+                if not info:
+                    return None
+                resolved = resolve_formats(info, ydl_refresh_info["format_str"], ydl)
+                fmt = resolved[0]
+                return fmt["url"]
+
+        return await loop.run_in_executor(None, _extract)
+    except Exception as e:
+        logger.error(f"URL refresh failed: {e}")
+        return None
+
+
+def can_use_chunked_streaming(fmt: dict) -> bool:
+    """
+    Check if format supports chunked HTTP range requests.
+    HLS/DASH manifests should use ffmpeg, not chunked download.
+    """
+    protocol = fmt.get("protocol", "")
+    # Only plain HTTP/HTTPS progressive download supports range requests reliably
+    return protocol in ("http", "https", "")
+
+
+def can_use_chunked_streaming_multi(formats: list[dict]) -> bool:
+    """
+    Check if all formats support chunked HTTP range requests.
+    Returns True only if all formats are plain HTTP progressive download.
+    """
+    return all(can_use_chunked_streaming(fmt) for fmt in formats)
+
+
+@app.get("/stream/video-chunked")
+async def stream_video_chunked(
+    url: str = Query(..., description="Video URL"),
+    quality: Optional[str] = Query(None, description="Quality preset: 1080, 720, 480, 360"),
+    format: Optional[str] = Query(None, description="Custom yt-dlp format string (overrides quality)"),
+    download: bool = Query(False, description="Force download as attachment"),
+    proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
+    impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+):
+    """
+    Stream video using Cobalt-style chunked range requests.
+
+    This endpoint is optimized for long videos - it downloads in 10MB chunks
+    with fresh connections per chunk, avoiding the speed degradation that
+    occurs with single long-running connections.
+
+    - Falls back to ffmpeg streaming for HLS/DASH manifests
+    - Supports URL transplanting (refresh) when URLs expire mid-download
+    - Best for: YouTube progressive download formats, long videos
+
+    Query params:
+    - `quality`: 1080, 720, 480, 360 (default: 1080)
+    - `format`: raw yt-dlp format string (overrides quality)
+    - `download`: force attachment disposition
+    - `impersonate`: browser for TLS fingerprinting
+    """
+    if format:
+        format_str = format
+    elif quality:
+        if quality not in QUALITY_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid quality '{quality}'. Choose from: {', '.join(QUALITY_FORMATS)}",
+            )
+        format_str = QUALITY_FORMATS[quality]
+    else:
+        format_str = QUALITY_FORMATS["1080"]
+
+    ydl_opts = _build_ydl_opts(proxy, impersonate)
+    info_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        **ydl_opts,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise ValueError("Could not extract video info")
+
+            base_filename = info.get("title", "download") or "download"
+            out_filename = f"{base_filename}.mp4"
+
+            global_headers = info.get("http_headers") or {}
+            resolved = resolve_formats(info, format_str, ydl)
+
+            # Check if we can use chunked download or need ffmpeg
+            can_chunk = len(resolved) == 1 and can_use_chunked_streaming(resolved[0])
+            can_chunk_multi = len(resolved) == 2 and can_use_chunked_streaming_multi(resolved)
+
+            if can_chunk:
+                # Single progressive download file
+                fmt = resolved[0]
+                direct_url = fmt["url"]
+                http_headers = fmt.get("http_headers") or global_headers
+                filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+
+                if filesize:
+                    # Use chunked streaming with URL transplant support
+                    ydl_refresh_info = {
+                        "url": url,
+                        "format_str": format_str,
+                        "ydl_opts": ydl_opts,
+                    }
+                    body = _chunked_video_generator(
+                        direct_url, http_headers, filesize, VIDEO_CHUNK_SIZE, ydl_refresh_info
+                    )
+                else:
+                    # No filesize - use simple streaming
+                    safe_headers = {k: v for k, v in http_headers.items() if k.lower() != "accept-encoding"}
+                    async def _simple_stream() -> AsyncIterator[bytes]:
+                        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+                            async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                                resp.raise_for_status()
+                                async for data in resp.aiter_bytes(65536):
+                                    yield data
+                    body = _simple_stream()
+
+                # Build response headers
+                disposition = "attachment" if download else "inline"
+                ascii_name = out_filename.encode("ascii", "ignore").decode()
+                utf8_name = quote(out_filename, safe="")
+                if ascii_name == out_filename:
+                    cd_header = f'{disposition}; filename="{out_filename.replace(chr(34), chr(92)+chr(34))}"'
+                else:
+                    cd_header = f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
+
+                response_headers = {
+                    "Content-Disposition": cd_header,
+                    "X-Accel-Buffering": "no",
+                }
+                if filesize:
+                    response_headers["Content-Length"] = str(filesize)
+
+                return StreamingResponse(
+                    body,
+                    media_type="video/mp4",
+                    headers=response_headers,
+                )
+
+            elif can_chunk_multi:
+                # Separate video + audio, both progressive download
+                # Download both to temp files with chunked method, then merge with ffmpeg
+                video_fmt, audio_fmt = resolved[0], resolved[1]
+                if video_fmt.get("vcodec", "none") in (None, "none", ""):
+                    video_fmt, audio_fmt = audio_fmt, video_fmt
+
+                logger.info("Using chunked download for separate video+audio tracks")
+                body = _stream_chunked_merge(
+                    video_fmt, audio_fmt, global_headers, ydl_opts, url, format_str
+                )
+
+                # Build response headers (no Content-Length since we're streaming)
+                disposition = "attachment" if download else "inline"
+                ascii_name = out_filename.encode("ascii", "ignore").decode()
+                utf8_name = quote(out_filename, safe="")
+                if ascii_name == out_filename:
+                    cd_header = f'{disposition}; filename="{out_filename.replace(chr(34), chr(92)+chr(34))}"'
+                else:
+                    cd_header = f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
+
+                return StreamingResponse(
+                    body,
+                    media_type="video/mp4",
+                    headers={
+                        "Content-Disposition": cd_header,
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+
+            else:
+                # HLS/DASH - use ffmpeg
+                logger.info("Format requires ffmpeg streaming (HLS/DASH)")
+                return _streaming_response(
+                    url=url,
+                    format_str=format_str,
+                    audio_only=False,
+                    download=download,
+                    ydl_opts=ydl_opts,
+                )
+
+    except HTTPException:
+        raise
+    except yt_dlp.utils.DownloadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Error in stream_video_chunked")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# -----------------------------------------------------------------------------
+# Chunked MP3 streaming (Cobalt-style) for consistent speed on long audio
+# -----------------------------------------------------------------------------
+
+async def _stream_mp3_chunked(
+    audio_fmt: dict,
+    global_headers: dict,
+    ydl_opts: dict,
+    original_url: str,
+) -> AsyncIterator[bytes]:
+    """
+    Download audio using chunked method, then re-encode to MP3 with ffmpeg.
+    This gives consistent download speed for long audio files.
+    """
+    audio_headers = audio_fmt.get("http_headers") or global_headers
+    audio_url = audio_fmt["url"]
+    audio_size = audio_fmt.get("filesize") or audio_fmt.get("filesize_approx") or 0
+
+    ydl_refresh_info = {
+        "url": original_url,
+        "format_str": AUDIO_FORMAT,
+        "ydl_opts": ydl_opts,
+    }
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        audio_path = os.path.join(tmpdir, "audio")
+
+        # Download audio with chunked method
+        audio_file = open(audio_path, "wb")
+        try:
+            if audio_size:
+                async for chunk in _chunked_video_generator(
+                    audio_url, audio_headers, audio_size, CHUNK_SIZE, ydl_refresh_info
+                ):
+                    audio_file.write(chunk)
+            else:
+                # No size info - simple download
+                safe_headers = {k: v for k, v in audio_headers.items() if k.lower() != "accept-encoding"}
+                async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+                    async with client.stream("GET", audio_url, headers=safe_headers) as resp:
+                        resp.raise_for_status()
+                        async for data in resp.aiter_bytes():
+                            audio_file.write(data)
+        finally:
+            audio_file.close()
+
+        # Re-encode to MP3 with ffmpeg
+        cmd = [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", audio_path,
+            "-vn",
+            "-acodec", "libmp3lame",
+            "-b:a", "192k",
+            "-f", "mp3",
+            "pipe:1",
+        ]
+
+        ffmpeg_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+
+        try:
+            while True:
+                chunk = ffmpeg_proc.stdout.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            ffmpeg_proc.stdout.close()
+            ffmpeg_proc.wait()
+
+    finally:
+        # Cleanup temp files
+        try:
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
+            os.rmdir(tmpdir)
+        except Exception as e:
+            logger.warning(f"Failed to cleanup temp files: {e}")
+
+
+@app.get("/stream/mp3-chunked")
+async def stream_mp3_chunked(
+    url: str = Query(..., description="Video URL"),
+    download: bool = Query(False, description="Force download as attachment"),
+    proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
+    impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
+):
+    """
+    Stream MP3 using Cobalt-style chunked range requests.
+
+    This endpoint is optimized for long audio - it downloads in 8MB chunks
+    with fresh connections per chunk, avoiding the speed degradation that
+    occurs with single long-running connections. Audio is re-encoded to MP3
+    via libmp3lame at 192k.
+
+    - Falls back to ffmpeg streaming for HLS/DASH manifests
+    - Supports URL transplanting (refresh) when URLs expire mid-download
+    - Best for: Long audio tracks, podcasts, music
+
+    Query params:
+    - `download`: force attachment disposition
+    - `impersonate`: browser for TLS fingerprinting
+    """
+    ydl_opts = _build_ydl_opts(proxy, impersonate)
+    info_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        **ydl_opts,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise ValueError("Could not extract video info")
+
+            base_filename = info.get("title", "download") or "download"
+            out_filename = f"{base_filename}.mp3"
+
+            global_headers = info.get("http_headers") or {}
+            resolved = resolve_formats(info, AUDIO_FORMAT, ydl)
+
+            # Check if we can use chunked download or need ffmpeg
+            if len(resolved) == 1 and can_use_chunked_streaming(resolved[0]):
+                fmt = resolved[0]
+                logger.info("Using chunked download for MP3")
+                body = _stream_mp3_chunked(
+                    fmt, global_headers, ydl_opts, url
+                )
+
+                # Build response headers
+                disposition = "attachment" if download else "inline"
+                ascii_name = out_filename.encode("ascii", "ignore").decode()
+                utf8_name = quote(out_filename, safe="")
+                if ascii_name == out_filename:
+                    cd_header = f'{disposition}; filename="{out_filename.replace(chr(34), chr(92)+chr(34))}"'
+                else:
+                    cd_header = f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
+
+                return StreamingResponse(
+                    body,
+                    media_type="audio/mpeg",
+                    headers={
+                        "Content-Disposition": cd_header,
+                        "X-Accel-Buffering": "no",
+                    },
+                )
+            else:
+                # HLS/DASH - use ffmpeg streaming
+                logger.info("Format requires ffmpeg streaming (HLS/DASH)")
+                return _streaming_response(
+                    url=url,
+                    format_str=AUDIO_FORMAT,
+                    audio_only=True,
+                    download=download,
+                    ydl_opts=ydl_opts,
+                )
+
+    except HTTPException:
+        raise
+    except yt_dlp.utils.DownloadError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.exception("Error in stream_mp3_chunked")
         raise HTTPException(status_code=500, detail=str(e))

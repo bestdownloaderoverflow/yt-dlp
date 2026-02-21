@@ -17,7 +17,7 @@ from typing import Dict, Set, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
-logger = logging.getLogger("uvicorn.error")
+logger = logging.getLogger("ytdlp_stream")
 
 
 @dataclass

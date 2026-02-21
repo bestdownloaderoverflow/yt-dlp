@@ -25,7 +25,7 @@ from process_manager import process_manager
 from security import is_localhost, rate_limiter, create_stream_token, validate_stream_token
 from internal_tunnel import internal_tunnel
 
-logger = logging.getLogger("uvicorn.error")
+logger = logging.getLogger("ytdlp_stream")
 
 app = FastAPI(title="yt-dlp Stream API", version="3.0.0")
 

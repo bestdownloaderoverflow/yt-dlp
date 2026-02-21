@@ -1,5 +1,6 @@
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
-yt-dlp==2024.5.27
-httpx==0.27.0
-psutil==5.9.8
+fastapi>=0.129.0
+granian[reload]>=2.7.1
+uvloop>=0.22.1; sys_platform != 'win32'
+# yt-dlp is included locally from yt_dlp/ directory
+httpx>=0.28.1
+psutil>=6.0.0

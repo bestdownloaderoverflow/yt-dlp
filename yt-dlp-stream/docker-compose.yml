@@ -1,0 +1,118 @@
+version: "3.8"
+
+services:
+  # Development service with hot reload
+  app-dev:
+    build:
+      context: ..  # Parent directory to access yt_dlp
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: development
+    container_name: ytdlp-stream-dev
+    ports:
+      - "9487:9487"
+    volumes:
+      - ../yt-dlp-stream:/app
+      - ../yt_dlp:/app/yt_dlp
+      - /app/venv
+      - /app/__pycache__
+    environment:
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-debug}
+      - PYTHONPATH=/app:/app/yt_dlp
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9487/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-network
+    profiles:
+      - dev
+
+  # Production service
+  app-prod:
+    build:
+      context: ..  # Parent directory to access yt_dlp
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: production
+    container_name: ytdlp-stream-prod
+    ports:
+      - "9487:9487"
+    environment:
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9487/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 2G
+        reservations:
+          cpus: '2'
+          memory: 1G
+    restart: unless-stopped
+    networks:
+      - ytdlp-network
+    profiles:
+      - prod
+
+  # Production with multiple workers (scaled)
+  app-prod-scaled:
+    build:
+      context: ..  # Parent directory to access yt_dlp
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: production
+    ports:
+      - "9487-9490:9487"
+    environment:
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9487/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      mode: replicated
+      replicas: 4
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
+    restart: unless-stopped
+    networks:
+      - ytdlp-network
+    profiles:
+      - scaled
+
+  # Nginx load balancer for scaled deployment
+  nginx:
+    image: nginx:alpine
+    container_name: ytdlp-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - app-prod-scaled
+    networks:
+      - ytdlp-network
+    profiles:
+      - scaled
+    restart: unless-stopped
+
+networks:
+  ytdlp-network:
+    driver: bridge

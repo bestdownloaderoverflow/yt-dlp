@@ -66,6 +66,18 @@ def generate_mp3_link(url: str) -> str:
     return f"/download?key={key}"
 
 
+def get_photo_url(formats: list) -> str:
+    """Get original quality photo URL from formats."""
+    # Try to get 'orig' quality first
+    for f in formats:
+        if f.get("format_id") == "orig":
+            return f.get("url")
+    # Fallback to last format (usually highest quality)
+    if formats:
+        return formats[-1].get("url")
+    return None
+
+
 def generate_photo_links(url: str, info: dict) -> list:
     """Generate download links for photos."""
     photos = []
@@ -74,6 +86,8 @@ def generate_photo_links(url: str, info: dict) -> list:
         # Multi photos
         entries = info.get("entries", [])
         for idx, entry in enumerate(entries, 1):
+            formats = entry.get("formats", [])
+            photo_url = get_photo_url(formats)
             key = download_cache.create_session(
                 url=url, type="photo", photo_index=idx
             )
@@ -81,15 +95,19 @@ def generate_photo_links(url: str, info: dict) -> list:
                 "index": idx,
                 "width": entry.get("width"),
                 "height": entry.get("height"),
+                "url": photo_url,
                 "download_link": f"/download?key={key}",
             })
     else:
         # Single photo
+        formats = info.get("formats", [])
+        photo_url = get_photo_url(formats)
         key = download_cache.create_session(url=url, type="photo", photo_index=1)
         photos.append({
             "index": 1,
             "width": info.get("width"),
             "height": info.get("height"),
+            "url": photo_url,
             "download_link": f"/download?key={key}",
         })
 

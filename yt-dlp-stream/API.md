@@ -66,12 +66,14 @@ Mengambil metadata dari URL dan menghasilkan encrypted download links yang berla
       "index": 1,
       "width": 680,
       "height": 680,
+      "url": "https://pbs.twimg.com/media/xxx.jpg?name=orig",
       "download_link": "/download?key=photo-1-abc..."
     },
     {
       "index": 2,
       "width": 400,
       "height": 400,
+      "url": "https://pbs.twimg.com/media/yyy.jpg?name=orig",
       "download_link": "/download?key=photo-2-def..."
     }
   ]
@@ -104,12 +106,12 @@ Mendownload video, MP3, atau foto menggunakan encrypted key dari endpoint `/fetc
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | key | string | Yes | Download key dari `/fetch` |
-| download | boolean | No | Force download sebagai attachment (default: false) |
+| download | boolean | No | Force download sebagai attachment (default: true) |
 
 **Response:**
-- Video: `video/mp4` streaming response
-- MP3: `audio/mpeg` streaming response
-- Photo: Redirect ke direct URL
+- Video: `video/mp4` streaming response (attachment)
+- MP3: `audio/mpeg` streaming response (attachment)
+- Photo: `image/*` streaming response (attachment)
 
 **Error Response:**
 
@@ -125,8 +127,8 @@ Mendownload video, MP3, atau foto menggunakan encrypted key dari endpoint `/fetc
 # Download video (ganti dengan key dari response fetch)
 curl "http://localhost:9487/download?key=abc123" -o video.mp4
 
-# Download dengan force attachment
-curl "http://localhost:9487/download?key=abc123&download=true" -o video.mp4
+# Download dengan inline (buka di browser)
+curl "http://localhost:9487/download?key=abc123&download=false"
 
 # Download MP3
 curl "http://localhost:9487/download?key=mno345" -o audio.mp3
@@ -294,7 +296,7 @@ docker-compose --profile scaled up -d
 
 1. **Chunked Streaming:** Video dan MP3 menggunakan metode chunked (10MB per chunk) untuk optimalisasi video/audio panjang.
 
-2. **Photo Download:** Photo tidak menggunakan chunked karena file kecil, langsung redirect ke direct URL.
+2. **Photo Download:** Photo di-stream sebagai attachment (bukan redirect), sehingga selalu terdownload sebagai file.
 
 3. **Redis:** Download sessions disimpan di Redis dengan max memory 256MB dan policy `allkeys-lru` (auto-evict keys jika penuh).
 

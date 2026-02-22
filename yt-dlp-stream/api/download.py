@@ -206,19 +206,23 @@ async def _download_mp3(url: str, download: bool, request: FastAPIRequest):
 async def _download_photo(
     url: str, photo_index: int, download: bool, request: FastAPIRequest
 ):
-    """Download photo - redirect to direct URL."""
+    """Download photo as attachment (proxy stream)."""
     ydl_opts = _build_ydl_opts(None, None)
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
 
     photo_url = None
+    width = None
+    height = None
 
     if info.get("_type") == "playlist":
         entries = info.get("entries", [])
         if 1 <= photo_index <= len(entries):
             entry = entries[photo_index - 1]
             formats = entry.get("formats", [])
+            width = entry.get("width")
+            height = entry.get("height")
             for f in formats:
                 if f.get("format_id") == "orig":
                     photo_url = f.get("url")
@@ -227,6 +231,8 @@ async def _download_photo(
                 photo_url = formats[-1].get("url")
     else:
         formats = info.get("formats", [])
+        width = info.get("width")
+        height = info.get("height")
         for f in formats:
             if f.get("format_id") == "orig":
                 photo_url = f.get("url")
@@ -237,7 +243,27 @@ async def _download_photo(
     if not photo_url:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    return RedirectResponse(url=photo_url)
+    # Stream photo as attachment instead of redirect
+    ext = photo_url.split("?")[0].split(".")[-1] if "." in photo_url else "jpg"
+    filename = f"photo_{photo_index}.{ext}"
+
+    async def _stream_photo() -> AsyncIterator[bytes]:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+            async with client.stream("GET", photo_url) as resp:
+                resp.raise_for_status()
+                async for data in resp.aiter_bytes(65536):
+                    if await request.is_disconnected():
+                        logger.info("Client disconnected from photo stream")
+                        break
+                    yield data
+
+    response_headers = _build_disposition_header(filename, download)
+
+    return StreamingResponse(
+        _stream_photo(),
+        media_type=f"image/{ext if ext in ['jpg', 'jpeg', 'png', 'gif', 'webp'] else 'jpeg'}",
+        headers=response_headers,
+    )
 
 
 def _build_disposition_header(filename: str, download: bool) -> dict:

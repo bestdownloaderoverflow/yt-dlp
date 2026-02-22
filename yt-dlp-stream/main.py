@@ -8,11 +8,14 @@ Refactored modular architecture:
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
-# Use local yt_dlp fork from parent directory
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add parent directory to path for local yt_dlp (only needed for non-Docker runs)
+# In Docker, PYTHONPATH is already set in Dockerfile
+if not os.getenv("PYTHONPATH", "").startswith("/app"):
+    sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from fastapi import FastAPI
 
@@ -40,7 +43,9 @@ def root():
         "version": "3.0.0",
         "docs": "/docs",
         "endpoints": {
-            "info": "GET /info?url=...",
+            "fetch": "GET /fetch?url=... (get metadata + encrypted download links)",
+            "download": "GET /download?key=... (download with encrypted key, expires in 5min)",
+            "info": "GET /info?url=... (legacy metadata)",
             "video": "GET /stream/video?url=...&quality=1080|720|480|360",
             "video_chunked": "GET /stream/video-chunked?url=...&quality=1080 (Cobalt-style, best for long videos)",
             "video_custom": "GET /stream/video?url=...&format=<yt-dlp format string>",

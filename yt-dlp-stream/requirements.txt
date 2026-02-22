@@ -4,3 +4,4 @@ uvloop>=0.22.1; sys_platform != 'win32'
 # yt-dlp is included locally from yt_dlp/ directory
 httpx>=0.28.1
 psutil>=6.0.0
+redis>=5.0.0

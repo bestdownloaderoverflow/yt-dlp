@@ -1,6 +1,21 @@
 version: "3.8"
 
 services:
+  # Redis for download session cache
+  redis:
+    image: redis:7-alpine
+    container_name: ytdlp-redis
+    volumes:
+      - redis-data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - ytdlp-network
+    profiles:
+      - dev
+      - prod
+      - scaled
+    restart: unless-stopped
+
   # Development service with hot reload
   app-dev:
     build:
@@ -19,6 +34,9 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-debug}
       - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9487/health')"]
       interval: 30s
@@ -43,6 +61,9 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9487/health')"]
       interval: 30s
@@ -75,6 +96,9 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9487/health')"]
       interval: 30s
@@ -116,3 +140,6 @@ services:
 networks:
   ytdlp-network:
     driver: bridge
+
+volumes:
+  redis-data:

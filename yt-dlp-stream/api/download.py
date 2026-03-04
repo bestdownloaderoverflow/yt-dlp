@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from typing import AsyncIterator
+from typing import AsyncIterator, Optional
 
 import httpx
 import yt_dlp
@@ -48,6 +48,7 @@ async def download(
     Download video, mp3, or photo using encrypted key.
 
     Key expires in 5 minutes after being generated.
+    For Twitter/X videos, uses direct URL proxy with session integrity headers.
     """
     session = download_cache.get_session(key)
     if not session:
@@ -60,6 +61,16 @@ async def download(
 
     try:
         if type == "video":
+            # Use direct URL proxy if available (for Twitter/X session integrity)
+            if session.direct_url and session.http_headers:
+                return await _download_video_direct(
+                    session.direct_url,
+                    session.http_headers,
+                    session.cookies,
+                    download,
+                    request,
+                )
+            # Fallback to traditional method
             return await _download_video(url, session.quality, download, request)
         elif type == "mp3":
             return await _download_mp3(url, download, request)
@@ -71,6 +82,51 @@ async def download(
     except Exception as e:
         logger.exception(f"Error in download: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _download_video_direct(
+    direct_url: str,
+    http_headers: dict,
+    cookies: Optional[str],
+    download: bool,
+    request: FastAPIRequest,
+):
+    """Download video using direct URL proxy with session integrity headers (for Twitter/X)."""
+    # Build safe headers (remove accept-encoding to avoid compression issues)
+    safe_headers = {
+        k: v for k, v in http_headers.items()
+        if k.lower() not in ("accept-encoding", "cookie")
+    }
+    safe_headers["Accept-Encoding"] = "identity"
+
+    # Add cookies if present
+    if cookies:
+        safe_headers["Cookie"] = cookies
+
+    # Extract filename from URL or use default
+    filename = "video.mp4"
+
+    async def _stream_video() -> AsyncIterator[bytes]:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=300
+        ) as client:
+            async with client.stream(
+                "GET", direct_url, headers=safe_headers
+            ) as resp:
+                resp.raise_for_status()
+                async for data in resp.aiter_bytes(65536):
+                    if await request.is_disconnected():
+                        logger.info("Client disconnected from direct video stream")
+                        break
+                    yield data
+
+    response_headers = _build_disposition_header(filename, download)
+
+    return StreamingResponse(
+        _stream_video(),
+        media_type="video/mp4",
+        headers=response_headers,
+    )
 
 
 async def _download_video(
@@ -207,10 +263,10 @@ async def _download_photo(
     url: str, photo_index: int, download: bool, request: FastAPIRequest
 ):
     """Download photo as attachment (proxy stream)."""
-    ydl_opts = _build_ydl_opts(None, None)
+    # Use ydl_manager for session integrity (preserves cookies)
+    from ytdl_manager import ydl_manager
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    info = ydl_manager.extract_info(url)
 
     photo_url = None
     width = None

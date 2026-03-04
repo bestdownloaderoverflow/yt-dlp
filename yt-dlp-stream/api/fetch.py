@@ -6,7 +6,8 @@ import yt_dlp
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from core.redis_cache import download_cache
-from core.helpers import _build_ydl_opts, _enforce_rate_limit
+from core.helpers import _enforce_rate_limit
+from ytdl_manager import ydl_manager
 
 router = APIRouter()
 
@@ -49,12 +50,53 @@ def get_available_qualities(formats: list) -> list:
     return qualities if qualities else ["best"]
 
 
-def generate_video_links(url: str, qualities: list) -> dict:
-    """Generate download links for video qualities."""
+def generate_video_links(url: str, info: dict, qualities: list) -> dict:
+    """Generate download links for video qualities with session integrity."""
     links = {}
+    formats = info.get("formats", [])
+    global_headers = info.get("http_headers") or {}
+
     for quality in qualities:
+        # Find format for this quality
+        height = int(quality.replace("p", ""))
+        fmt = None
+        for f in formats:
+            if f.get("height") == height and f.get("protocol") in ("http", "https", ""):
+                fmt = f
+                break
+
+        # Fallback to best format if no exact match
+        if not fmt:
+            for f in formats:
+                if f.get("protocol") in ("http", "https", ""):
+                    fmt = f
+                    break
+
+        # Prepare session data
+        direct_url = None
+        http_headers = None
+        cookies = None
+
+        if fmt:
+            direct_url = fmt.get("url")
+            # Get format-specific headers or global headers
+            fmt_headers = fmt.get("http_headers") or global_headers
+            # Calculate headers with cookies using ydl_manager
+            try:
+                calc_headers = ydl_manager.calc_headers(fmt, load_cookies=True)
+                http_headers = {k: v for k, v in calc_headers.items() if k.lower() != "cookie"}
+                cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
+            except Exception:
+                # Fallback to format headers
+                http_headers = fmt_headers
+
         key = download_cache.create_session(
-            url=url, type="video", quality=quality.replace("p", "")
+            url=url,
+            type="video",
+            quality=quality.replace("p", ""),
+            direct_url=direct_url,
+            http_headers=http_headers,
+            cookies=cookies,
         )
         links[quality] = f"/download?key={key}"
     return links
@@ -138,10 +180,11 @@ async def fetch(
     _enforce_rate_limit(request)
 
     try:
-        ydl_opts = _build_ydl_opts(proxy, impersonate)
+        # Gunakan ydl_manager untuk session integrity (CookieJar persistent)
+        info = ydl_manager.extract_info(url, proxy=proxy, impersonate=impersonate)
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        if not info:
+            raise HTTPException(status_code=400, detail="Could not extract video info")
 
         content_type = detect_content_type(info)
         platform = info.get("extractor_key", "unknown").lower()
@@ -160,7 +203,7 @@ async def fetch(
         if content_type == "video":
             qualities = get_available_qualities(info.get("formats", []))
             response["download_links"] = {
-                "video": generate_video_links(url, qualities),
+                "video": generate_video_links(url, info, qualities),
                 "mp3": generate_mp3_link(url),
             }
 

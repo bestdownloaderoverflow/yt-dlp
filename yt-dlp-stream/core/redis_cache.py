@@ -22,6 +22,10 @@ class DownloadSession:
     quality: Optional[str] = None
     photo_index: Optional[int] = None
     created_at: Optional[float] = None
+    # Fields for direct download proxy (Twitter/X session integrity)
+    direct_url: Optional[str] = None
+    http_headers: Optional[dict] = None
+    cookies: Optional[str] = None
 
 
 class RedisDownloadCache:
@@ -39,6 +43,9 @@ class RedisDownloadCache:
         format_id: str = None,
         quality: str = None,
         photo_index: int = None,
+        direct_url: str = None,
+        http_headers: dict = None,
+        cookies: str = None,
     ) -> str:
         """Create new session and return key."""
         key = str(uuid.uuid4())
@@ -49,6 +56,9 @@ class RedisDownloadCache:
             quality=quality,
             photo_index=photo_index,
             created_at=None,  # Redis akan handle timestamp via TTL
+            direct_url=direct_url,
+            http_headers=http_headers,
+            cookies=cookies,
         )
 
         redis_key = f"{self._key_prefix}{key}"

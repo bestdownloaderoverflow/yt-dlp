@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter
 
-from api import info, stream_ffmpeg, stream_chunked, stream_direct, internal, health, fetch, download
+from api import info, stream_ffmpeg, stream_chunked, stream_direct, internal, health, fetch, download, tiktok
 
 # Main router
 router = APIRouter()
@@ -16,5 +16,6 @@ router.include_router(internal.router)
 router.include_router(health.router)
 router.include_router(fetch.router)
 router.include_router(download.router)
+router.include_router(tiktok.router)
 
 __all__ = ["router"]

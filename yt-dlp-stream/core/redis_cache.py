@@ -17,7 +17,7 @@ class DownloadSession:
     """Download session data."""
 
     url: str
-    type: str  # video | mp3 | photo
+    type: str  # video | mp3 | photo | slideshow
     format_id: Optional[str] = None
     quality: Optional[str] = None
     photo_index: Optional[int] = None
@@ -26,6 +26,11 @@ class DownloadSession:
     direct_url: Optional[str] = None
     http_headers: Optional[dict] = None
     cookies: Optional[str] = None
+    # TikTok-specific fields
+    photo_urls: Optional[list] = None  # List of photo URLs for slideshow
+    audio_url: Optional[str] = None  # Audio URL for slideshow
+    author: Optional[str] = None  # Author nickname for filename
+    platform: Optional[str] = None  # Platform identifier (tiktok, etc)
 
 
 class RedisDownloadCache:
@@ -46,6 +51,10 @@ class RedisDownloadCache:
         direct_url: str = None,
         http_headers: dict = None,
         cookies: str = None,
+        photo_urls: list = None,
+        audio_url: str = None,
+        author: str = None,
+        platform: str = None,
     ) -> str:
         """Create new session and return key."""
         key = str(uuid.uuid4())
@@ -59,6 +68,10 @@ class RedisDownloadCache:
             direct_url=direct_url,
             http_headers=http_headers,
             cookies=cookies,
+            photo_urls=photo_urls,
+            audio_url=audio_url,
+            author=author,
+            platform=platform,
         )
 
         redis_key = f"{self._key_prefix}{key}"

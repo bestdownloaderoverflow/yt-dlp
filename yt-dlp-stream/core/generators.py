@@ -783,3 +783,178 @@ async def _download_simple_to_queue(url, headers, q, cancel_event=None):
                 if cancel_event and cancel_event.is_set():
                     break
                 q.put(data)
+
+
+def slideshow_generator(
+    image_urls: list[str],
+    audio_url: Optional[str],
+    temp_dir: str,
+    duration_per_image: int = 4,
+) -> tuple[str, str]:
+    """
+    Create a slideshow video from images and optional audio using FFmpeg.
+
+    Args:
+        image_urls: List of image URLs
+        audio_url: Optional audio URL
+        temp_dir: Temporary directory for downloaded files
+        duration_per_image: Duration per image in seconds (default: 4)
+
+    Returns:
+        Tuple of (output_path, filename)
+    """
+    from pathlib import Path
+    import subprocess
+    import tempfile
+
+    work_dir = Path(temp_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    # Download images
+    image_paths = []
+    for i, img_url in enumerate(image_urls):
+        img_path = work_dir / f"image_{i}.jpg"
+        with httpx.Client(timeout=60, follow_redirects=True) as client:
+            with client.stream("GET", img_url) as response:
+                response.raise_for_status()
+                with open(img_path, "wb") as f:
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        f.write(chunk)
+        image_paths.append(str(img_path))
+
+    if not image_paths:
+        raise ValueError("No images downloaded")
+
+    output_path = work_dir / "slideshow.mp4"
+
+    # Build FFmpeg command
+    cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
+
+    # Add each image as input with duration
+    for img_path in image_paths:
+        cmd.extend(["-loop", "1", "-t", str(duration_per_image), "-i", img_path])
+
+    audio_path = None
+    if audio_url:
+        # Download audio
+        audio_path = work_dir / "audio.mp3"
+        with httpx.Client(timeout=60, follow_redirects=True) as client:
+            with client.stream("GET", audio_url) as response:
+                response.raise_for_status()
+                with open(audio_path, "wb") as f:
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        f.write(chunk)
+        # Add audio input with loop
+        cmd.extend(["-stream_loop", "-1", "-i", str(audio_path)])
+
+    # Build filter complex
+    filter_parts = []
+
+    # Scale and pad each image to 1080x1920 (portrait)
+    for i in range(len(image_paths)):
+        filter_parts.append(
+            f"[{i}:v]scale=w=1080:h=1920:force_original_aspect_ratio=decrease,"
+            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30[v{i}]"
+        )
+
+    # Concatenate all video streams
+    concat_inputs = "".join(f"[v{i}]" for i in range(len(image_paths)))
+    filter_parts.append(f"{concat_inputs}concat=n={len(image_paths)}:v=1:a=0[vout]")
+
+    if audio_url and audio_path:
+        # Calculate total video duration and trim audio
+        video_duration = len(image_paths) * duration_per_image
+        filter_parts.append(f"[{len(image_paths)}:a]atrim=0:{video_duration},asetpts=PTS-STARTPTS[aout]")
+
+        # Add filter complex and map both video and audio
+        filter_complex = ";".join(filter_parts)
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[vout]",
+            "-map", "[aout]",
+            "-pix_fmt", "yuv420p",
+            "-fps_mode", "cfr",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            str(output_path)
+        ])
+    else:
+        # No audio - just video
+        filter_complex = ";".join(filter_parts)
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[vout]",
+            "-pix_fmt", "yuv420p",
+            "-fps_mode", "cfr",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+            str(output_path)
+        ])
+
+    logger.info(f"Creating slideshow with {len(image_paths)} images")
+
+    # Run FFmpeg
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=300  # 5 minutes timeout
+    )
+
+    if result.returncode != 0:
+        logger.error(f"FFmpeg error: {result.stderr}")
+        raise Exception(f"FFmpeg failed: {result.stderr}")
+
+    if not output_path.exists():
+        raise Exception("Output file was not created")
+
+    logger.info(f"Slideshow created: {output_path}")
+    return str(output_path), "slideshow.mp4"
+
+
+async def slideshow_stream_generator(
+    image_urls: list[str],
+    audio_url: Optional[str],
+    temp_dir: str,
+    filename: str,
+    chunk_size: int = 65536,
+):
+    """
+    Async generator that creates slideshow and yields chunks for streaming.
+    Cleans up temp files after streaming is complete.
+    """
+    from pathlib import Path
+
+    output_path = None
+    try:
+        # Run slideshow generator in thread
+        loop = asyncio.get_event_loop()
+        output_path, _ = await loop.run_in_executor(
+            None,
+            slideshow_generator,
+            image_urls,
+            audio_url,
+            temp_dir,
+        )
+
+        # Stream the file
+        with open(output_path, "rb") as f:
+            while True:
+                chunk = f.read(chunk_size)
+                if not chunk:
+                    break
+                yield chunk
+
+    finally:
+        # Cleanup temp files
+        if output_path and Path(output_path).exists():
+            try:
+                import shutil
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                logger.info(f"Cleaned up slideshow temp dir: {temp_dir}")
+            except Exception as e:
+                logger.warning(f"Failed to cleanup slideshow temp dir: {e}")

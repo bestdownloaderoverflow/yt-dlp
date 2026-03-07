@@ -57,7 +57,20 @@ class YoutubeDLManager:
         if proxy:
             opts["proxy"] = proxy
         if impersonate:
-            opts["impersonate"] = impersonate
+            # Check if impersonate is available before setting
+            try:
+                # Test with a temporary YTDL instance
+                test_opts = {"quiet": True, "impersonate": impersonate}
+                test_ydl = yt_dlp.YoutubeDL(test_opts)
+                test_ydl.close()
+                opts["impersonate"] = impersonate
+                logger.info(f"Using impersonate target: {impersonate}")
+            except yt_dlp.utils.YoutubeDLError as e:
+                logger.warning(
+                    f"Impersonate target '{impersonate}' not available: {e}. "
+                    f"Falling back to default. Install 'curl_cffi' for impersonate support."
+                )
+                # Continue without impersonate
 
         return yt_dlp.YoutubeDL(opts)
 

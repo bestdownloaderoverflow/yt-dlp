@@ -1,0 +1,81 @@
+services:
+  # --- Gluetun VPN Container ---
+  gluetun:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      # Expose yt-dlp-stream port through VPN
+      - "9487:9487"
+      # Gluetun HTTP Control Server for VPN management
+      - "8000:8000"
+    environment:
+      # VPN Configuration (WireGuard - Custom Provider)
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_ENDPOINT_PORT=2408
+      # DNS
+      - DNS_ADDRESS=1.1.1.1
+      # Gluetun Control Server for VPN rotation
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=on
+      - HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={"auth":"basic","username":"admin","password":"secretpassword"}
+    volumes:
+      - ./gluetun/data:/gluetun
+    restart: unless-stopped
+    networks:
+      - ytdlp-network
+
+  # --- Redis (untuk session cache) ---
+  # Redis juga menggunakan network gluetun agar app bisa akses via localhost
+  redis:
+    image: redis:7-alpine
+    container_name: ytdlp-redis
+    volumes:
+      - redis-data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    network_mode: "service:gluetun"  # Same network as gluetun
+    depends_on:
+      - gluetun
+    restart: unless-stopped
+
+  # --- yt-dlp-stream App (routed through Gluetun) ---
+  app:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream
+    # CRITICAL: Route all traffic through Gluetun VPN
+    network_mode: "service:gluetun"
+    depends_on:
+      gluetun:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+      # Redis juga di network gluetun, jadi accessible via localhost
+      - REDIS_URL=redis://localhost:6379/0
+      # VPN Control Server config untuk rotation script
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=secretpassword
+    restart: unless-stopped
+
+networks:
+  ytdlp-network:
+    driver: bridge
+
+volumes:
+  redis-data:

@@ -45,6 +45,8 @@ def root():
         "endpoints": {
             "fetch": "GET /fetch?url=... (get metadata + encrypted download links)",
             "download": "GET /download?key=... (download with encrypted key, expires in 5min)",
+            "tiktok": "POST /tiktok (TikTok video/photo/sl downloader)",
+            "tiktok_download": "GET /tiktok/download?key=... (download TikTok content)",
             "info": "GET /info?url=... (legacy metadata)",
             "video": "GET /stream/video?url=...&quality=1080|720|480|360",
             "video_chunked": "GET /stream/video-chunked?url=...&quality=1080 (Cobalt-style, best for long videos)",

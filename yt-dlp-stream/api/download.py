@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from typing import AsyncIterator, Optional
 
 import httpx
@@ -11,6 +12,7 @@ from fastapi.responses import StreamingResponse, RedirectResponse
 from urllib.parse import quote
 
 from core.redis_cache import download_cache
+from core.config import QUALITY_FORMATS
 from core.generators import (
     _chunked_video_generator_with_disconnect,
     _stream_chunked_merge,
@@ -26,13 +28,7 @@ from api.stream_ffmpeg import _streaming_response
 
 router = APIRouter()
 logger = logging.getLogger("ytdlp_stream")
-
-QUALITY_FORMATS = {
-    "1080": "best[height<=1080][ext=mp4]/best[height<=1080]",
-    "720": "best[height<=720][ext=mp4]/best[height<=720]",
-    "480": "best[height<=480][ext=mp4]/best[height<=480]",
-    "360": "best[height<=360][ext=mp4]/best[height<=360]",
-}
+DIRECT_PROXY_PLATFORMS = {"twitter", "x"}
 
 AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
 VIDEO_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB
@@ -62,18 +58,36 @@ async def download(
     try:
         if type == "video":
             # Use direct URL proxy if available (for Twitter/X session integrity)
-            if session.direct_url and session.http_headers:
+            if (
+                session.platform in DIRECT_PROXY_PLATFORMS
+                and session.direct_url
+                and session.http_headers
+            ):
                 return await _download_video_direct(
                     session.direct_url,
                     session.http_headers,
                     session.cookies,
+                    session.title,
                     download,
                     request,
                 )
             # Fallback to traditional method
-            return await _download_video(url, session.quality, download, request)
+            return await _download_video(
+                url,
+                session.quality,
+                download,
+                request,
+                proxy=session.proxy,
+                impersonate=session.impersonate,
+            )
         elif type == "mp3":
-            return await _download_mp3(url, download, request)
+            return await _download_mp3(
+                url,
+                download,
+                request,
+                proxy=session.proxy,
+                impersonate=session.impersonate,
+            )
         elif type == "photo":
             return await _download_photo(url, session.photo_index, download, request)
         else:
@@ -88,6 +102,7 @@ async def _download_video_direct(
     direct_url: str,
     http_headers: dict,
     cookies: Optional[str],
+    title: Optional[str],
     download: bool,
     request: FastAPIRequest,
 ):
@@ -103,8 +118,10 @@ async def _download_video_direct(
     if cookies:
         safe_headers["Cookie"] = cookies
 
-    # Extract filename from URL or use default
-    filename = "video.mp4"
+    # Build filename from title + direct URL extension
+    default_ext = os.path.splitext(direct_url.split("?")[0])[1].lstrip(".") or "mp4"
+    base_filename = (title or "download").strip() or "download"
+    filename = f"{base_filename}.{default_ext}"
 
     async def _stream_video() -> AsyncIterator[bytes]:
         async with httpx.AsyncClient(
@@ -130,13 +147,18 @@ async def _download_video_direct(
 
 
 async def _download_video(
-    url: str, quality: str, download: bool, request: FastAPIRequest
+    url: str,
+    quality: str,
+    download: bool,
+    request: FastAPIRequest,
+    proxy: Optional[str] = None,
+    impersonate: Optional[str] = None,
 ):
     """Download video using chunked method."""
     format_str = QUALITY_FORMATS.get(quality, QUALITY_FORMATS["1080"])
 
     info, resolved, global_headers = await asyncio.to_thread(
-        _extract_info_and_resolve, url, format_str, None, None
+        _extract_info_and_resolve, url, format_str, proxy, impersonate
     )
 
     base_filename = info.get("title", "download") or "download"
@@ -152,10 +174,13 @@ async def _download_video(
         filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
 
         if filesize:
+            ydl_opts = _build_ydl_opts(proxy, impersonate)
             ydl_refresh_info = {
                 "url": url,
                 "format_str": format_str,
-                "ydl_opts": {},
+                "ydl_opts": ydl_opts,
+                "target": "single",
+                "format_id": fmt.get("format_id"),
             }
             body = _chunked_video_generator_with_disconnect(
                 direct_url,
@@ -205,7 +230,7 @@ async def _download_video(
             video_fmt,
             audio_fmt,
             global_headers,
-            {"proxy": None, "impersonate": None},
+            _build_ydl_opts(proxy, impersonate),
             url,
             format_str,
             request,
@@ -224,15 +249,21 @@ async def _download_video(
             format_str=format_str,
             audio_only=False,
             download=download,
-            ydl_opts={},
+            ydl_opts=_build_ydl_opts(proxy, impersonate),
             request=request,
         )
 
 
-async def _download_mp3(url: str, download: bool, request: FastAPIRequest):
+async def _download_mp3(
+    url: str,
+    download: bool,
+    request: FastAPIRequest,
+    proxy: Optional[str] = None,
+    impersonate: Optional[str] = None,
+):
     """Download MP3 using chunked method."""
     info, resolved, global_headers = await asyncio.to_thread(
-        _extract_info_and_resolve, url, AUDIO_FORMAT, None, None
+        _extract_info_and_resolve, url, AUDIO_FORMAT, proxy, impersonate
     )
 
     base_filename = info.get("title", "download") or "download"
@@ -240,7 +271,13 @@ async def _download_mp3(url: str, download: bool, request: FastAPIRequest):
 
     if len(resolved) == 1 and can_use_chunked_streaming(resolved[0]):
         fmt = resolved[0]
-        body = _stream_mp3_chunked(fmt, global_headers, {}, url, request)
+        body = _stream_mp3_chunked(
+            fmt,
+            global_headers,
+            _build_ydl_opts(proxy, impersonate),
+            url,
+            request,
+        )
 
         response_headers = _build_disposition_header(out_filename, download)
         return StreamingResponse(
@@ -254,7 +291,7 @@ async def _download_mp3(url: str, download: bool, request: FastAPIRequest):
             format_str=AUDIO_FORMAT,
             audio_only=True,
             download=download,
-            ydl_opts={},
+            ydl_opts=_build_ydl_opts(proxy, impersonate),
             request=request,
         )
 

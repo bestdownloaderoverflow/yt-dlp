@@ -12,6 +12,7 @@ from ytdl_manager import ydl_manager
 router = APIRouter()
 
 AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
+DIRECT_PROXY_PLATFORMS = {"twitter", "x"}
 
 
 def detect_content_type(info: dict) -> str:
@@ -50,20 +51,23 @@ def get_available_qualities(formats: list) -> list:
     return qualities if qualities else ["best"]
 
 
-def generate_video_links(url: str, info: dict, qualities: list) -> dict:
+def generate_video_links(url: str, info: dict, qualities: list, platform: str) -> dict:
     """Generate download links for video qualities with session integrity."""
     links = {}
     formats = info.get("formats", [])
     global_headers = info.get("http_headers") or {}
+    title = info.get("title")
+    use_direct_proxy = platform in DIRECT_PROXY_PLATFORMS
 
     for quality in qualities:
         # Find format for this quality
-        height = int(quality.replace("p", ""))
+        height = int(quality.replace("p", "")) if quality.endswith("p") else None
         fmt = None
-        for f in formats:
-            if f.get("height") == height and f.get("protocol") in ("http", "https", ""):
-                fmt = f
-                break
+        if height is not None:
+            for f in formats:
+                if f.get("height") == height and f.get("protocol") in ("http", "https", ""):
+                    fmt = f
+                    break
 
         # Fallback to best format if no exact match
         if not fmt:
@@ -77,7 +81,7 @@ def generate_video_links(url: str, info: dict, qualities: list) -> dict:
         http_headers = None
         cookies = None
 
-        if fmt:
+        if fmt and use_direct_proxy:
             direct_url = fmt.get("url")
             # Get format-specific headers or global headers
             fmt_headers = fmt.get("http_headers") or global_headers
@@ -97,14 +101,25 @@ def generate_video_links(url: str, info: dict, qualities: list) -> dict:
             direct_url=direct_url,
             http_headers=http_headers,
             cookies=cookies,
+            platform=platform,
+            title=title,
+            proxy=info.get("__fetch_proxy"),
+            impersonate=info.get("__fetch_impersonate"),
         )
         links[quality] = f"/download?key={key}"
     return links
 
 
-def generate_mp3_link(url: str) -> str:
+def generate_mp3_link(url: str, platform: str, title: Optional[str], proxy: Optional[str], impersonate: Optional[str]) -> str:
     """Generate download link for MP3."""
-    key = download_cache.create_session(url=url, type="mp3")
+    key = download_cache.create_session(
+        url=url,
+        type="mp3",
+        platform=platform,
+        title=title,
+        proxy=proxy,
+        impersonate=impersonate,
+    )
     return f"/download?key={key}"
 
 
@@ -188,6 +203,9 @@ async def fetch(
 
         content_type = detect_content_type(info)
         platform = info.get("extractor_key", "unknown").lower()
+        # Persist request-level settings in info for session creation.
+        info["__fetch_proxy"] = proxy
+        info["__fetch_impersonate"] = impersonate
 
         response = {
             "type": content_type,
@@ -203,8 +221,14 @@ async def fetch(
         if content_type == "video":
             qualities = get_available_qualities(info.get("formats", []))
             response["download_links"] = {
-                "video": generate_video_links(url, info, qualities),
-                "mp3": generate_mp3_link(url),
+                "video": generate_video_links(url, info, qualities, platform),
+                "mp3": generate_mp3_link(
+                    url=url,
+                    platform=platform,
+                    title=info.get("title"),
+                    proxy=proxy,
+                    impersonate=impersonate,
+                ),
             }
 
         elif content_type == "photos":

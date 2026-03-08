@@ -386,10 +386,21 @@ async def _stream_chunked_merge(
     video_size = video_fmt.get("filesize") or video_fmt.get("filesize_approx") or 0
     audio_size = audio_fmt.get("filesize") or audio_fmt.get("filesize_approx") or 0
 
-    ydl_refresh_info = {
+    ydl_refresh_info_video = {
         "url": original_url,
         "format_str": format_str,
         "ydl_opts": ydl_opts,
+        "target": "video",
+        "format_id": video_fmt.get("format_id"),
+        "format_idx": 0,
+    }
+    ydl_refresh_info_audio = {
+        "url": original_url,
+        "format_str": format_str,
+        "ydl_opts": ydl_opts,
+        "target": "audio",
+        "format_id": audio_fmt.get("format_id"),
+        "format_idx": 1,
     }
 
     # Cancellation event untuk signal disconnect
@@ -409,7 +420,7 @@ async def _stream_chunked_merge(
             if video_size:
                 asyncio.run(_download_chunked_to_queue(
                     video_url, video_headers, video_size,
-                    VIDEO_CHUNK_SIZE, ydl_refresh_info, video_queue, cancel_event
+                    VIDEO_CHUNK_SIZE, ydl_refresh_info_video, video_queue, cancel_event
                 ))
             else:
                 asyncio.run(_download_simple_to_queue(
@@ -431,7 +442,7 @@ async def _stream_chunked_merge(
             if audio_size:
                 asyncio.run(_download_chunked_to_queue(
                     audio_url, audio_headers, audio_size,
-                    VIDEO_CHUNK_SIZE, ydl_refresh_info, audio_queue, cancel_event
+                    VIDEO_CHUNK_SIZE, ydl_refresh_info_audio, audio_queue, cancel_event
                 ))
             else:
                 asyncio.run(_download_simple_to_queue(
@@ -451,11 +462,16 @@ async def _stream_chunked_merge(
     video_thread.start()
     audio_thread.start()
 
+    # Create pipe for audio input and use the actual FD number in ffmpeg args.
+    # Hardcoding pipe:3 can fail because os.pipe() does not guarantee fd=3.
+    audio_r, audio_w = os.pipe()
+    audio_pipe_input = f"pipe:{audio_r}"
+
     # Start ffmpeg dengan pipe untuk kedua input
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-i", "pipe:0",  # Video from stdin (we'll use a thread to feed it)
-        "-i", "pipe:3",  # Audio from fd 3 (we'll use another thread)
+        "-i", audio_pipe_input,  # Audio from dedicated pipe fd
         "-map", "0:v:0",
         "-map", "1:a:0",
         "-c:v", "copy",
@@ -464,9 +480,6 @@ async def _stream_chunked_merge(
         "-f", "mp4",
         "pipe:1",
     ]
-
-    # Create pipe for audio (fd 3)
-    audio_r, audio_w = os.pipe()
 
     ffmpeg_proc = subprocess.Popen(
         cmd,
@@ -607,6 +620,9 @@ async def _stream_mp3_chunked(
         "url": original_url,
         "format_str": AUDIO_FORMAT,
         "ydl_opts": ydl_opts,
+        "target": "single",
+        "format_id": audio_fmt.get("format_id"),
+        "format_idx": 0,
     }
 
     # Cancellation event untuk signal disconnect
@@ -748,8 +764,47 @@ async def _refresh_url(ydl_refresh_info: dict) -> Optional[str]:
                 proxy=ydl_refresh_info["ydl_opts"].get("proxy"),
                 impersonate=ydl_refresh_info["ydl_opts"].get("impersonate")
             )
-            fmt = resolved[0]
-            return fmt["url"]
+            if not resolved:
+                return None
+
+            target = ydl_refresh_info.get("target", "single")
+            target_format_id = ydl_refresh_info.get("format_id")
+            target_idx = ydl_refresh_info.get("format_idx")
+
+            # Prefer exact format_id match if available.
+            if target_format_id:
+                matched = next(
+                    (f for f in resolved if f.get("format_id") == target_format_id),
+                    None,
+                )
+                if matched and matched.get("url"):
+                    return matched["url"]
+
+            # Fallback by stream role.
+            if target == "video":
+                matched = next(
+                    (f for f in resolved if (f.get("vcodec") or "none") not in (None, "", "none")),
+                    None,
+                )
+                if matched and matched.get("url"):
+                    return matched["url"]
+            elif target == "audio":
+                matched = next(
+                    (
+                        f for f in resolved
+                        if (f.get("acodec") or "none") not in (None, "", "none")
+                        and (f.get("vcodec") or "none") in (None, "", "none")
+                    ),
+                    None,
+                )
+                if matched and matched.get("url"):
+                    return matched["url"]
+
+            # Fallback by original index (if still valid), else first resolved format.
+            if isinstance(target_idx, int) and 0 <= target_idx < len(resolved):
+                if resolved[target_idx].get("url"):
+                    return resolved[target_idx]["url"]
+            return resolved[0].get("url")
 
         return await loop.run_in_executor(None, _extract)
     except Exception as e:

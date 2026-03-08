@@ -31,6 +31,9 @@ class DownloadSession:
     audio_url: Optional[str] = None  # Audio URL for slideshow
     author: Optional[str] = None  # Author nickname for filename
     platform: Optional[str] = None  # Platform identifier (tiktok, etc)
+    title: Optional[str] = None  # Original title for filename
+    proxy: Optional[str] = None  # Request-level proxy used during fetch
+    impersonate: Optional[str] = None  # Request-level impersonation used during fetch
 
 
 class RedisDownloadCache:
@@ -55,6 +58,9 @@ class RedisDownloadCache:
         audio_url: str = None,
         author: str = None,
         platform: str = None,
+        title: str = None,
+        proxy: str = None,
+        impersonate: str = None,
     ) -> str:
         """Create new session and return key."""
         key = str(uuid.uuid4())
@@ -72,6 +78,9 @@ class RedisDownloadCache:
             audio_url=audio_url,
             author=author,
             platform=platform,
+            title=title,
+            proxy=proxy,
+            impersonate=impersonate,
         )
 
         redis_key = f"{self._key_prefix}{key}"

@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Set
@@ -39,6 +40,7 @@ MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))
 RATE_LIMIT_COOLDOWN = int(os.getenv('RATE_LIMIT_COOLDOWN', '300'))  # 5 menit
 HEALTH_CHECK_INTERVAL = 30  # seconds
 UPTIME_RESTART_INTERVAL = 24 * 60 * 60  # 24 jam
+IP_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
 
 
 @dataclass
@@ -231,8 +233,15 @@ class VPNRotator:
             ytdlp.restart(timeout=30)
             await asyncio.sleep(5)
 
-            # Health check
-            if await self._health_check(worker_id):
+            # Health check with retries (VPN + API may need time to settle)
+            healthy = False
+            for _ in range(6):
+                if await self._health_check(worker_id):
+                    healthy = True
+                    break
+                await asyncio.sleep(5)
+
+            if healthy:
                 await asyncio.sleep(30)  # Wait for stabilization
                 await self.registry.mark_restarted(worker_id, True)
                 return True
@@ -255,16 +264,44 @@ class VPNRotator:
         timeout = ClientTimeout(total=5)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
+                # 1) Gluetun public IP endpoint (may return JSON or text/plain)
                 url = f"{worker.control_url}/v1/publicip/ip"
                 async with session.get(url) as resp:
                     if resp.status == 200:
-                        data = await resp.json()
-                        ip = data.get('public_ip', 'unknown')
-                        logger.info(f"[{worker_id}] New VPN IP: {ip}")
-                        return True
+                        ip = None
+                        try:
+                            data = await resp.json(content_type=None)
+                            if isinstance(data, dict):
+                                ip = data.get('public_ip') or data.get('ip')
+                            elif isinstance(data, str):
+                                ip = data.strip()
+                        except Exception:
+                            text = await resp.text()
+                            ip = (text or "").strip()
+
+                        if ip:
+                            logger.info(f"[{worker_id}] New VPN IP: {ip}")
+                            # Accept non-empty IP-ish payloads from gluetun
+                            if IP_RE.match(ip) or ':' in ip:
+                                pass
+                            return await self._api_health_check(session, worker_id, worker)
+
+                # 2) Fallback direct API health check if public IP endpoint is flaky
+                return await self._api_health_check(session, worker_id, worker)
         except Exception as e:
             logger.warning(f"[{worker_id}] Health check error: {e}")
 
+        return False
+
+    async def _api_health_check(self, session: aiohttp.ClientSession, worker_id: str, worker: Worker) -> bool:
+        """Check worker API readiness."""
+        try:
+            async with session.get(f"{worker.api_url}/health") as resp:
+                if resp.status == 200:
+                    logger.info(f"[{worker_id}] Worker API healthy")
+                    return True
+        except Exception as e:
+            logger.warning(f"[{worker_id}] API health check error: {e}")
         return False
 
 
@@ -537,12 +574,16 @@ class Gateway:
             if result['success']:
                 return result['response']
 
-            if result.get('is_rate_limit'):
-                logger.warning(f"[{worker.id}] Rate limit detected, rotating VPN...")
-                await self._schedule_worker_restart(worker.id, rate_limited=True)
+            should_restart = result.get('should_restart', True)
+            if should_restart:
+                if result.get('is_rate_limit'):
+                    logger.warning(f"[{worker.id}] Rate limit detected, rotating VPN...")
+                    await self._schedule_worker_restart(worker.id, rate_limited=True)
+                else:
+                    logger.warning(f"[{worker.id}] Retryable failure, scheduling restart")
+                    await self._schedule_worker_restart(worker.id)
             else:
-                logger.warning(f"[{worker.id}] Retryable failure, scheduling restart")
-                await self._schedule_worker_restart(worker.id)
+                logger.warning(f"[{worker.id}] Retryable client-side failure; failover without restart")
 
         logger.error(f"All {MAX_RETRIES} attempts failed")
         return web.json_response(
@@ -574,12 +615,16 @@ class Gateway:
                 if result['success']:
                     return result['response']
 
-                if result.get('is_rate_limit'):
-                    logger.warning(f"[{worker.id}] Rate limit on stream, rotating...")
-                    await self._schedule_worker_restart(worker.id, rate_limited=True)
+                should_restart = result.get('should_restart', True)
+                if should_restart:
+                    if result.get('is_rate_limit'):
+                        logger.warning(f"[{worker.id}] Rate limit on stream, rotating...")
+                        await self._schedule_worker_restart(worker.id, rate_limited=True)
+                    else:
+                        logger.warning(f"[{worker.id}] Stream failure, scheduling restart")
+                        await self._schedule_worker_restart(worker.id)
                 else:
-                    logger.warning(f"[{worker.id}] Stream failure, scheduling restart")
-                    await self._schedule_worker_restart(worker.id)
+                    logger.warning(f"[{worker.id}] Retryable client-side stream failure; failover without restart")
                 continue
 
             finally:
@@ -638,7 +683,9 @@ class Gateway:
                 "rate limited",
                 "this content isn't available, try again later",
                 "session has been rate-limited",
-                "too many requests"
+                "too many requests",
+                "sign in to confirm",
+                "not a bot",
             ]
             if any(p in lower_text for p in rate_limit_patterns):
                 is_rate_limit = True
@@ -649,7 +696,15 @@ class Gateway:
             logger.warning(
                 f"[{worker.id}] Received {status}; treating as retryable failover per policy"
             )
-            return {'success': False, 'is_rate_limit': True, 'status': status}
+            # Do not restart worker on generic 400 (can be request-specific).
+            # Restart only for stronger rate-limit signals (403/429 or matched patterns).
+            should_restart = status in (403, 429) or is_rate_limit
+            return {
+                'success': False,
+                'is_rate_limit': bool(is_rate_limit or status in (403, 429)),
+                'status': status,
+                'should_restart': should_restart,
+            }
 
         if status == 200:
             # Create response

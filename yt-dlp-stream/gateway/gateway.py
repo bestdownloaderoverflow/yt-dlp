@@ -131,7 +131,9 @@ class WorkerRegistry:
                     if not w.restarting and not w.restart_scheduled:
                         w.restart_scheduled = True
                         logger.info(f"[{worker_id}] Restart scheduled")
-                    break
+                        return True
+                    return False
+            return False
 
     async def update_restart_state(self, worker_id: str, restarting: bool):
         """Update worker restarting state"""
@@ -313,6 +315,8 @@ class Gateway:
         self.rotator = VPNRotator(self.registry)
         self.app = web.Application()
         self._setup_routes()
+        self._restart_tasks: Dict[str, asyncio.Task] = {}
+        self._restart_tasks_lock = asyncio.Lock()
 
         # Background tasks
         self._restart_task = None
@@ -479,8 +483,39 @@ class Gateway:
         else:
             await self.registry.mark_failure(worker_id)
 
-        await self.registry.schedule_restart(worker_id)
-        asyncio.create_task(self.rotator.restart_worker(worker_id))
+        scheduled = await self.registry.schedule_restart(worker_id)
+        if not scheduled:
+            logger.info(f"[{worker_id}] Restart already scheduled/running; skip duplicate schedule")
+            return
+
+        started = await self._ensure_restart_task(worker_id)
+        if not started:
+            logger.info(f"[{worker_id}] Restart task already in-flight; skip duplicate task")
+
+    async def _ensure_restart_task(self, worker_id: str) -> bool:
+        """Ensure only one restart task runs per worker at a time."""
+        async with self._restart_tasks_lock:
+            existing = self._restart_tasks.get(worker_id)
+            if existing and not existing.done():
+                return False
+
+            task = asyncio.create_task(self.rotator.restart_worker(worker_id))
+            self._restart_tasks[worker_id] = task
+            task.add_done_callback(
+                lambda t, wid=worker_id: asyncio.create_task(self._finalize_restart_task(wid, t))
+            )
+            return True
+
+    async def _finalize_restart_task(self, worker_id: str, task: asyncio.Task):
+        """Cleanup restart task registry and surface unexpected task errors."""
+        async with self._restart_tasks_lock:
+            current = self._restart_tasks.get(worker_id)
+            if current is task:
+                self._restart_tasks.pop(worker_id, None)
+        try:
+            task.result()
+        except Exception as e:
+            logger.error(f"[{worker_id}] Restart task crashed: {e}")
 
     async def _proxy_streaming_response(
         self,
@@ -495,48 +530,53 @@ class Gateway:
             url = f"{url}?{request.query_string}"
 
         timeout = ClientTimeout(total=0 if method == 'GET' else 60)
-        session = aiohttp.ClientSession(timeout=timeout)
 
         try:
-            headers = self._build_forward_headers(request, method)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                headers = self._build_forward_headers(request, method)
 
-            if method == 'POST':
-                body = await request.read()
-                resp = await session.post(url, headers=headers, data=body)
-            else:
-                resp = await session.get(url, headers=headers)
+                if method == 'POST':
+                    body = await request.read()
+                    async with session.post(url, headers=headers, data=body) as resp:
+                        if resp.status == 200:
+                            response = web.StreamResponse(status=resp.status)
+                            if resp.content_type:
+                                response.content_type = resp.content_type
 
-            if resp.status == 200:
-                response = web.StreamResponse(status=resp.status)
-                if resp.content_type:
-                    response.content_type = resp.content_type
+                            for key, value in resp.headers.items():
+                                if key.lower() != 'transfer-encoding':
+                                    response.headers[key] = value
 
-                for key, value in resp.headers.items():
-                    if key.lower() != 'transfer-encoding':
-                        response.headers[key] = value
+                            await response.prepare(request)
+                            async for chunk in resp.content.iter_chunked(65536):
+                                await response.write(chunk)
+                            await response.write_eof()
+                            return {'success': True, 'response': response}
 
-                await response.prepare(request)
+                        return await self._handle_response(resp, worker)
+                else:
+                    async with session.get(url, headers=headers) as resp:
+                        if resp.status == 200:
+                            response = web.StreamResponse(status=resp.status)
+                            if resp.content_type:
+                                response.content_type = resp.content_type
 
-                try:
-                    async for chunk in resp.content.iter_chunked(65536):
-                        await response.write(chunk)
-                    await response.write_eof()
-                finally:
-                    resp.release()
-                    await session.close()
+                            for key, value in resp.headers.items():
+                                if key.lower() != 'transfer-encoding':
+                                    response.headers[key] = value
 
-                return {'success': True, 'response': response}
+                            await response.prepare(request)
+                            async for chunk in resp.content.iter_chunked(65536):
+                                await response.write(chunk)
+                            await response.write_eof()
+                            return {'success': True, 'response': response}
 
-            result = await self._handle_response(resp, worker)
-            await session.close()
-            return result
+                        return await self._handle_response(resp, worker)
 
         except asyncio.TimeoutError:
-            await session.close()
             logger.warning(f"[{worker.id}] Request timeout")
             return {'success': False}
         except Exception as e:
-            await session.close()
             logger.warning(f"[{worker.id}] Request error: {e}")
             return {'success': False}
 
@@ -760,7 +800,7 @@ class Gateway:
                         # Detect silent failure (rate limit during stream)
                         if estimated and (not content_length or content_length == '0'):
                             logger.warning(f"[{worker.id}] Possible rate limit in stream")
-                            asyncio.create_task(self.rotator.restart_worker(worker.id))
+                            await self._schedule_worker_restart(worker.id, rate_limited=True)
 
                     # Stream response
                     response = web.StreamResponse(status=resp.status)
@@ -788,7 +828,7 @@ class Gateway:
     async def _restart_workers(self, worker_ids: List[str]):
         """Restart multiple workers sequentially"""
         for wid in worker_ids:
-            await self.rotator.restart_worker(wid)
+            await self._schedule_worker_restart(wid)
             await asyncio.sleep(5)
 
     async def _restart_scheduler(self):
@@ -798,7 +838,7 @@ class Gateway:
 
             for worker in self.registry._workers:
                 if worker.restart_scheduled and not worker.restarting:
-                    await self.rotator.restart_worker(worker.id)
+                    await self._ensure_restart_task(worker.id)
 
     async def _uptime_checker(self):
         """Check for workers needing 24h restart"""

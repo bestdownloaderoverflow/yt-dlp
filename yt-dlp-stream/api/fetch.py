@@ -248,6 +248,27 @@ async def fetch(
         return response
 
     except yt_dlp.utils.DownloadError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e)
+        # Detect YouTube rate limit
+        if "rate-limited" in error_msg.lower() or "try again later" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "RATE_LIMITED",
+                    "message": error_msg,
+                    "retry_after": 300,
+                }
+            )
+        raise HTTPException(status_code=400, detail=error_msg)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        if "rate" in error_msg.lower() and "limit" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "RATE_LIMITED",
+                    "message": error_msg,
+                    "retry_after": 300,
+                }
+            )
+        raise HTTPException(status_code=500, detail=error_msg)

@@ -1,139 +1,157 @@
-# Gluetun VPN Setup for yt-dlp-stream
+# yt-dlp-stream dengan Multi-VPN Rotation (Mullvad)
 
-Konfigurasi ini membungkus yt-dlp-stream dengan Gluetun VPN untuk:
-- **IP Rotation**: Ganti IP otomatis saat terkena rate limit/block
-- **Geo-unblocking**: Akses konten yang dibatasi region
-- **Privacy**: Semua traffic yt-dlp routing melalui VPN
+Arsitektur 3-instance dengan VPN rotation otomatis untuk menghindari rate limit YouTube/TikTok.
 
-## Quick Start
+## Arsitektur
+
+```
+                    ┌─────────────────┐
+                    │  Python Gateway │  ← Entry point (port 9111)
+                    │  (load balancer)│
+                    └────────┬────────┘
+                             │
+            ┌────────────────┼────────────────┐
+            │                │                │
+     ┌──────▼──────┐  ┌──────▼──────┐  ┌──────▼──────┐
+     │  gluetun-1  │  │  gluetun-2  │  │  gluetun-3  │  ← VPN containers
+     │  (Mullvad)  │  │  (Mullvad)  │  │  (Mullvad)  │
+     └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+            │                │                │
+     ┌──────▼──────┐  ┌──────▼──────┐  ┌──────▼──────┐
+     │ ytdlp-1     │  │ ytdlp-2     │  │ ytdlp-3     │  ← yt-dlp instances
+     │ (port 9487) │  │ (port 9488) │  │ (port 9489) │
+     └─────────────┘  └─────────────┘  └─────────────┘
+```
+
+## Fitur
+
+1. **Load Balancing** - Request didistribusikan ke 3 worker
+2. **Auto Retry** - Jika worker gagal, otomatis coba worker lain
+3. **VPN Rotation** - Saat terdeteksi rate limit, VPN di-rotate (restart container)
+4. **Health Check** - Monitoring kesehatan worker setiap 30 detik
+5. **24h Auto Restart** - Worker di-restart setiap 24 jam untuk refresh IP
+
+## Setup
+
+### 1. Generate Mullvad WireGuard Config
+
+1. Login ke https://mullvad.net/en/account/wireguard-config
+2. Generate 3 WireGuard configurations (untuk load balancing)
+3. Catat untuk masing-masing:
+   - `PrivateKey` → `MULLVAD_KEY_X`
+   - `Address` → `MULLVAD_ADDR_X`
+   - `DNS` → biasanya `10.64.0.1`
+
+### 2. Copy Environment File
 
 ```bash
-# Jalankan dengan Gluetun
 cd yt-dlp-stream
+cp .env.example .env
+# Edit .env dengan credentials Mullvad Anda
+nano .env
+```
+
+### 3. Edit Environment Variables
+
+```bash
+# Isi dengan credentials dari Mullvad
+MULLVAD_KEY_1=aBCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGg=
+MULLVAD_ADDR_1=10.64.123.45/32
+
+MULLVAD_KEY_2=bCD... (dst)
+MULLVAD_KEY_3=cDE... (dst)
+```
+
+### 4. Jalankan
+
+```bash
 docker-compose -f docker-compose.gluetun.yml up -d
-
-# Cek status VPN
-docker-compose -f docker-compose.gluetun.yml exec app python vpn_manager.py status
-
-# Rotate IP manual
-docker-compose -f docker-compose.gluetun.yml exec app python vpn_manager.py reconnect
 ```
 
-## Architecture
+### 5. Verifikasi
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Client        │────▶│   Gluetun       │────▶│   yt-dlp-stream │
-│   (Request)     │     │   (VPN/WG)      │     │   (App)         │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-                               │
-                               ▼
-                        ┌─────────────────┐
-                        │   WireGuard     │
-                        │   162.159.192.1 │
-                        └─────────────────┘
-```
-
-## Konfigurasi WireGuard
-
-VPN menggunakan WireGuard dengan custom provider:
-
-```yaml
-VPN_SERVICE_PROVIDER=custom
-VPN_TYPE=wireguard
-WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
-WIREGUARD_ADDRESSES=172.16.0.2/32
-WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-WIREGUARD_ENDPOINT_IP=162.159.192.1
-WIREGUARD_ENDPOINT_PORT=2408
-```
-
-## Port Mapping
-
-| Host Port | Container | Service |
-|-----------|-----------|---------|
-| 9487 | gluetun:9487 | yt-dlp-stream API |
-| 8000 | gluetun:8000 | Gluetun Control Server |
-
-## VPN Manager Commands
-
-### Check Status
 ```bash
-docker-compose -f docker-compose.gluetun.yml exec app python vpn_manager.py status
+# Cek status worker
+curl http://localhost:9111/health
+
+# Cek IP masing-masing VPN
+curl http://localhost:8001/v1/publicip/ip
+curl http://localhost:8002/v1/publicip/ip
+curl http://localhost:8003/v1/publicip/ip
 ```
 
-### Reconnect (Get New IP)
+## Penggunaan
+
+Gunakan gateway sebagai entry point:
+
 ```bash
-docker-compose -f docker-compose.gluetun.yml exec app python vpn_manager.py reconnect
-```
+# Fetch metadata
+curl "http://localhost:9111/fetch?url=https://youtube.com/watch?v=xxxxx"
 
-### Handle 403 Error
-```bash
-docker-compose -f docker-compose.gluetun.yml exec app python vpn_manager.py handle-403
-```
+# Download
+curl "http://localhost:9111/download?key=w1-encryptedkey"
 
-## Integrasi dengan TikTok Downloader
-
-Untuk auto-rotate IP saat terkena 403:
-
-```python
-from vpn_manager import get_vpn_manager
-
-# Di dalam error handler 403
-vpn = get_vpn_manager()
-await vpn.handle_403_error()
-```
-
-## Multiple VPN Instances (Advanced)
-
-Untuk load balancing dengan multiple region:
-
-```yaml
-# docker-compose.multi-vpn.yml
-services:
-  gluetun-sg:
-    image: qmcgaw/gluetun:v3.41.1
-    ports:
-      - "9487:9487"  # Instance 1
-      - "8001:8000"
-    environment:
-      - SERVER_COUNTRIES=Singapore
-      # ... other config
-
-  gluetun-jp:
-    image: qmcgaw/gluetun:v3.41.1
-    ports:
-      - "9488:9487"  # Instance 2
-      - "8002:8000"
-    environment:
-      - SERVER_COUNTRIES=Japan
-      # ... other config
+# Stream video
+curl "http://localhost:9111/stream/video?url=https://youtube.com/watch?v=xxxxx&quality=720"
 ```
 
 ## Troubleshooting
 
-### Check Gluetun Logs
+### Rate Limit Masih Terjadi
+
+Jika masih terkena rate limit:
+
+1. **Tambah delay antar request** di client
+2. **Ganti region VPN** - Ubah `MULLVAD_COUNTRY_X` ke negara berbeda
+3. **Tambah worker** - Edit docker-compose untuk menambah instance
+
+### Cek Log
+
 ```bash
-docker-compose -f docker-compose.gluetun.yml logs -f gluetun
+# Gateway log
+docker logs -f ytdlp-gateway
+
+# Worker log
+docker logs -f ytdlp-stream-1
+
+# VPN log
+docker logs -f ytdlp-gluetun-1
 ```
 
-### Verify VPN Connection
+### Manual VPN Rotation
+
 ```bash
-# Check public IP from inside container
-docker-compose -f docker-compose.gluetun.yml exec gluetun wget -qO- https://ipinfo.io
+# Restart specific worker
+docker restart ytdlp-gluetun-1 ytdlp-stream-1
 ```
 
-### Restart VPN
-```bash
-docker-compose -f docker-compose.gluetun.yml restart gluetun
-```
+## Endpoint Gateway
 
-## Security Notes
+| Endpoint | Method | Deskripsi |
+|----------|--------|-----------|
+| `/` | GET | Root info |
+| `/health` | GET | Health check & worker status |
+| `/fetch` | GET | Fetch video metadata |
+| `/download` | GET | Download dengan key |
+| `/stream/video` | GET | Stream video |
+| `/stream/video-chunked` | GET | Stream video (chunked) |
+| `/stream/mp3` | GET | Stream MP3 |
+| `/stream/m4a` | GET | Stream M4A |
+| `/tiktok` | POST | TikTok downloader |
+| `/tunnel` | GET | Download tunnel |
 
-- **Jangan commit credentials WireGuard** ke git
-- Gunakan `.env` file untuk menyimpan secrets:
-  ```bash
-  WIREGUARD_PRIVATE_KEY=your_key_here
-  GLUETUN_PASSWORD=strong_password
-  ```
-- Gluetun Control Server di-bind ke localhost only via `network_mode: service:gluetun`
+## Port Mapping
+
+| Service | Port | Deskripsi |
+|---------|------|-----------|
+| Gateway | 9111 | Entry point utama |
+| Gluetun 1 | 8001 | Control server VPN 1 |
+| Gluetun 2 | 8002 | Control server VPN 2 |
+| Gluetun 3 | 8003 | Control server VPN 3 |
+| ytdlp 1 | 9487 | API worker 1 |
+| ytdlp 2 | 9488 | API worker 2 |
+| ytdlp 3 | 9489 | API worker 3 |
+
+## Legacy Single-Instance Mode
+
+Untuk single instance tanpa gateway, gunakan docker-compose.yml biasa.

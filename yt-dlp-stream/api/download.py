@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from core.redis_cache import download_cache
 from core.config import QUALITY_FORMATS
+from core.delivery import plan_delivery
 from core.generators import (
     _chunked_video_generator_with_disconnect,
     _stream_chunked_merge,
@@ -20,8 +21,6 @@ from core.generators import (
 )
 from core.helpers import (
     _extract_info_and_resolve,
-    can_use_chunked_streaming,
-    can_use_chunked_streaming_multi,
     _build_ydl_opts,
 )
 from api.stream_ffmpeg import _streaming_response
@@ -163,11 +162,9 @@ async def _download_video(
 
     base_filename = info.get("title", "download") or "download"
     out_filename = f"{base_filename}.mp4"
+    delivery = plan_delivery(resolved)
 
-    can_chunk = len(resolved) == 1 and can_use_chunked_streaming(resolved[0])
-    can_chunk_multi = len(resolved) == 2 and can_use_chunked_streaming_multi(resolved)
-
-    if can_chunk:
+    if delivery.mode == "single_progressive":
         fmt = resolved[0]
         direct_url = fmt["url"]
         http_headers = fmt.get("http_headers") or global_headers
@@ -221,7 +218,7 @@ async def _download_video(
             headers=response_headers,
         )
 
-    elif can_chunk_multi:
+    elif delivery.mode == "multi_progressive":
         video_fmt, audio_fmt = resolved[0], resolved[1]
         if video_fmt.get("vcodec", "none") in (None, "none", ""):
             video_fmt, audio_fmt = audio_fmt, video_fmt
@@ -244,6 +241,7 @@ async def _download_video(
         )
 
     else:
+        logger.info("Using ffmpeg live delivery for video download: %s", delivery.reason)
         return await _streaming_response(
             url=url,
             format_str=format_str,
@@ -268,8 +266,9 @@ async def _download_mp3(
 
     base_filename = info.get("title", "download") or "download"
     out_filename = f"{base_filename}.mp3"
+    delivery = plan_delivery(resolved)
 
-    if len(resolved) == 1 and can_use_chunked_streaming(resolved[0]):
+    if delivery.mode == "single_progressive":
         fmt = resolved[0]
         body = _stream_mp3_chunked(
             fmt,
@@ -286,6 +285,7 @@ async def _download_mp3(
             headers=response_headers,
         )
     else:
+        logger.info("Using ffmpeg live delivery for MP3 download: %s", delivery.reason)
         return await _streaming_response(
             url=url,
             format_str=AUDIO_FORMAT,

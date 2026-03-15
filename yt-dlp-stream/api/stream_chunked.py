@@ -11,12 +11,13 @@ from fastapi.responses import StreamingResponse
 from urllib.parse import quote
 
 from core.config import QUALITY_FORMATS, AUDIO_FORMAT, VIDEO_CHUNK_SIZE, estimate_video_size, estimate_mp3_size
+from core.delivery import plan_delivery
 from core.generators import (
     _chunked_video_generator_with_disconnect,
     _stream_chunked_merge,
     _stream_mp3_chunked,
 )
-from core.helpers import _enforce_rate_limit, _extract_info_and_resolve, _build_ydl_opts, can_use_chunked_streaming, can_use_chunked_streaming_multi
+from core.helpers import _enforce_rate_limit, _extract_info_and_resolve, _build_ydl_opts
 from api.stream_ffmpeg import _streaming_response
 
 router = APIRouter()
@@ -76,12 +77,9 @@ async def stream_video_chunked(
 
         base_filename = info.get("title", "download") or "download"
         out_filename = f"{base_filename}.mp4"
+        delivery = plan_delivery(resolved)
 
-        # Check if we can use chunked download or need ffmpeg
-        can_chunk = len(resolved) == 1 and can_use_chunked_streaming(resolved[0])
-        can_chunk_multi = len(resolved) == 2 and can_use_chunked_streaming_multi(resolved)
-
-        if can_chunk:
+        if delivery.mode == "single_progressive":
                 # Single progressive download file
                 fmt = resolved[0]
                 direct_url = fmt["url"]
@@ -146,7 +144,7 @@ async def stream_video_chunked(
                     headers=response_headers,
                 )
 
-        elif can_chunk_multi:
+        elif delivery.mode == "multi_progressive":
             # Separate video + audio, both progressive download
             # Download both to temp files with chunked method, then merge with ffmpeg
             video_fmt, audio_fmt = resolved[0], resolved[1]
@@ -202,7 +200,7 @@ async def stream_video_chunked(
 
         else:
             # HLS/DASH - use ffmpeg
-            logger.info("Format requires ffmpeg streaming (HLS/DASH)")
+            logger.info("Format requires ffmpeg streaming: %s", delivery.reason)
             return await _streaming_response(
                 url=url,
                 format_str=format_str,
@@ -215,10 +213,30 @@ async def stream_video_chunked(
     except HTTPException:
         raise
     except yt_dlp.utils.DownloadError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e)
+        if "rate-limited" in error_msg.lower() or "try again later" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "RATE_LIMITED",
+                    "message": error_msg,
+                    "retry_after": 300,
+                }
+            )
+        raise HTTPException(status_code=400, detail=error_msg)
     except Exception as e:
         logger.exception("Error in stream_video_chunked")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        if "rate" in error_msg.lower() and "limit" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "RATE_LIMITED",
+                    "message": error_msg,
+                    "retry_after": 300,
+                }
+            )
+        raise HTTPException(status_code=500, detail=error_msg)
 
 
 @router.get("/stream/mp3-chunked")
@@ -260,9 +278,9 @@ async def stream_mp3_chunked(
 
         base_filename = info.get("title", "download") or "download"
         out_filename = f"{base_filename}.mp3"
+        delivery = plan_delivery(resolved)
 
-        # Check if we can use chunked download or need ffmpeg
-        if len(resolved) == 1 and can_use_chunked_streaming(resolved[0]):
+        if delivery.mode == "single_progressive":
             fmt = resolved[0]
             logger.info("Using chunked download for MP3")
             body = _stream_mp3_chunked(
@@ -303,7 +321,7 @@ async def stream_mp3_chunked(
             )
         else:
             # HLS/DASH - use ffmpeg streaming
-            logger.info("Format requires ffmpeg streaming (HLS/DASH)")
+            logger.info("Format requires ffmpeg streaming: %s", delivery.reason)
             return await _streaming_response(
                 url=url,
                 format_str=AUDIO_FORMAT,
@@ -316,7 +334,27 @@ async def stream_mp3_chunked(
     except HTTPException:
         raise
     except yt_dlp.utils.DownloadError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        error_msg = str(e)
+        if "rate-limited" in error_msg.lower() or "try again later" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "RATE_LIMITED",
+                    "message": error_msg,
+                    "retry_after": 300,
+                }
+            )
+        raise HTTPException(status_code=400, detail=error_msg)
     except Exception as e:
         logger.exception("Error in stream_mp3_chunked")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = str(e)
+        if "rate" in error_msg.lower() and "limit" in error_msg.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "RATE_LIMITED",
+                    "message": error_msg,
+                    "retry_after": 300,
+                }
+            )
+        raise HTTPException(status_code=500, detail=error_msg)

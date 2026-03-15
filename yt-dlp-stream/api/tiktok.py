@@ -498,6 +498,15 @@ async def process_tiktok(
                 status_code=403,
                 detail="Access denied. The video may be private or region-blocked."
             )
+        elif "rate-limited" in error_str.lower() or "try again later" in error_str.lower():
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "RATE_LIMITED",
+                    "message": error_str,
+                    "retry_after": 300,
+                }
+            )
         raise HTTPException(status_code=400, detail=error_str)
 
     except HTTPException:

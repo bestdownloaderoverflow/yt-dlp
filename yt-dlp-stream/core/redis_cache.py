@@ -10,6 +10,7 @@ import redis
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DEFAULT_TTL = 300  # 5 minutes
+WORKER_ID = os.getenv("WORKER_ID", "").strip()
 
 
 @dataclass
@@ -63,7 +64,8 @@ class RedisDownloadCache:
         impersonate: str = None,
     ) -> str:
         """Create new session and return key."""
-        key = str(uuid.uuid4())
+        raw_key = str(uuid.uuid4())
+        key = f"{WORKER_ID}-{raw_key}" if WORKER_ID else raw_key
         session = DownloadSession(
             url=url,
             type=type,
@@ -83,13 +85,14 @@ class RedisDownloadCache:
             impersonate=impersonate,
         )
 
-        redis_key = f"{self._key_prefix}{key}"
+        redis_key = f"{self._key_prefix}{raw_key}"
         self._redis.setex(redis_key, self._ttl, json.dumps(asdict(session)))
         return key
 
     def get_session(self, key: str) -> Optional[DownloadSession]:
         """Get session if valid, else None."""
-        redis_key = f"{self._key_prefix}{key}"
+        raw_key = key.split("-", 1)[1] if key.startswith("w") and "-" in key else key
+        redis_key = f"{self._key_prefix}{raw_key}"
         data = self._redis.get(redis_key)
 
         if not data:
@@ -100,7 +103,8 @@ class RedisDownloadCache:
 
     def delete_session(self, key: str):
         """Delete session manually."""
-        redis_key = f"{self._key_prefix}{key}"
+        raw_key = key.split("-", 1)[1] if key.startswith("w") and "-" in key else key
+        redis_key = f"{self._key_prefix}{raw_key}"
         self._redis.delete(redis_key)
 
     def health_check(self) -> bool:

@@ -160,8 +160,6 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ytdlp-redis
-    ports:
-      - "6379:6379"
     volumes:
       - redis-data:/data
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru

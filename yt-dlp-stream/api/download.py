@@ -31,12 +31,19 @@ DIRECT_PROXY_PLATFORMS = {"twitter", "x"}
 
 AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
 VIDEO_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB
+VIDEO_MIME_BY_EXT = {
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+    "mkv": "video/x-matroska",
+    "mov": "video/quicktime",
+}
 
 
 @router.get("/download")
 async def download(
     key: str = Query(..., description="Download key from /fetch"),
     download: bool = Query(True, description="Force download as attachment"),
+    strict: bool = Query(False, description="Enable stricter yt-dlp-like delivery behavior"),
     request: FastAPIRequest = None,
 ):
     """
@@ -76,6 +83,7 @@ async def download(
                 session.quality,
                 download,
                 request,
+                strict=strict,
                 proxy=session.proxy,
                 impersonate=session.impersonate,
             )
@@ -84,6 +92,7 @@ async def download(
                 url,
                 download,
                 request,
+                strict=strict,
                 proxy=session.proxy,
                 impersonate=session.impersonate,
             )
@@ -118,9 +127,10 @@ async def _download_video_direct(
         safe_headers["Cookie"] = cookies
 
     # Build filename from title + direct URL extension
-    default_ext = os.path.splitext(direct_url.split("?")[0])[1].lstrip(".") or "mp4"
+    default_ext = (os.path.splitext(direct_url.split("?")[0])[1].lstrip(".") or "mp4").lower()
     base_filename = (title or "download").strip() or "download"
     filename = f"{base_filename}.{default_ext}"
+    media_type = VIDEO_MIME_BY_EXT.get(default_ext, "application/octet-stream")
 
     async def _stream_video() -> AsyncIterator[bytes]:
         async with httpx.AsyncClient(
@@ -140,7 +150,7 @@ async def _download_video_direct(
 
     return StreamingResponse(
         _stream_video(),
-        media_type="video/mp4",
+        media_type=media_type,
         headers=response_headers,
     )
 
@@ -150,6 +160,7 @@ async def _download_video(
     quality: str,
     download: bool,
     request: FastAPIRequest,
+    strict: bool = False,
     proxy: Optional[str] = None,
     impersonate: Optional[str] = None,
 ):
@@ -161,16 +172,39 @@ async def _download_video(
     )
 
     base_filename = info.get("title", "download") or "download"
-    out_filename = f"{base_filename}.mp4"
     delivery = plan_delivery(resolved)
 
     if delivery.mode == "single_progressive":
         fmt = resolved[0]
+        out_ext = (fmt.get("ext") or "mp4").lower()
+        out_filename = f"{base_filename}.{out_ext}"
+        media_type = VIDEO_MIME_BY_EXT.get(out_ext, "application/octet-stream")
         direct_url = fmt["url"]
         http_headers = fmt.get("http_headers") or global_headers
         filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
 
-        if filesize:
+        if strict:
+            safe_headers = {
+                k: v for k, v in http_headers.items() if k.lower() != "accept-encoding"
+            }
+            safe_headers["Accept-Encoding"] = "identity"
+
+            async def _strict_simple_stream() -> AsyncIterator[bytes]:
+                async with httpx.AsyncClient(
+                    follow_redirects=True, timeout=60
+                ) as client:
+                    async with client.stream(
+                        "GET", direct_url, headers=safe_headers
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for data in resp.aiter_bytes(65536):
+                            if await request.is_disconnected():
+                                logger.info("Client disconnected")
+                                break
+                            yield data
+
+            body = _strict_simple_stream()
+        elif filesize:
             ydl_opts = _build_ydl_opts(proxy, impersonate)
             ydl_refresh_info = {
                 "url": url,
@@ -214,11 +248,23 @@ async def _download_video(
 
         return StreamingResponse(
             body,
-            media_type="video/mp4",
+            media_type=media_type,
             headers=response_headers,
         )
 
     elif delivery.mode == "multi_progressive":
+        if strict:
+            logger.info("Strict mode: using ffmpeg merge path for multi-track progressive format")
+            return await _streaming_response(
+                url=url,
+                format_str=format_str,
+                audio_only=False,
+                download=download,
+                ydl_opts=_build_ydl_opts(proxy, impersonate),
+                request=request,
+            )
+
+        out_filename = f"{base_filename}.mp4"
         video_fmt, audio_fmt = resolved[0], resolved[1]
         if video_fmt.get("vcodec", "none") in (None, "none", ""):
             video_fmt, audio_fmt = audio_fmt, video_fmt
@@ -256,6 +302,7 @@ async def _download_mp3(
     url: str,
     download: bool,
     request: FastAPIRequest,
+    strict: bool = False,
     proxy: Optional[str] = None,
     impersonate: Optional[str] = None,
 ):
@@ -267,6 +314,17 @@ async def _download_mp3(
     base_filename = info.get("title", "download") or "download"
     out_filename = f"{base_filename}.mp3"
     delivery = plan_delivery(resolved)
+
+    if strict:
+        logger.info("Strict mode: using ffmpeg audio path")
+        return await _streaming_response(
+            url=url,
+            format_str=AUDIO_FORMAT,
+            audio_only=True,
+            download=download,
+            ydl_opts=_build_ydl_opts(proxy, impersonate),
+            request=request,
+        )
 
     if delivery.mode == "single_progressive":
         fmt = resolved[0]

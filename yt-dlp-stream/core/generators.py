@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import queue
+import re
 import subprocess
 import threading
 from typing import Optional, AsyncIterator
@@ -18,6 +19,22 @@ from process_manager import process_manager
 from ytdl_manager import ydl_manager
 
 logger = logging.getLogger("ytdl_stream")
+
+
+_CONTENT_RANGE_RE = re.compile(r"^bytes\s+(\d+)-(\d+)/(\d+|\*)$")
+
+
+def _parse_content_range(content_range: Optional[str]) -> tuple[Optional[int], Optional[int], Optional[int]]:
+    if not content_range:
+        return None, None, None
+    match = _CONTENT_RANGE_RE.match(content_range.strip())
+    if not match:
+        return None, None, None
+    start = int(match.group(1))
+    end = int(match.group(2))
+    total_raw = match.group(3)
+    total = None if total_raw == "*" else int(total_raw)
+    return start, end, total
 
 
 def stream_generator_ffmpeg(
@@ -222,6 +239,17 @@ async def _chunked_video_generator(
 
                 try:
                     async with client.stream("GET", url, headers=range_headers) as resp:
+                        # 416: requested range cannot be satisfied. If we're already at EOF,
+                        # treat this as completion to match resilient downloader behaviour.
+                        if resp.status_code == 416:
+                            if read >= total_size:
+                                chunk_success = True
+                                break
+                            raise HTTPException(
+                                status_code=416,
+                                detail=f"Requested range not satisfiable at {read}/{total_size} bytes",
+                            )
+
                         # Handle 403 - URL expired, try transplant
                         if resp.status_code == 403:
                             if refresh_count < max_refreshes:
@@ -248,6 +276,33 @@ async def _chunked_video_generator(
                         if resp.status_code >= 400:
                             logger.error(f"HTTP {resp.status_code} at byte {read}/{total_size}")
                             resp.raise_for_status()
+
+                        # Range semantics validation (yt-dlp HttpFD style safety):
+                        # - 206 should match requested range start
+                        # - 200 is acceptable only on first chunk (server ignored Range)
+                        if resp.status_code == 206:
+                            cr_start, _, cr_total = _parse_content_range(resp.headers.get("Content-Range"))
+                            if cr_start is None or cr_start != read:
+                                raise HTTPException(
+                                    status_code=502,
+                                    detail=(
+                                        f"Invalid Content-Range response at byte {read}: "
+                                        f"{resp.headers.get('Content-Range')}"
+                                    ),
+                                )
+                            if cr_total is not None and cr_total != total_size:
+                                logger.warning(
+                                    "Content-Range total (%s) differs from expected total_size (%s)",
+                                    cr_total, total_size,
+                                )
+                        elif resp.status_code == 200 and read > 0:
+                            raise HTTPException(
+                                status_code=502,
+                                detail=(
+                                    "Server ignored Range request mid-download; "
+                                    "cannot continue safely without duplicate bytes"
+                                ),
+                            )
 
                         # Success - stream chunk data
                         chunk_bytes_read = 0
@@ -307,6 +362,9 @@ async def _chunked_video_generator(
                             status_code=503,
                             detail=f"Network error at {read}/{total_size} bytes after {max_retries_per_chunk} retries: {str(e)}"
                         )
+
+                except HTTPException:
+                    raise
 
                 except Exception as e:
                     logger.error(f"Unexpected error at byte {read}/{total_size}: {e}")

@@ -74,6 +74,25 @@ class YoutubeDLManager:
 
         return yt_dlp.YoutubeDL(opts)
 
+    @staticmethod
+    def _build_outbound_headers_locked(ydl: yt_dlp.YoutubeDL, info_dict: Dict) -> Dict[str, str]:
+        """
+        Build outbound HTTP headers with cookiejar parity.
+
+        yt-dlp's _calc_headers intentionally strips Cookie from returned headers.
+        For direct HTTP proxying/streaming, we re-add scoped cookies from cookiejar
+        for the target URL so requests more closely match downloader behaviour.
+        """
+        headers = dict(ydl._calc_headers(info_dict, load_cookies=True))
+        url = info_dict.get("url")
+        if url:
+            cookie_header = ydl.cookiejar.get_cookie_header(url)
+            if cookie_header:
+                headers["Cookie"] = cookie_header
+        # Match HttpFD behaviour by disabling compression for predictable byte ranges
+        headers.setdefault("Accept-Encoding", "identity")
+        return headers
+
     def _cleanup_old_instances(self):
         """LRU cleanup: hapus instance terlama jika melebihi limit."""
         while len(self._ydl_instances) > self._max_instances:
@@ -159,7 +178,10 @@ class YoutubeDLManager:
         with self._locks[opts_key]:
             self._request_count += 1
             try:
-                return ydl.extract_info(url, download=False)
+                info = ydl.extract_info(url, download=False)
+                if isinstance(info, dict) and info.get("url"):
+                    info["http_headers"] = self._build_outbound_headers_locked(ydl, info)
+                return info
             except Exception as e:
                 logger.error(f"extract_info failed for {url}: {e}")
                 raise
@@ -181,8 +203,16 @@ class YoutubeDLManager:
 
                 top = selected[0]
                 if "requested_formats" in top:
-                    return list(top["requested_formats"])
-                return [top]
+                    resolved = [dict(fmt) for fmt in top["requested_formats"]]
+                else:
+                    resolved = [dict(top)]
+
+                # Ensure each selected format has outbound-ready headers (incl. cookies)
+                for fmt in resolved:
+                    if fmt.get("url"):
+                        fmt["http_headers"] = self._build_outbound_headers_locked(ydl, fmt)
+
+                return resolved
             except Exception as e:
                 logger.error(f"resolve_formats failed: {e}")
                 raise
@@ -200,7 +230,9 @@ class YoutubeDLManager:
 
         with self._locks[opts_key]:
             try:
-                return ydl._calc_headers(info_dict, load_cookies=load_cookies)
+                if load_cookies:
+                    return self._build_outbound_headers_locked(ydl, info_dict)
+                return dict(ydl._calc_headers(info_dict, load_cookies=False))
             except Exception as e:
                 logger.error(f"calc_headers failed: {e}")
                 raise

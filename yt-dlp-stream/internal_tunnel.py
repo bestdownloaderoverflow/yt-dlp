@@ -3,11 +3,15 @@ Internal tunnel system untuk two-tier streaming.
 Hanya accessible dari localhost - digunakan oleh ffmpeg dan chunked downloader.
 """
 import asyncio
+import re
 import secrets
 from typing import Dict, Optional, Callable, AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
 import httpx
+
+
+_CONTENT_RANGE_RE = re.compile(r"^bytes\s+(\d+)-(\d+)/(\d+|\*)$")
 
 
 @dataclass
@@ -118,6 +122,13 @@ class InternalTunnelManager:
                     async with client.stream(
                         "GET", stream.url, headers=range_headers
                     ) as resp:
+                        if resp.status_code == 416:
+                            if read >= total_size:
+                                break
+                            raise Exception(
+                                f"Range not satisfiable at {read}/{total_size}"
+                            )
+
                         # Handle 403 - URL expired
                         if (
                             resp.status_code == 403
@@ -133,6 +144,18 @@ class InternalTunnelManager:
                                 )
 
                         resp.raise_for_status()
+
+                        if resp.status_code == 206:
+                            content_range = resp.headers.get("Content-Range")
+                            match = _CONTENT_RANGE_RE.match(content_range.strip()) if content_range else None
+                            if not match or int(match.group(1)) != read:
+                                raise Exception(
+                                    f"Invalid Content-Range at {read}: {content_range}"
+                                )
+                        elif resp.status_code == 200 and read > 0:
+                            raise Exception(
+                                "Server ignored Range mid-download; cannot continue safely"
+                            )
 
                         async for chunk in resp.aiter_bytes():
                             yield chunk

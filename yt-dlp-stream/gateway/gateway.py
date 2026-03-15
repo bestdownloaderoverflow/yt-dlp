@@ -299,6 +299,40 @@ class Gateway:
         # CORS
         self.app.middlewares.append(self._cors_middleware)
 
+    def _build_forward_headers(self, request, method: str = 'GET') -> Dict[str, str]:
+        """
+        Build headers forwarded to worker to preserve client/request semantics.
+        """
+        headers: Dict[str, str] = {}
+        passthrough = (
+            'Accept',
+            'Accept-Language',
+            'User-Agent',
+            'Range',
+            'If-Range',
+        )
+        for key in passthrough:
+            value = request.headers.get(key)
+            if value:
+                headers[key] = value
+
+        incoming_xff = request.headers.get('X-Forwarded-For')
+        remote_ip = request.remote
+        if incoming_xff and remote_ip:
+            headers['X-Forwarded-For'] = f'{incoming_xff}, {remote_ip}'
+        elif incoming_xff:
+            headers['X-Forwarded-For'] = incoming_xff
+        elif remote_ip:
+            headers['X-Forwarded-For'] = remote_ip
+
+        if request.scheme:
+            headers['X-Forwarded-Proto'] = request.scheme
+
+        if method == 'POST':
+            headers['Content-Type'] = request.headers.get('Content-Type', 'application/json')
+
+        return headers
+
     @web.middleware
     async def _cors_middleware(self, request, handler):
         if request.method == 'OPTIONS':
@@ -427,12 +461,9 @@ class Gateway:
         session = aiohttp.ClientSession(timeout=timeout)
 
         try:
-            headers = {
-                'Accept': request.headers.get('Accept', '*/*'),
-            }
+            headers = self._build_forward_headers(request, method)
 
             if method == 'POST':
-                headers['Content-Type'] = request.headers.get('Content-Type', 'application/json')
                 body = await request.read()
                 resp = await session.post(url, headers=headers, data=body)
             else:
@@ -569,10 +600,7 @@ class Gateway:
 
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                headers = {
-                    'Accept': request.headers.get('Accept', 'application/json'),
-                    'Content-Type': request.headers.get('Content-Type', 'application/json'),
-                }
+                headers = self._build_forward_headers(request, method)
 
                 if method == 'POST':
                     body = await request.read()
@@ -616,6 +644,13 @@ class Gateway:
                 is_rate_limit = True
                 logger.warning(f"[{worker.id}] Rate limit detected in response")
 
+            # User-requested policy: always failover on 400/403/429
+            # even when the message doesn't match known rate-limit patterns.
+            logger.warning(
+                f"[{worker.id}] Received {status}; treating as retryable failover per policy"
+            )
+            return {'success': False, 'is_rate_limit': True, 'status': status}
+
         if status == 200:
             # Create response
             response = web.Response(
@@ -625,7 +660,7 @@ class Gateway:
             )
             return {'success': True, 'response': response}
 
-        # For client errors (4xx), return as-is (don't retry)
+        # For client errors other than 400/403/429, return as-is (don't retry)
         if 400 <= status < 500 and not is_rate_limit:
             response = web.Response(
                 body=body,
@@ -660,7 +695,8 @@ class Gateway:
         try:
             timeout = ClientTimeout(total=0)  # No timeout for streaming
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as resp:
+                headers = self._build_forward_headers(request, 'GET')
+                async with session.get(url, headers=headers) as resp:
                     # Check for rate limit in stream
                     if resp.status == 200:
                         content_length = resp.headers.get('content-length')

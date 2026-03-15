@@ -23,6 +23,13 @@ from api.stream_ffmpeg import _streaming_response
 router = APIRouter()
 logger = logging.getLogger("ytdl_stream")
 
+_VIDEO_MIME_BY_EXT = {
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+    "mkv": "video/x-matroska",
+    "mov": "video/quicktime",
+}
+
 
 @router.get("/stream/video-chunked")
 async def stream_video_chunked(
@@ -30,6 +37,7 @@ async def stream_video_chunked(
     quality: Optional[str] = Query(None, description="Quality preset: 1080, 720, 480, 360"),
     format: Optional[str] = Query(None, description="Custom yt-dlp format string (overrides quality)"),
     download: bool = Query(False, description="Force download as attachment"),
+    strict: bool = Query(False, description="Enable stricter yt-dlp-like delivery behavior"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
     impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
     request: FastAPIRequest = None,
@@ -49,6 +57,7 @@ async def stream_video_chunked(
     - `quality`: 1080, 720, 480, 360 (default: 1080)
     - `format`: raw yt-dlp format string (overrides quality)
     - `download`: force attachment disposition
+    - `strict`: prefer stricter yt-dlp-like delivery behavior
     - `impersonate`: browser for TLS fingerprinting
     """
     _enforce_rate_limit(request)
@@ -76,12 +85,71 @@ async def stream_video_chunked(
         )
 
         base_filename = info.get("title", "download") or "download"
-        out_filename = f"{base_filename}.mp4"
         delivery = plan_delivery(resolved)
+
+        if strict and delivery.mode == "multi_progressive":
+            logger.info("Strict mode: using ffmpeg merge path for multi-track progressive format")
+            return await _streaming_response(
+                url=url,
+                format_str=format_str,
+                audio_only=False,
+                download=download,
+                ydl_opts=ydl_opts,
+                request=request,
+            )
+
+        if strict and delivery.mode == "single_progressive":
+            # yt-dlp HttpFD default behavior is single request stream (no forced chunked ranges)
+            fmt = resolved[0]
+            out_ext = (fmt.get("ext") or "mp4").lower()
+            out_filename = f"{base_filename}.{out_ext}"
+            media_type = _VIDEO_MIME_BY_EXT.get(out_ext, "application/octet-stream")
+            direct_url = fmt["url"]
+            http_headers = fmt.get("http_headers") or global_headers
+            safe_headers = {k: v for k, v in http_headers.items() if k.lower() != "accept-encoding"}
+            safe_headers["Accept-Encoding"] = "identity"
+
+            async def _strict_simple_stream() -> AsyncIterator[bytes]:
+                async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                        resp.raise_for_status()
+                        async for data in resp.aiter_bytes(65536):
+                            if await request.is_disconnected():
+                                logger.info("Client disconnected, stopping strict video stream")
+                                break
+                            yield data
+
+            disposition = "attachment" if download else "inline"
+            ascii_name = out_filename.encode("ascii", "ignore").decode()
+            utf8_name = quote(out_filename, safe="")
+            if ascii_name == out_filename:
+                cd_header = f'{disposition}; filename="{out_filename.replace(chr(34), chr(92)+chr(34))}"'
+            else:
+                cd_header = f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{utf8_name}"
+
+            response_headers = {
+                "Content-Disposition": cd_header,
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+            }
+            filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
+            if filesize:
+                response_headers["Content-Length"] = str(filesize)
+
+            return StreamingResponse(
+                _strict_simple_stream(),
+                media_type=media_type,
+                headers=response_headers,
+            )
 
         if delivery.mode == "single_progressive":
                 # Single progressive download file
                 fmt = resolved[0]
+                out_ext = (fmt.get("ext") or "mp4").lower()
+                out_filename = f"{base_filename}.{out_ext}"
+                media_type = _VIDEO_MIME_BY_EXT.get(out_ext, "application/octet-stream")
                 direct_url = fmt["url"]
                 http_headers = fmt.get("http_headers") or global_headers
                 filesize = fmt.get("filesize") or fmt.get("filesize_approx") or 0
@@ -99,6 +167,7 @@ async def stream_video_chunked(
                 else:
                     # No filesize - use simple streaming with disconnect detection
                     safe_headers = {k: v for k, v in http_headers.items() if k.lower() != "accept-encoding"}
+                    safe_headers["Accept-Encoding"] = "identity"
                     async def _simple_stream() -> AsyncIterator[bytes]:
                         async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
                             async with client.stream("GET", direct_url, headers=safe_headers) as resp:
@@ -140,11 +209,12 @@ async def stream_video_chunked(
 
                 return StreamingResponse(
                     body,
-                    media_type="video/mp4",
+                    media_type=media_type,
                     headers=response_headers,
                 )
 
         elif delivery.mode == "multi_progressive":
+            out_filename = f"{base_filename}.mp4"
             # Separate video + audio, both progressive download
             # Download both to temp files with chunked method, then merge with ffmpeg
             video_fmt, audio_fmt = resolved[0], resolved[1]
@@ -243,6 +313,7 @@ async def stream_video_chunked(
 async def stream_mp3_chunked(
     url: str = Query(..., description="Video URL"),
     download: bool = Query(False, description="Force download as attachment"),
+    strict: bool = Query(False, description="Enable stricter yt-dlp-like delivery behavior"),
     proxy: Optional[str] = Query(None, description="Proxy URL (e.g., http://127.0.0.1:8080)"),
     impersonate: Optional[str] = Query(None, description="Browser to impersonate for TLS fingerprinting (e.g., chrome, safari)"),
     request: FastAPIRequest = None,
@@ -261,6 +332,7 @@ async def stream_mp3_chunked(
 
     Query params:
     - `download`: force attachment disposition
+    - `strict`: prefer stricter yt-dlp-like delivery behavior
     - `impersonate`: browser for TLS fingerprinting
     """
     _enforce_rate_limit(request)
@@ -279,6 +351,17 @@ async def stream_mp3_chunked(
         base_filename = info.get("title", "download") or "download"
         out_filename = f"{base_filename}.mp3"
         delivery = plan_delivery(resolved)
+
+        if strict:
+            logger.info("Strict mode: using ffmpeg audio path")
+            return await _streaming_response(
+                url=url,
+                format_str=AUDIO_FORMAT,
+                audio_only=True,
+                download=download,
+                ydl_opts=ydl_opts,
+                request=request,
+            )
 
         if delivery.mode == "single_progressive":
             fmt = resolved[0]

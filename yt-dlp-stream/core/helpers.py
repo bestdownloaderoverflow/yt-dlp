@@ -25,7 +25,12 @@ def _header_str(headers: dict) -> str:
 def _client_id_from_request(request: Optional[FastAPIRequest]) -> str:
     if not request:
         return "unknown"
-    client_host = request.client.host if request.client else "unknown"
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        # Use the left-most IP as originating client when behind gateway/proxy.
+        client_host = forwarded_for.split(",")[0].strip() or "unknown"
+    else:
+        client_host = request.client.host if request.client else "unknown"
     ua = request.headers.get("user-agent", "-")
     return f"{client_host}:{ua}"
 

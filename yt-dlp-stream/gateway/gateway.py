@@ -10,6 +10,7 @@ Fitur:
 """
 
 import asyncio
+from collections import deque
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ import random
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Deque, Dict, List, Optional, Set
 from urllib.parse import urljoin
 
 import aiohttp
@@ -40,6 +41,16 @@ MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))
 RATE_LIMIT_COOLDOWN = int(os.getenv('RATE_LIMIT_COOLDOWN', '300'))  # 5 menit
 HEALTH_CHECK_INTERVAL = 30  # seconds
 UPTIME_RESTART_INTERVAL = 24 * 60 * 60  # 24 jam
+RESTART_BACKOFF_BASE = int(os.getenv('RESTART_BACKOFF_BASE', '30'))
+RESTART_BACKOFF_MAX = int(os.getenv('RESTART_BACKOFF_MAX', '300'))
+RESTART_BUDGET_LIMIT = int(os.getenv('RESTART_BUDGET_LIMIT', '3'))
+RESTART_BUDGET_WINDOW = int(os.getenv('RESTART_BUDGET_WINDOW', '600'))
+RESTART_QUARANTINE_SECONDS = int(os.getenv('RESTART_QUARANTINE_SECONDS', '600'))
+RESTART_BACKOFF_JITTER = int(os.getenv('RESTART_BACKOFF_JITTER', '5'))
+DEGRADED_RETRY_AFTER = int(os.getenv('DEGRADED_RETRY_AFTER', '5'))
+GATEWAY_RL_WINDOW_SECONDS = int(os.getenv('GATEWAY_RL_WINDOW_SECONDS', '60'))
+GATEWAY_RL_FETCH_LIMIT = int(os.getenv('GATEWAY_RL_FETCH_LIMIT', '45'))
+GATEWAY_RL_DOWNLOAD_LIMIT = int(os.getenv('GATEWAY_RL_DOWNLOAD_LIMIT', '45'))
 IP_RE = re.compile(r'^\d{1,3}(?:\.\d{1,3}){3}$')
 
 
@@ -54,9 +65,13 @@ class Worker:
     restarting: bool = False
     restart_scheduled: bool = False
     failures: int = 0
+    restart_failures: int = 0
     started_at: float = field(default_factory=time.time)
     active_requests: int = 0
     last_rate_limit: float = 0
+    next_restart_at: float = 0
+    quarantine_until: float = 0
+    restart_events: List[float] = field(default_factory=list)
 
     @property
     def api_url(self) -> str:
@@ -88,11 +103,14 @@ class WorkerRegistry:
         """Get healthy workers that are not restarting"""
         async with self._lock:
             healthy = []
+            now = time.time()
             for w in self._workers:
+                if now < w.quarantine_until:
+                    continue
                 if w.healthy and not w.restarting and not w.restart_scheduled:
                     if exclude is None or w.id not in exclude:
                         # Check rate limit cooldown
-                        if time.time() - w.last_rate_limit > RATE_LIMIT_COOLDOWN:
+                        if now - w.last_rate_limit > RATE_LIMIT_COOLDOWN:
                             healthy.append(w)
             return healthy
 
@@ -135,6 +153,22 @@ class WorkerRegistry:
                     return False
             return False
 
+    async def can_start_restart(self, worker_id: str):
+        """Return (allowed, reason, wait_seconds) for restart task launch."""
+        async with self._lock:
+            for w in self._workers:
+                if w.id != worker_id:
+                    continue
+                now = time.time()
+                if w.restarting:
+                    return False, 'already_restarting', 0
+                if now < w.quarantine_until:
+                    return False, 'quarantine', int(w.quarantine_until - now)
+                if now < w.next_restart_at:
+                    return False, 'backoff', int(w.next_restart_at - now)
+                return True, 'ok', 0
+            return False, 'unknown_worker', 0
+
     async def update_restart_state(self, worker_id: str, restarting: bool):
         """Update worker restarting state"""
         async with self._lock:
@@ -155,12 +189,39 @@ class WorkerRegistry:
                     if success:
                         w.healthy = True
                         w.failures = 0
+                        w.restart_failures = 0
                         w.started_at = time.time()
+                        w.next_restart_at = 0
+                        w.quarantine_until = 0
+                        w.restart_events.clear()
                         logger.info(f"[{worker_id}] Restarted successfully")
                     else:
+                        now = time.time()
                         w.healthy = False
                         w.failures += 1
-                        logger.error(f"[{worker_id}] Restart failed")
+                        w.restart_failures += 1
+                        # Exponential backoff with jitter to avoid flapping.
+                        exp = min(max(w.restart_failures - 1, 0), 6)
+                        delay = min(RESTART_BACKOFF_MAX, RESTART_BACKOFF_BASE * (2 ** exp))
+                        if RESTART_BACKOFF_JITTER > 0:
+                            delay += random.uniform(0, RESTART_BACKOFF_JITTER)
+                        w.next_restart_at = now + delay
+
+                        # Restart budget: too many restarts in a short window -> quarantine.
+                        window_start = now - RESTART_BUDGET_WINDOW
+                        w.restart_events = [t for t in w.restart_events if t >= window_start]
+                        w.restart_events.append(now)
+                        if len(w.restart_events) >= RESTART_BUDGET_LIMIT:
+                            w.quarantine_until = now + RESTART_QUARANTINE_SECONDS
+                            w.next_restart_at = w.quarantine_until
+                            logger.error(
+                                f"[{worker_id}] Entering quarantine for {RESTART_QUARANTINE_SECONDS}s "
+                                f"after {len(w.restart_events)} restart failures"
+                            )
+
+                        # Keep restart scheduled; scheduler will re-run after backoff/quarantine.
+                        w.restart_scheduled = True
+                        logger.error(f"[{worker_id}] Restart failed; retry after {int(delay)}s")
                     break
 
     async def get_workers_needing_restart(self) -> List[str]:
@@ -307,6 +368,38 @@ class VPNRotator:
         return False
 
 
+class SlidingWindowRateLimiter:
+    """Simple in-memory sliding-window rate limiter."""
+
+    def __init__(self, limit: int, window_seconds: int):
+        self.limit = max(1, limit)
+        self.window_seconds = max(1, window_seconds)
+        self._events: Dict[str, Deque[float]] = {}
+        self._lock = asyncio.Lock()
+
+    async def check(self, key: str):
+        """
+        Returns (allowed, retry_after_seconds).
+        """
+        now = time.time()
+        cutoff = now - self.window_seconds
+        async with self._lock:
+            queue = self._events.get(key)
+            if queue is None:
+                queue = deque()
+                self._events[key] = queue
+
+            while queue and queue[0] <= cutoff:
+                queue.popleft()
+
+            if len(queue) >= self.limit:
+                retry_after = max(1, int(queue[0] + self.window_seconds - now))
+                return False, retry_after
+
+            queue.append(now)
+            return True, 0
+
+
 class Gateway:
     """Main gateway server"""
 
@@ -317,6 +410,14 @@ class Gateway:
         self._setup_routes()
         self._restart_tasks: Dict[str, asyncio.Task] = {}
         self._restart_tasks_lock = asyncio.Lock()
+        self._rl_fetch = SlidingWindowRateLimiter(
+            limit=GATEWAY_RL_FETCH_LIMIT,
+            window_seconds=GATEWAY_RL_WINDOW_SECONDS,
+        )
+        self._rl_download = SlidingWindowRateLimiter(
+            limit=GATEWAY_RL_DOWNLOAD_LIMIT,
+            window_seconds=GATEWAY_RL_WINDOW_SECONDS,
+        )
 
         # Background tasks
         self._restart_task = None
@@ -395,10 +496,16 @@ class Gateway:
 
     async def handle_fetch(self, request):
         """Fetch endpoint - forward to a worker with retry"""
+        blocked = await self._check_rate_limit(request, self._rl_fetch, 'fetch')
+        if blocked:
+            return blocked
         return await self._proxy_with_retry(request, '/fetch')
 
     async def handle_download(self, request):
         """Download endpoint - forward to worker based on key"""
+        blocked = await self._check_rate_limit(request, self._rl_download, 'download')
+        if blocked:
+            return blocked
         key = request.query.get('key', '')
         worker_id = self._extract_worker_id(key)
 
@@ -434,16 +541,22 @@ class Gateway:
     async def handle_health(self, request):
         """Health check endpoint"""
         healthy = await self.registry.get_healthy_workers()
+        now = time.time()
         return web.json_response({
             'status': 'healthy' if len(healthy) > 0 else 'degraded',
             'workers': [
                 {
                     'id': w.id,
                     'healthy': w.healthy,
+                    'restarting': w.restarting,
+                    'restart_scheduled': w.restart_scheduled,
                     'active_requests': w.active_requests,
-                    'failures': w.failures
+                    'failures': w.failures,
+                    'restart_failures': w.restart_failures,
+                    'quarantine_remaining': max(0, int(w.quarantine_until - now)),
+                    'restart_backoff_remaining': max(0, int(w.next_restart_at - now)),
                 }
-                for w in healthy
+                for w in self.registry._workers
             ]
         })
 
@@ -462,7 +575,8 @@ class Gateway:
         if not worker or not worker.healthy:
             return web.json_response(
                 {'error': 'Worker not available'},
-                status=503
+                status=503,
+                headers={'Retry-After': str(DEGRADED_RETRY_AFTER)},
             )
 
         return await self._stream_from_worker(request, worker, '/tunnel')
@@ -476,6 +590,26 @@ class Gateway:
             return parts[0]
         return None
 
+    def _client_ip(self, request) -> str:
+        xff = request.headers.get('X-Forwarded-For')
+        if xff:
+            first = xff.split(',')[0].strip()
+            if first:
+                return first
+        return request.remote or 'unknown'
+
+    async def _check_rate_limit(self, request, limiter: SlidingWindowRateLimiter, route_name: str):
+        client_ip = self._client_ip(request)
+        allowed, retry_after = await limiter.check(client_ip)
+        if allowed:
+            return None
+        logger.warning(f"[ratelimit] {route_name} blocked for {client_ip}; retry_after={retry_after}s")
+        return web.json_response(
+            {'error': 'Too Many Requests', 'detail': f'Rate limit exceeded on {route_name}'},
+            status=429,
+            headers={'Retry-After': str(retry_after)},
+        )
+
     async def _schedule_worker_restart(self, worker_id: str, *, rate_limited: bool = False):
         """Schedule a background restart for a failed worker."""
         if rate_limited:
@@ -488,9 +622,9 @@ class Gateway:
             logger.info(f"[{worker_id}] Restart already scheduled/running; skip duplicate schedule")
             return
 
-        started = await self._ensure_restart_task(worker_id)
+        started = await self._ensure_restart_task(worker_id, log_blocked=True)
         if not started:
-            logger.info(f"[{worker_id}] Restart task already in-flight; skip duplicate task")
+            logger.info(f"[{worker_id}] Restart task not started now (duplicate/in backoff/quarantine)")
 
     def _queue_restart_candidate(self, queued: Dict[str, bool], worker_id: str, *, rate_limited: bool = False):
         """
@@ -505,8 +639,14 @@ class Gateway:
         for worker_id, rate_limited in queued.items():
             await self._schedule_worker_restart(worker_id, rate_limited=rate_limited)
 
-    async def _ensure_restart_task(self, worker_id: str) -> bool:
+    async def _ensure_restart_task(self, worker_id: str, *, log_blocked: bool = False) -> bool:
         """Ensure only one restart task runs per worker at a time."""
+        can_start, reason, wait_seconds = await self.registry.can_start_restart(worker_id)
+        if not can_start:
+            if log_blocked and reason in ('quarantine', 'backoff'):
+                logger.warning(f"[{worker_id}] Restart blocked by {reason}; wait {wait_seconds}s")
+            return False
+
         async with self._restart_tasks_lock:
             existing = self._restart_tasks.get(worker_id)
             if existing and not existing.done():
@@ -647,7 +787,8 @@ class Gateway:
                 'error': 'Service Unavailable',
                 'detail': 'All workers failed or busy. Please try again later.'
             },
-            status=503
+            status=503,
+            headers={'Retry-After': str(DEGRADED_RETRY_AFTER)},
         )
 
     async def _proxy_with_rotation(self, request, path: str) -> web.Response:
@@ -691,7 +832,8 @@ class Gateway:
 
         return web.json_response(
             {'error': 'Service Unavailable', 'detail': 'All workers rate limited or failed'},
-            status=503
+            status=503,
+            headers={'Retry-After': str(DEGRADED_RETRY_AFTER)},
         )
 
     async def _try_proxy_request(self, request, worker: Worker, path: str, method: str = 'GET') -> Dict:
@@ -789,7 +931,11 @@ class Gateway:
         """Simple proxy to random worker"""
         workers = await self.registry.get_healthy_workers()
         if not workers:
-            return web.json_response({'error': 'No workers available'}, status=503)
+            return web.json_response(
+                {'error': 'No workers available'},
+                status=503,
+                headers={'Retry-After': str(DEGRADED_RETRY_AFTER)},
+            )
 
         worker = random.choice(workers)
         result = await self._proxy_streaming_response(request, worker, path)

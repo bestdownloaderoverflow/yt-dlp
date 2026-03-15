@@ -492,6 +492,19 @@ class Gateway:
         if not started:
             logger.info(f"[{worker_id}] Restart task already in-flight; skip duplicate task")
 
+    def _queue_restart_candidate(self, queued: Dict[str, bool], worker_id: str, *, rate_limited: bool = False):
+        """
+        Queue restart candidates for this request and merge severity.
+        True means rate-limited restart path (takes precedence).
+        """
+        prev = queued.get(worker_id, False)
+        queued[worker_id] = bool(prev or rate_limited)
+
+    async def _flush_queued_restarts(self, queued: Dict[str, bool]):
+        """Run queued restarts after the request has a successful failover."""
+        for worker_id, rate_limited in queued.items():
+            await self._schedule_worker_restart(worker_id, rate_limited=rate_limited)
+
     async def _ensure_restart_task(self, worker_id: str) -> bool:
         """Ensure only one restart task runs per worker at a time."""
         async with self._restart_tasks_lock:
@@ -589,6 +602,7 @@ class Gateway:
     ) -> web.Response:
         """Proxy request with retry and failover"""
         tried = set()
+        queued_restarts: Dict[str, bool] = {}
 
         for attempt in range(MAX_RETRIES):
             worker = None
@@ -612,16 +626,18 @@ class Gateway:
             result = await self._proxy_streaming_response(request, worker, path, method)
 
             if result['success']:
+                if queued_restarts:
+                    await self._flush_queued_restarts(queued_restarts)
                 return result['response']
 
             should_restart = result.get('should_restart', True)
             if should_restart:
                 if result.get('is_rate_limit'):
                     logger.warning(f"[{worker.id}] Rate limit detected, rotating VPN...")
-                    await self._schedule_worker_restart(worker.id, rate_limited=True)
+                    self._queue_restart_candidate(queued_restarts, worker.id, rate_limited=True)
                 else:
                     logger.warning(f"[{worker.id}] Retryable failure, scheduling restart")
-                    await self._schedule_worker_restart(worker.id)
+                    self._queue_restart_candidate(queued_restarts, worker.id)
             else:
                 logger.warning(f"[{worker.id}] Retryable client-side failure; failover without restart")
 
@@ -637,6 +653,7 @@ class Gateway:
     async def _proxy_with_rotation(self, request, path: str) -> web.Response:
         """Proxy request with immediate VPN rotation on rate limit"""
         tried = set()
+        queued_restarts: Dict[str, bool] = {}
 
         for attempt in range(MAX_RETRIES):
             workers = await self.registry.get_healthy_workers(tried)
@@ -653,16 +670,18 @@ class Gateway:
                 result = await self._proxy_streaming_response(request, worker, path)
 
                 if result['success']:
+                    if queued_restarts:
+                        await self._flush_queued_restarts(queued_restarts)
                     return result['response']
 
                 should_restart = result.get('should_restart', True)
                 if should_restart:
                     if result.get('is_rate_limit'):
                         logger.warning(f"[{worker.id}] Rate limit on stream, rotating...")
-                        await self._schedule_worker_restart(worker.id, rate_limited=True)
+                        self._queue_restart_candidate(queued_restarts, worker.id, rate_limited=True)
                     else:
                         logger.warning(f"[{worker.id}] Stream failure, scheduling restart")
-                        await self._schedule_worker_restart(worker.id)
+                        self._queue_restart_candidate(queued_restarts, worker.id)
                 else:
                     logger.warning(f"[{worker.id}] Retryable client-side stream failure; failover without restart")
                 continue

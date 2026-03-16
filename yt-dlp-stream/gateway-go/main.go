@@ -1241,7 +1241,7 @@ func loadConfig() Config {
 		GatewayRLDownloadLimit:   envInt("GATEWAY_RL_DOWNLOAD_LIMIT", 45),
 		DrainTimeoutSeconds:      envInt("DRAIN_TIMEOUT_SECONDS", 90),
 		DrainPollIntervalMs:      envInt("DRAIN_POLL_INTERVAL_MS", 500),
-		RestartStabilizeSeconds:  envInt("RESTART_STABILIZE_SECONDS", 3),
+		RestartStabilizeSeconds:  envInt("RESTART_STABILIZE_SECONDS", 2),
 	}
 }
 

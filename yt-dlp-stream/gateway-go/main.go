@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -37,6 +39,7 @@ type Config struct {
 	GatewayRLDownloadLimit   int
 	DrainTimeoutSeconds      int
 	DrainPollIntervalMs      int
+	RestartStabilizeSeconds  int
 }
 
 type Worker struct {
@@ -411,10 +414,14 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	}
 
 	if healthy {
+		stabilize := time.Duration(v.cfg.RestartStabilizeSeconds) * time.Second
+		if stabilize < 0 {
+			stabilize = 0
+		}
 		select {
 		case <-ctx.Done():
 			return false
-		case <-time.After(30 * time.Second):
+		case <-time.After(stabilize):
 		}
 		v.registry.MarkRestarted(workerID, true)
 		return true
@@ -534,6 +541,19 @@ type proxyResult struct {
 	shouldRestart bool
 	status        int
 	wroteDirect   bool
+}
+
+func isClientAbortError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "context canceled")
 }
 
 type Gateway struct {
@@ -665,18 +685,18 @@ func (g *Gateway) handleFetch(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlFetch, "fetch") {
 		return
 	}
-	g.proxyWithRetry(w, r, "/fetch", http.MethodGet, "")
+	g.proxyWithRetry(w, r, "/fetch", http.MethodGet, "", false)
 }
 
 func (g *Gateway) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlDownload, "download") {
 		return
 	}
-	g.proxyWithRetry(w, r, "/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount))
+	g.proxyWithRetry(w, r, "/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), true)
 }
 
 func (g *Gateway) handleInfo(w http.ResponseWriter, r *http.Request) {
-	g.proxyWithRetry(w, r, "/info", http.MethodGet, "")
+	g.proxyWithRetry(w, r, "/info", http.MethodGet, "", false)
 }
 
 func (g *Gateway) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -688,11 +708,11 @@ func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
 		return
 	}
-	g.proxyWithRetry(w, r, "/tiktok", http.MethodPost, "")
+	g.proxyWithRetry(w, r, "/tiktok", http.MethodPost, "", false)
 }
 
 func (g *Gateway) handleTikTokDownload(w http.ResponseWriter, r *http.Request) {
-	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount))
+	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), true)
 }
 
 func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -887,6 +907,9 @@ func (g *Gateway) proxyStreamingResponse(w http.ResponseWriter, r *http.Request,
 	}
 	resp, err := g.makeWorkerRequest(r.Context(), worker, r, path, method, body, timeout)
 	if err != nil {
+		if r.Context().Err() != nil || isClientAbortError(err) {
+			return proxyResult{success: false, wroteDirect: true}
+		}
 		log.Printf("[%s] request error: %v", worker.ID, err)
 		return proxyResult{success: false}
 	}
@@ -897,7 +920,9 @@ func (g *Gateway) proxyStreamingResponse(w http.ResponseWriter, r *http.Request,
 		w.WriteHeader(resp.StatusCode)
 		_, copyErr := io.Copy(w, resp.Body)
 		if copyErr != nil {
-			log.Printf("[%s] stream copy error: %v", worker.ID, copyErr)
+			if !isClientAbortError(copyErr) {
+				log.Printf("[%s] stream copy error: %v", worker.ID, copyErr)
+			}
 			return proxyResult{success: false, wroteDirect: true}
 		}
 		return proxyResult{success: true, wroteDirect: true}
@@ -937,8 +962,13 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 	}
 
 	if status == http.StatusBadRequest {
-		log.Printf("[%s] received 400; retryable failover without restart", worker.ID)
-		return proxyResult{success: false, status: status, shouldRestart: false}
+		copyHeader(w.Header(), resp.Header, nil)
+		if ct := resp.Header.Get("Content-Type"); ct == "" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		w.WriteHeader(status)
+		_, _ = w.Write(body)
+		return proxyResult{success: true, wroteDirect: true}
 	}
 
 	if status >= 400 && status < 500 {
@@ -954,7 +984,7 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 	return proxyResult{success: false, status: status, shouldRestart: false}
 }
 
-func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID string) {
+func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID string, strictPreferred bool) {
 	tried := map[string]bool{}
 	queued := map[string]bool{}
 	var body []byte
@@ -972,10 +1002,17 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 		if preferredWorkerID != "" && !tried[preferredWorkerID] {
 			if preferred := g.registry.GetWorker(preferredWorkerID); preferred != nil && preferred.Healthy && !preferred.Restarting && !preferred.RestartScheduled {
 				worker = preferred
+			} else if strictPreferred {
+				log.Printf("[%s] preferred worker unavailable for key-bound request", preferredWorkerID)
+				break
 			}
 		}
 		if worker == nil {
 			workers := g.registry.GetHealthyWorkers(tried)
+			if strictPreferred {
+				log.Printf("[%s] preferred worker unavailable for key-bound request", preferredWorkerID)
+				break
+			}
 			if len(workers) == 0 {
 				log.Printf("no healthy workers available")
 				break
@@ -1113,7 +1150,9 @@ func (g *Gateway) streamFromWorker(w http.ResponseWriter, r *http.Request, worke
 	w.WriteHeader(resp.StatusCode)
 	_, err = io.Copy(w, resp.Body)
 	if err != nil {
-		log.Printf("[%s] stream copy error: %v", worker.ID, err)
+		if !isClientAbortError(err) {
+			log.Printf("[%s] stream copy error: %v", worker.ID, err)
+		}
 		return proxyResult{success: false, wroteDirect: true}
 	}
 	return proxyResult{success: true, wroteDirect: true}
@@ -1202,6 +1241,7 @@ func loadConfig() Config {
 		GatewayRLDownloadLimit:   envInt("GATEWAY_RL_DOWNLOAD_LIMIT", 45),
 		DrainTimeoutSeconds:      envInt("DRAIN_TIMEOUT_SECONDS", 90),
 		DrainPollIntervalMs:      envInt("DRAIN_POLL_INTERVAL_MS", 500),
+		RestartStabilizeSeconds:  envInt("RESTART_STABILIZE_SECONDS", 3),
 	}
 }
 

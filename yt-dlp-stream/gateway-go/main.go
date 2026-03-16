@@ -1005,6 +1005,10 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 	}
 
 	log.Printf("all %d attempts failed", g.cfg.MaxRetries)
+	if len(queued) > 0 {
+		log.Printf("flushing %d queued restart(s) after total retry failure", len(queued))
+		g.flushQueuedRestarts(queued)
+	}
 	w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 		"error":  "Service Unavailable",
@@ -1049,6 +1053,10 @@ func (g *Gateway) proxyWithRotation(w http.ResponseWriter, r *http.Request, path
 	}
 
 	w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
+	if len(queued) > 0 {
+		log.Printf("flushing %d queued restart(s) after stream retry failure", len(queued))
+		g.flushQueuedRestarts(queued)
+	}
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 		"error":  "Service Unavailable",
 		"detail": "All workers rate limited or failed",

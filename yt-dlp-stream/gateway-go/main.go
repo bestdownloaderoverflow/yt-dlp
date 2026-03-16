@@ -214,6 +214,7 @@ func (r *WorkerRegistry) MarkRestarted(workerID string, success bool) {
 		w.Failures = 0
 		w.RestartFailures = 0
 		w.StartedAt = time.Now()
+		w.LastRateLimit = time.Time{}
 		w.NextRestartAt = time.Time{}
 		w.QuarantineUntil = time.Time{}
 		w.RestartEvents = nil
@@ -654,7 +655,8 @@ func (g *Gateway) buildForwardHeaders(r *http.Request, method string) http.Heade
 }
 
 func (g *Gateway) handleRoot(w http.ResponseWriter, r *http.Request) {
-	if !g.proxyToWorker(w, r, "/") {
+	result := g.proxyToWorker(w, r, "/")
+	if !result.success && !result.wroteDirect {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Worker failed"})
 	}
 }
@@ -731,7 +733,8 @@ func (g *Gateway) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Worker not available"})
 		return
 	}
-	if !g.streamFromWorker(w, r, worker, "/tunnel") {
+	result := g.streamFromWorker(w, r, worker, "/tunnel")
+	if !result.success && !result.wroteDirect {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Stream failed"})
 	}
 }
@@ -895,7 +898,7 @@ func (g *Gateway) proxyStreamingResponse(w http.ResponseWriter, r *http.Request,
 		_, copyErr := io.Copy(w, resp.Body)
 		if copyErr != nil {
 			log.Printf("[%s] stream copy error: %v", worker.ID, copyErr)
-			return proxyResult{success: false}
+			return proxyResult{success: false, wroteDirect: true}
 		}
 		return proxyResult{success: true, wroteDirect: true}
 	}
@@ -990,6 +993,9 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 			}
 			return
 		}
+		if result.wroteDirect {
+			return
+		}
 
 		if result.shouldRestart {
 			if result.isRateLimit {
@@ -1038,6 +1044,9 @@ func (g *Gateway) proxyWithRotation(w http.ResponseWriter, r *http.Request, path
 			}
 			return
 		}
+		if result.wroteDirect {
+			return
+		}
 
 		if result.shouldRestart {
 			if result.isRateLimit {
@@ -1063,28 +1072,28 @@ func (g *Gateway) proxyWithRotation(w http.ResponseWriter, r *http.Request, path
 	})
 }
 
-func (g *Gateway) proxyToWorker(w http.ResponseWriter, r *http.Request, path string) bool {
+func (g *Gateway) proxyToWorker(w http.ResponseWriter, r *http.Request, path string) proxyResult {
 	workers := g.registry.GetHealthyWorkers(nil)
 	if len(workers) == 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No workers available"})
-		return false
+		return proxyResult{success: false, wroteDirect: true}
 	}
 	worker := workers[rand.Intn(len(workers))]
 	g.registry.IncrementActive(worker.ID)
 	result := g.proxyStreamingResponse(w, r, worker, path, http.MethodGet, nil)
 	g.registry.DecrementActive(worker.ID)
-	return result.success
+	return result
 }
 
-func (g *Gateway) streamFromWorker(w http.ResponseWriter, r *http.Request, worker *Worker, path string) bool {
+func (g *Gateway) streamFromWorker(w http.ResponseWriter, r *http.Request, worker *Worker, path string) proxyResult {
 	g.registry.IncrementActive(worker.ID)
 	defer g.registry.DecrementActive(worker.ID)
 
 	resp, err := g.makeWorkerRequest(r.Context(), worker, r, path, http.MethodGet, nil, 0)
 	if err != nil {
 		log.Printf("[%s] stream error: %v", worker.ID, err)
-		return false
+		return proxyResult{success: false}
 	}
 	defer resp.Body.Close()
 
@@ -1105,9 +1114,9 @@ func (g *Gateway) streamFromWorker(w http.ResponseWriter, r *http.Request, worke
 	_, err = io.Copy(w, resp.Body)
 	if err != nil {
 		log.Printf("[%s] stream copy error: %v", worker.ID, err)
-		return false
+		return proxyResult{success: false, wroteDirect: true}
 	}
-	return true
+	return proxyResult{success: true, wroteDirect: true}
 }
 
 func (g *Gateway) restartScheduler() {

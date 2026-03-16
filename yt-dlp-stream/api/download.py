@@ -14,6 +14,7 @@ from urllib.parse import quote
 from core.redis_cache import download_cache
 from core.config import QUALITY_FORMATS
 from core.delivery import plan_delivery
+from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import (
     _chunked_video_generator_with_disconnect,
     _stream_chunked_merge,
@@ -101,9 +102,13 @@ async def download(
         else:
             raise HTTPException(status_code=400, detail=f"Unknown type: {type}")
 
+    except HTTPException:
+        raise
+    except yt_dlp.utils.DownloadError as e:
+        raise map_yt_dlp_exception(e, default_status=400)
     except Exception as e:
         logger.exception(f"Error in download: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise map_generic_exception(e, default_status=500)
 
 
 async def _download_video_direct(

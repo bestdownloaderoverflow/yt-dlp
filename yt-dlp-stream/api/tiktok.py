@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Query, Request as FastAPIRequest
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
+from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import slideshow_stream_generator
 from core.helpers import _enforce_rate_limit
 from core.redis_cache import download_cache
@@ -487,37 +488,25 @@ async def process_tiktok(
             )
 
     except yt_dlp.utils.DownloadError as e:
-        error_str = str(e)
-        if "Unsupported URL" in error_str or "Unable to download webpage" in error_str:
-            raise HTTPException(
-                status_code=404,
-                detail="Video not found. Please check the URL."
-            )
-        elif "403" in error_str or "Forbidden" in error_str:
-            raise HTTPException(
-                status_code=403,
-                detail="Access denied. The video may be private or region-blocked."
-            )
-        elif "rate-limited" in error_str.lower() or "try again later" in error_str.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_str,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=400, detail=error_str)
+        raise map_yt_dlp_exception(
+            e,
+            default_status=400,
+            enable_not_found_heuristics=True,
+            forbidden_detail="Access denied. The video may be private or region-blocked.",
+        )
 
     except HTTPException:
         raise
 
     except Exception as e:
         logger.exception(f"Error processing TikTok URL: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        mapped = map_generic_exception(e, default_status=500)
+        if mapped.status_code == 500:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Internal server error: {str(e)}"
+            )
+        raise mapped
 
 
 def _build_disposition_header(filename: str, download: bool) -> dict:

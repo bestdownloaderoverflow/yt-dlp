@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from urllib.parse import quote
 
 from core.config import AUDIO_FORMAT_M4A
+from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import stream_generator_direct
 from core.helpers import _enforce_rate_limit, _build_ydl_opts, _build_internal_chunked_stream
 
@@ -41,29 +42,9 @@ async def stream_m4a(
             _build_ydl_opts(proxy, impersonate),
         )
     except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        if "rate-limited" in error_msg.lower() or "try again later" in error_msg.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_msg,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=400, detail=error_msg)
+        raise map_yt_dlp_exception(e, default_status=400)
     except Exception as e:
-        error_msg = str(e)
-        if "rate" in error_msg.lower() and "limit" in error_msg.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_msg,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise map_generic_exception(e, default_status=500)
 
     safe_headers = {k: v for k, v in http_headers.items() if k.lower() != "accept-encoding"}
 

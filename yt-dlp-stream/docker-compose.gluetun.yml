@@ -168,11 +168,11 @@ services:
       ytdlp-network:
         ipv4_address: 172.30.0.250
 
-  # --- Python Smart Gateway ---
+  # --- Go Smart Gateway ---
   gateway:
     build:
       context: .
-      dockerfile: gateway/Dockerfile
+      dockerfile: gateway-go/Dockerfile
     container_name: ytdlp-gateway
     ports:
       - "9111:9111"

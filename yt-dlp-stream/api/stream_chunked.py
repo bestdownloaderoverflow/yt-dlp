@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from core.config import QUALITY_FORMATS, AUDIO_FORMAT, VIDEO_CHUNK_SIZE, estimate_video_size, estimate_mp3_size
 from core.delivery import plan_delivery
+from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import (
     _chunked_video_generator_with_disconnect,
     _stream_chunked_merge,
@@ -283,30 +284,10 @@ async def stream_video_chunked(
     except HTTPException:
         raise
     except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        if "rate-limited" in error_msg.lower() or "try again later" in error_msg.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_msg,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=400, detail=error_msg)
+        raise map_yt_dlp_exception(e, default_status=400)
     except Exception as e:
         logger.exception("Error in stream_video_chunked")
-        error_msg = str(e)
-        if "rate" in error_msg.lower() and "limit" in error_msg.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_msg,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise map_generic_exception(e, default_status=500)
 
 
 @router.get("/stream/mp3-chunked")
@@ -417,27 +398,7 @@ async def stream_mp3_chunked(
     except HTTPException:
         raise
     except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        if "rate-limited" in error_msg.lower() or "try again later" in error_msg.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_msg,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=400, detail=error_msg)
+        raise map_yt_dlp_exception(e, default_status=400)
     except Exception as e:
         logger.exception("Error in stream_mp3_chunked")
-        error_msg = str(e)
-        if "rate" in error_msg.lower() and "limit" in error_msg.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_msg,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise map_generic_exception(e, default_status=500)

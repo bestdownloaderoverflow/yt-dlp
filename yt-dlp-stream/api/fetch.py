@@ -5,6 +5,7 @@ from typing import Optional
 import yt_dlp
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.redis_cache import download_cache
 from core.helpers import _enforce_rate_limit
 from ytdl_manager import ydl_manager
@@ -248,27 +249,6 @@ async def fetch(
         return response
 
     except yt_dlp.utils.DownloadError as e:
-        error_msg = str(e)
-        # Detect YouTube rate limit
-        if "rate-limited" in error_msg.lower() or "try again later" in error_msg.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_msg,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=400, detail=error_msg)
+        raise map_yt_dlp_exception(e, default_status=400)
     except Exception as e:
-        error_msg = str(e)
-        if "rate" in error_msg.lower() and "limit" in error_msg.lower():
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "RATE_LIMITED",
-                    "message": error_msg,
-                    "retry_after": 300,
-                }
-            )
-        raise HTTPException(status_code=500, detail=error_msg)
+        raise map_generic_exception(e, default_status=500)

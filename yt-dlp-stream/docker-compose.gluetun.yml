@@ -288,9 +288,14 @@ services:
       - GATEWAY_PORT=9111
       - WORKER_COUNT=5
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - MAX_RETRIES=3
+      - MAX_RETRIES=2
       - RATE_LIMIT_COOLDOWN=60
       - DRAIN_POLL_INTERVAL_MS=350
+      - DRAIN_TIMEOUT_SECONDS=25
+      - RESTART_BACKOFF_BASE=10
+      - RESTART_BACKOFF_MAX=90
+      - RESTART_BACKOFF_JITTER=2
+      - DEGRADED_RETRY_AFTER=2
     depends_on:
       - gluetun-1
       - gluetun-2

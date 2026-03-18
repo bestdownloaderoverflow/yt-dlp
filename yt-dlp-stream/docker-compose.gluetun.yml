@@ -289,7 +289,8 @@ services:
       - WORKER_COUNT=5
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
       - MAX_RETRIES=3
-      - RATE_LIMIT_COOLDOWN=300
+      - RATE_LIMIT_COOLDOWN=60
+      - DRAIN_POLL_INTERVAL_MS=350
     depends_on:
       - gluetun-1
       - gluetun-2

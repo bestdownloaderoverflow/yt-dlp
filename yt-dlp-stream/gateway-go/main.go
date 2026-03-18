@@ -441,7 +441,10 @@ func (v *VPNRotator) waitForDrain(ctx context.Context, workerID string) bool {
 	if interval <= 0 {
 		interval = 500 * time.Millisecond
 	}
+	logInterval := 5 * time.Second
 	deadline := time.Now().Add(timeout)
+	lastLoggedActive := -1
+	lastLogAt := time.Time{}
 	for {
 		if v.registry.IsWorkerIdle(workerID) {
 			return true
@@ -454,7 +457,12 @@ func (v *VPNRotator) waitForDrain(ctx context.Context, workerID string) bool {
 			return false
 		case <-time.After(interval):
 			active := v.registry.ActiveRequests(workerID)
-			log.Printf("[%s] drain wait: active_requests=%d", workerID, active)
+			now := time.Now()
+			if active != lastLoggedActive || lastLogAt.IsZero() || now.Sub(lastLogAt) >= logInterval {
+				log.Printf("[%s] drain wait: active_requests=%d", workerID, active)
+				lastLoggedActive = active
+				lastLogAt = now
+			}
 		}
 	}
 }
@@ -692,7 +700,7 @@ func (g *Gateway) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlDownload, "download") {
 		return
 	}
-	g.proxyWithRetry(w, r, "/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), true)
+	g.proxyWithRetry(w, r, "/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), false)
 }
 
 func (g *Gateway) handleInfo(w http.ResponseWriter, r *http.Request) {
@@ -712,7 +720,7 @@ func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) handleTikTokDownload(w http.ResponseWriter, r *http.Request) {
-	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), true)
+	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), false)
 }
 
 func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -747,8 +755,9 @@ func (g *Gateway) handleTunnel(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid key"})
 		return
 	}
-	worker := g.registry.GetWorker(workerID)
-	if worker == nil || !worker.Healthy {
+
+	worker := g.getPreferredOrHealthyWorker(workerID)
+	if worker == nil {
 		w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Worker not available"})
 		return
@@ -780,6 +789,36 @@ func extractWorkerID(key string, workerCount int) string {
 		}
 	}
 	return ""
+}
+
+func (g *Gateway) isWorkerAcceptingRequests(worker *Worker) bool {
+	if worker == nil {
+		return false
+	}
+	if !worker.Healthy || worker.Restarting || worker.RestartScheduled || worker.BreakerOpen {
+		return false
+	}
+	now := time.Now()
+	if now.Before(worker.QuarantineUntil) {
+		return false
+	}
+	if !worker.LastRateLimit.IsZero() && now.Sub(worker.LastRateLimit) <= time.Duration(g.cfg.RateLimitCooldownSeconds)*time.Second {
+		return false
+	}
+	return true
+}
+
+func (g *Gateway) getPreferredOrHealthyWorker(preferredWorkerID string) *Worker {
+	if preferredWorkerID != "" {
+		if preferred := g.registry.GetWorker(preferredWorkerID); g.isWorkerAcceptingRequests(preferred) {
+			return preferred
+		}
+	}
+	workers := g.registry.GetHealthyWorkers(nil)
+	if len(workers) == 0 {
+		return nil
+	}
+	return workers[rand.Intn(len(workers))]
 }
 
 func (g *Gateway) clientIP(r *http.Request) string {
@@ -1000,19 +1039,17 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 	for attempt := 0; attempt < g.cfg.MaxRetries; attempt++ {
 		var worker *Worker
 		if preferredWorkerID != "" && !tried[preferredWorkerID] {
-			if preferred := g.registry.GetWorker(preferredWorkerID); preferred != nil && preferred.Healthy && !preferred.Restarting && !preferred.RestartScheduled {
+			if preferred := g.registry.GetWorker(preferredWorkerID); g.isWorkerAcceptingRequests(preferred) {
 				worker = preferred
-			} else if strictPreferred {
-				log.Printf("[%s] preferred worker unavailable for key-bound request", preferredWorkerID)
-				break
+			} else {
+				log.Printf("[%s] preferred worker unavailable for key-bound request; falling back to another healthy worker", preferredWorkerID)
+				if strictPreferred {
+					break
+				}
 			}
 		}
 		if worker == nil {
 			workers := g.registry.GetHealthyWorkers(tried)
-			if strictPreferred {
-				log.Printf("[%s] preferred worker unavailable for key-bound request", preferredWorkerID)
-				break
-			}
 			if len(workers) == 0 {
 				log.Printf("no healthy workers available")
 				break

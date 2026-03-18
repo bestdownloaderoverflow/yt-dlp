@@ -821,6 +821,47 @@ func (g *Gateway) getPreferredOrHealthyWorker(preferredWorkerID string) *Worker 
 	return workers[rand.Intn(len(workers))]
 }
 
+func (g *Gateway) logNoHealthyWorkersSnapshot(tried map[string]bool) {
+	now := time.Now()
+	workers := g.registry.WorkersSnapshot()
+	parts := make([]string, 0, len(workers))
+
+	for _, w := range workers {
+		reasons := make([]string, 0, 8)
+		if tried != nil && tried[w.ID] {
+			reasons = append(reasons, "tried")
+		}
+		if !w.QuarantineUntil.IsZero() && now.Before(w.QuarantineUntil) {
+			reasons = append(reasons, fmt.Sprintf("quarantine=%ds", int(time.Until(w.QuarantineUntil).Seconds())))
+		}
+		if !w.Healthy {
+			reasons = append(reasons, "healthy=false")
+		}
+		if w.Restarting {
+			reasons = append(reasons, "restarting")
+		}
+		if w.RestartScheduled {
+			reasons = append(reasons, "restart_scheduled")
+		}
+		if w.BreakerOpen {
+			reasons = append(reasons, "breaker_open")
+		}
+		if !w.LastRateLimit.IsZero() {
+			cooldownUntil := w.LastRateLimit.Add(time.Duration(g.cfg.RateLimitCooldownSeconds) * time.Second)
+			if now.Before(cooldownUntil) {
+				reasons = append(reasons, fmt.Sprintf("rate_cooldown=%ds", int(time.Until(cooldownUntil).Seconds())))
+			}
+		}
+		if len(reasons) == 0 {
+			reasons = append(reasons, "eligible")
+		}
+
+		parts = append(parts, fmt.Sprintf("%s(active=%d,reasons=%s)", w.ID, w.ActiveRequests, strings.Join(reasons, "|")))
+	}
+
+	log.Printf("[diag] no healthy workers snapshot: %s", strings.Join(parts, "; "))
+}
+
 func (g *Gateway) clientIP(r *http.Request) string {
 	xff := r.Header.Get("X-Forwarded-For")
 	if xff != "" {
@@ -1052,6 +1093,7 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 			workers := g.registry.GetHealthyWorkers(tried)
 			if len(workers) == 0 {
 				log.Printf("no healthy workers available")
+				g.logNoHealthyWorkersSnapshot(tried)
 				break
 			}
 			worker = workers[rand.Intn(len(workers))]

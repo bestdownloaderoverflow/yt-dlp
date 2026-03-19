@@ -7,26 +7,34 @@ from typing import Optional
 # -----------------------------------------------------------------------------
 QUALITY_FORMATS = {
     "1080": (
-        "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
-        "/bestvideo[height<=1080]+bestaudio"
+        "bestvideo[vcodec^=avc1][height<=1080][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]"
+        "/bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]"
+        "/best[height<=1080][ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+        "/best[height<=1080][vcodec^=avc1][acodec^=mp4a]"
         "/best[height<=1080]"
         "/best"
     ),
     "720": (
-        "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]"
-        "/bestvideo[height<=720]+bestaudio"
+        "bestvideo[vcodec^=avc1][height<=720][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]"
+        "/bestvideo[vcodec^=avc1][height<=720]+bestaudio[acodec^=mp4a]"
+        "/best[height<=720][ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+        "/best[height<=720][vcodec^=avc1][acodec^=mp4a]"
         "/best[height<=720]"
         "/best"
     ),
     "480": (
-        "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]"
-        "/bestvideo[height<=480]+bestaudio"
+        "bestvideo[vcodec^=avc1][height<=480][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]"
+        "/bestvideo[vcodec^=avc1][height<=480]+bestaudio[acodec^=mp4a]"
+        "/best[height<=480][ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+        "/best[height<=480][vcodec^=avc1][acodec^=mp4a]"
         "/best[height<=480]"
         "/best"
     ),
     "360": (
-        "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]"
-        "/bestvideo[height<=360]+bestaudio"
+        "bestvideo[vcodec^=avc1][height<=360][ext=mp4]+bestaudio[acodec^=mp4a][ext=m4a]"
+        "/bestvideo[vcodec^=avc1][height<=360]+bestaudio[acodec^=mp4a]"
+        "/best[height<=360][ext=mp4][vcodec^=avc1][acodec^=mp4a]"
+        "/best[height<=360][vcodec^=avc1][acodec^=mp4a]"
         "/best[height<=360]"
         "/best"
     ),

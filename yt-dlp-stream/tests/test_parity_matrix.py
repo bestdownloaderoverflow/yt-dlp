@@ -42,6 +42,7 @@ from fastapi.responses import StreamingResponse
 
 from api import stream_chunked as stream_chunked_api
 from api import download as download_api
+from core import ffmpeg as ffmpeg_core
 from core import helpers
 from core import generators
 
@@ -138,6 +139,32 @@ class ParityMatrixTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.media_type, "video/webm")
         self.assertIn("filename=\"demo.webm\"", response.headers.get("content-disposition", ""))
 
+    async def test_stream_video_chunked_single_progressive_ios_unsafe_routes_to_ffmpeg(self):
+        request = _DummyRequest()
+        info = {"title": "demo", "duration": 10}
+        resolved = [{
+            "url": "https://v",
+            "ext": "mp4",
+            "vcodec": "av01.0.08M.08",
+            "acodec": "mp4a.40.2",
+            "filesize": 123,
+            "http_headers": {"User-Agent": "UA"},
+        }]
+
+        with (
+            mock.patch.object(stream_chunked_api, "_enforce_rate_limit"),
+            mock.patch.object(stream_chunked_api, "_extract_info_and_resolve", return_value=(info, resolved, {})),
+            mock.patch.object(stream_chunked_api, "plan_delivery", return_value=types.SimpleNamespace(mode="single_progressive", reason="test")),
+            mock.patch.object(stream_chunked_api, "_streaming_response", new=mock.AsyncMock(return_value="ffmpeg-path")),
+        ):
+            response = await stream_chunked_api.stream_video_chunked(
+                url="https://example.com/video",
+                strict=True,
+                request=request,
+            )
+
+        self.assertEqual(response, "ffmpeg-path")
+
     async def test_download_video_strict_multi_progressive_routes_to_ffmpeg(self):
         request = _DummyRequest()
         info = {"title": "demo"}
@@ -154,6 +181,32 @@ class ParityMatrixTests(unittest.IsolatedAsyncioTestCase):
                 download=True,
                 request=request,
                 strict=True,
+            )
+        self.assertEqual(result, "ffmpeg-path")
+
+    async def test_download_video_single_progressive_ios_unsafe_routes_to_ffmpeg(self):
+        request = _DummyRequest()
+        info = {"title": "demo"}
+        resolved = [{
+            "url": "https://v",
+            "ext": "mp4",
+            "vcodec": "vp9.00.51.08",
+            "acodec": "opus",
+            "filesize": 123,
+            "http_headers": {"User-Agent": "UA"},
+        }]
+
+        with (
+            mock.patch.object(download_api, "_extract_info_and_resolve", return_value=(info, resolved, {})),
+            mock.patch.object(download_api, "plan_delivery", return_value=types.SimpleNamespace(mode="single_progressive", reason="test")),
+            mock.patch.object(download_api, "_streaming_response", new=mock.AsyncMock(return_value="ffmpeg-path")),
+        ):
+            result = await download_api._download_video(
+                url="https://example.com/video",
+                quality="1080",
+                download=True,
+                request=request,
+                strict=False,
             )
         self.assertEqual(result, "ffmpeg-path")
 
@@ -193,6 +246,32 @@ class ParityMatrixTests(unittest.IsolatedAsyncioTestCase):
                 await anext(agen)
             self.assertEqual(exc.exception.status_code, 502)
             self.assertIn("Invalid Content-Range", str(exc.exception.detail))
+
+    def test_ffmpeg_single_transcodes_non_ios_codec(self):
+        cmd = ffmpeg_core.build_ffmpeg_single_cmd(
+            fmt={"url": "https://v", "vcodec": "av01.0.08M.08", "acodec": "opus"},
+            global_headers={},
+            audio_only=False,
+        )
+        self.assertIn("libx264", cmd)
+        self.assertIn("aac", cmd)
+
+    def test_ffmpeg_merge_keeps_copy_for_avc1(self):
+        cmd = ffmpeg_core.build_ffmpeg_merge_cmd(
+            video_fmt={"url": "https://v", "vcodec": "avc1.640028"},
+            audio_fmt={"url": "https://a", "acodec": "mp4a.40.2"},
+            global_headers={},
+        )
+        self.assertIn("copy", cmd)
+        self.assertNotIn("libx264", cmd)
+
+    def test_ffmpeg_merge_transcodes_non_ios_codec(self):
+        cmd = ffmpeg_core.build_ffmpeg_merge_cmd(
+            video_fmt={"url": "https://v", "vcodec": "vp9.00.51.08"},
+            audio_fmt={"url": "https://a", "acodec": "opus"},
+            global_headers={},
+        )
+        self.assertIn("libx264", cmd)
 
 
 if __name__ == "__main__":

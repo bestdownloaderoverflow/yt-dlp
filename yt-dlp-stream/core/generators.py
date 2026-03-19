@@ -14,7 +14,7 @@ from fastapi import HTTPException, Request as FastAPIRequest
 
 from core.config import CHUNK_SIZE, VIDEO_CHUNK_SIZE, AUDIO_FORMAT
 from core.ffmpeg import build_ffmpeg_merge_cmd, build_ffmpeg_single_cmd
-from core.helpers import _extract_info_and_resolve
+from core.helpers import _extract_info_and_resolve, needs_ios_video_transcode
 from process_manager import process_manager
 from ytdl_manager import ydl_manager
 
@@ -525,14 +525,28 @@ async def _stream_chunked_merge(
     audio_r, audio_w = os.pipe()
     audio_pipe_input = f"pipe:{audio_r}"
 
-    # Start ffmpeg dengan pipe untuk kedua input
+    # Start ffmpeg dengan pipe untuk kedua input.
+    # For iOS playback compatibility, transcode non-AVC video tracks to H.264.
+    video_codec_args = ["-c:v", "copy"]
+    if needs_ios_video_transcode(video_fmt):
+        logger.info(
+            "Chunked merge: video codec '%s' is not iOS-friendly, transcoding to H.264",
+            video_fmt.get("vcodec"),
+        )
+        video_codec_args = [
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-profile:v", "high",
+            "-level", "4.1",
+        ]
+
     cmd = [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-i", "pipe:0",  # Video from stdin (we'll use a thread to feed it)
         "-i", audio_pipe_input,  # Audio from dedicated pipe fd
         "-map", "0:v:0",
         "-map", "1:a:0",
-        "-c:v", "copy",
+        *video_codec_args,
         "-c:a", "aac",
         "-movflags", "frag_keyframe+empty_moov+faststart",
         "-f", "mp4",

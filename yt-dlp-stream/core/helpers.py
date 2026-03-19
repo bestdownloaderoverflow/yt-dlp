@@ -136,6 +136,33 @@ def _is_dash(fmt: dict) -> bool:
     return fmt.get("protocol", "") in ("http_dash_segments",)
 
 
+def _codec_prefix(codec: Optional[str]) -> str:
+    """Return normalized codec prefix (e.g. 'avc1.640028' -> 'avc1')."""
+    if not codec:
+        return ""
+    return str(codec).split(".")[0].lower()
+
+
+def is_ios_compatible_video_codec(fmt: dict) -> bool:
+    """
+    Check whether a video format's codec is broadly compatible with iOS players.
+    """
+    vcodec = fmt.get("vcodec")
+    if not vcodec or vcodec in ("none", ""):
+        return False
+    return _codec_prefix(vcodec) in {"avc1", "avc3", "h264"}
+
+
+def needs_ios_video_transcode(fmt: dict) -> bool:
+    """
+    True when the format has a video stream but its codec is not iOS-friendly.
+    """
+    vcodec = fmt.get("vcodec")
+    if not vcodec or vcodec in ("none", ""):
+        return False
+    return not is_ios_compatible_video_codec(fmt)
+
+
 def can_use_chunked_streaming(fmt: dict) -> bool:
     """
     Check if format supports chunked HTTP range requests.

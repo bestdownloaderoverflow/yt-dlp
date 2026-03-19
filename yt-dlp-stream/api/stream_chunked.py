@@ -18,7 +18,7 @@ from core.generators import (
     _stream_chunked_merge,
     _stream_mp3_chunked,
 )
-from core.helpers import _enforce_rate_limit, _extract_info_and_resolve, _build_ydl_opts
+from core.helpers import _enforce_rate_limit, _extract_info_and_resolve, _build_ydl_opts, needs_ios_video_transcode
 from api.stream_ffmpeg import _streaming_response
 
 router = APIRouter()
@@ -87,6 +87,22 @@ async def stream_video_chunked(
 
         base_filename = info.get("title", "download") or "download"
         delivery = plan_delivery(resolved)
+
+        if delivery.mode == "single_progressive":
+            fmt = resolved[0]
+            if needs_ios_video_transcode(fmt):
+                logger.info(
+                    "Single progressive codec '%s' is not iOS-friendly, using ffmpeg transcode path",
+                    fmt.get("vcodec"),
+                )
+                return await _streaming_response(
+                    url=url,
+                    format_str=format_str,
+                    audio_only=False,
+                    download=download,
+                    ydl_opts=ydl_opts,
+                    request=request,
+                )
 
         if strict and delivery.mode == "multi_progressive":
             logger.info("Strict mode: using ffmpeg merge path for multi-track progressive format")

@@ -23,6 +23,7 @@ from core.generators import (
 from core.helpers import (
     _extract_info_and_resolve,
     _build_ydl_opts,
+    needs_ios_video_transcode,
 )
 from api.stream_ffmpeg import _streaming_response
 
@@ -181,6 +182,20 @@ async def _download_video(
 
     if delivery.mode == "single_progressive":
         fmt = resolved[0]
+        if needs_ios_video_transcode(fmt):
+            logger.info(
+                "Single progressive codec '%s' is not iOS-friendly, using ffmpeg transcode path",
+                fmt.get("vcodec"),
+            )
+            return await _streaming_response(
+                url=url,
+                format_str=format_str,
+                audio_only=False,
+                download=download,
+                ydl_opts=_build_ydl_opts(proxy, impersonate),
+                request=request,
+            )
+
         out_ext = (fmt.get("ext") or "mp4").lower()
         out_filename = f"{base_filename}.{out_ext}"
         media_type = VIDEO_MIME_BY_EXT.get(out_ext, "application/octet-stream")

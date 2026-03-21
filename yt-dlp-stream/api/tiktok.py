@@ -17,6 +17,7 @@ from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import slideshow_stream_generator
 from core.helpers import _enforce_rate_limit
 from core.redis_cache import download_cache
+from core.config import estimate_video_size, estimate_mp3_size
 from ytdl_manager import ydl_manager
 
 router = APIRouter()
@@ -198,6 +199,7 @@ def generate_video_download_links(
     """Generate encrypted download links for video formats."""
     formats = info.get("formats", [])
     links = {}
+    duration_seconds = int(info.get("duration", 0) or 0)
 
     # Find video formats (with both video and audio codecs)
     video_formats = [
@@ -243,6 +245,8 @@ def generate_video_download_links(
             platform="tiktok",
             proxy=proxy,
             impersonate=impersonate,
+            filesize=download_format.get("filesize") or download_format.get("filesize_approx"),
+            duration=duration_seconds,
         )
         links["watermark"] = f"/tiktok/download?key={key}"
 
@@ -263,6 +267,8 @@ def generate_video_download_links(
             platform="tiktok",
             proxy=proxy,
             impersonate=impersonate,
+            filesize=fmt.get("filesize") or fmt.get("filesize_approx"),
+            duration=duration_seconds,
         )
         links["no_watermark"] = f"/tiktok/download?key={key}"
 
@@ -283,6 +289,8 @@ def generate_video_download_links(
             platform="tiktok",
             proxy=proxy,
             impersonate=impersonate,
+            filesize=fmt.get("filesize") or fmt.get("filesize_approx"),
+            duration=duration_seconds,
         )
         links["no_watermark_hd"] = f"/tiktok/download?key={key}"
 
@@ -301,6 +309,8 @@ def generate_video_download_links(
             platform="tiktok",
             proxy=proxy,
             impersonate=impersonate,
+            filesize=audio_format.get("filesize") or audio_format.get("filesize_approx"),
+            duration=duration_seconds,
         )
         links["mp3"] = f"/tiktok/download?key={key}"
 
@@ -320,6 +330,7 @@ def generate_photo_download_links(
     # Get image formats
     image_formats = [f for f in formats if f.get("format_id", "").startswith("image-")]
     audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
+    duration_seconds = int(info.get("duration", 0) or 0)
 
     # Create photo picker list
     photos = [{"type": "photo", "url": img["url"]} for img in image_formats]
@@ -342,6 +353,8 @@ def generate_photo_download_links(
             platform="tiktok",
             proxy=proxy,
             impersonate=impersonate,
+            filesize=img.get("filesize") or img.get("filesize_approx"),
+            duration=duration_seconds,
         )
         photo_keys.append(f"/tiktok/download?key={key}")
 
@@ -363,6 +376,8 @@ def generate_photo_download_links(
             platform="tiktok",
             proxy=proxy,
             impersonate=impersonate,
+            filesize=audio_format.get("filesize") or audio_format.get("filesize_approx"),
+            duration=duration_seconds,
         )
         links["mp3"] = f"/tiktok/download?key={key}"
 
@@ -379,6 +394,7 @@ def generate_photo_download_links(
         platform="tiktok",
         proxy=proxy,
         impersonate=impersonate,
+        duration=duration_seconds or (len(photo_urls) * 4),
     )
     slideshow_link = f"/tiktok/download?key={slideshow_key}"
 
@@ -749,6 +765,14 @@ async def _download_video(
                 raise HTTPException(status_code=e.response.status_code, detail=f"Download failed: {e}")
 
     response_headers = _build_disposition_header(filename, download)
+    filesize = getattr(session, "filesize", None)
+    duration = getattr(session, "duration", None)
+    if filesize and int(filesize) > 0:
+        response_headers["Content-Length"] = str(int(filesize))
+    else:
+        estimated_size = estimate_video_size(None, duration)
+        if estimated_size > 0:
+            response_headers["Estimated-Content-Length"] = str(estimated_size)
 
     return StreamingResponse(
         _stream_with_refresh(),
@@ -820,6 +844,9 @@ async def _download_photo(
                 raise
 
     response_headers = _build_disposition_header(filename, download)
+    filesize = getattr(session, "filesize", None)
+    if filesize and int(filesize) > 0:
+        response_headers["Content-Length"] = str(int(filesize))
 
     return StreamingResponse(
         _stream_photo(),
@@ -920,6 +947,14 @@ async def _download_mp3(
                 raise
 
     response_headers = _build_disposition_header(filename, download)
+    filesize = getattr(session, "filesize", None)
+    duration = getattr(session, "duration", None)
+    if filesize and int(filesize) > 0:
+        response_headers["Content-Length"] = str(int(filesize))
+    else:
+        estimated_size = estimate_mp3_size(duration)
+        if estimated_size > 0:
+            response_headers["Estimated-Content-Length"] = str(estimated_size)
 
     return StreamingResponse(
         _stream_audio(),
@@ -973,6 +1008,10 @@ async def _download_slideshow(
 
     # Stream slideshow
     response_headers = _build_disposition_header(filename, download)
+    duration = getattr(session, "duration", None) or (len(photo_urls) * 4)
+    estimated_size = estimate_video_size(None, duration)
+    if estimated_size > 0:
+        response_headers["Estimated-Content-Length"] = str(estimated_size)
 
     return StreamingResponse(
         slideshow_stream_generator(

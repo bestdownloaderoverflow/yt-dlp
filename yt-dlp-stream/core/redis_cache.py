@@ -35,6 +35,8 @@ class DownloadSession:
     title: Optional[str] = None  # Original title for filename
     proxy: Optional[str] = None  # Request-level proxy used during fetch
     impersonate: Optional[str] = None  # Request-level impersonation used during fetch
+    filesize: Optional[int] = None  # Exact/approx media size if known
+    duration: Optional[int] = None  # Duration in seconds if known
 
 
 class RedisDownloadCache:
@@ -62,6 +64,8 @@ class RedisDownloadCache:
         title: str = None,
         proxy: str = None,
         impersonate: str = None,
+        filesize: int = None,
+        duration: int = None,
     ) -> str:
         """Create new session and return key."""
         raw_key = str(uuid.uuid4())
@@ -83,6 +87,8 @@ class RedisDownloadCache:
             title=title,
             proxy=proxy,
             impersonate=impersonate,
+            filesize=filesize,
+            duration=duration,
         )
 
         redis_key = f"{self._key_prefix}{raw_key}"

@@ -11,13 +11,15 @@ services:
       - "8001:8000"
       - "9487:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=IDl1n4COJEW+X15pCtsetjgvqJcJGM3Gfk0CqTZwmHo=
-      - WIREGUARD_ADDRESSES=10.64.74.105/32
+      - WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
       - WIREGUARD_MTU=1100
-      - SERVER_COUNTRIES=USA
-      - DNS_ADDRESS=10.64.0.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=on
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -65,13 +67,15 @@ services:
       - "8002:8000"
       - "9488:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=CCSyx4mZNF9bYGxUwVrm7IaynxQYEsyQD6kod6Eak0g=
-      - WIREGUARD_ADDRESSES=10.72.62.15/32
+      - WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
       - WIREGUARD_MTU=1100
-      - SERVER_COUNTRIES=USA
-      - DNS_ADDRESS=10.64.0.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=on
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -118,13 +122,15 @@ services:
       - "8003:8000"
       - "9489:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=CBznnCKlpyHtQh0d++gnD6yJTmY6nNQcoCtx2vHPD20=
-      - WIREGUARD_ADDRESSES=10.74.126.192/32
+      - WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
       - WIREGUARD_MTU=1100
-      - SERVER_COUNTRIES=USA
-      - DNS_ADDRESS=10.64.0.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=on
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -226,13 +232,15 @@ services:
       - "8005:8000"
       - "9491:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=mullvad
+      - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=uIpmRzdi9sPGT+gnMs9L5GSGRgY5SlcqrYcEp2iwAn0=
-      - WIREGUARD_ADDRESSES=10.66.27.250/32
+      - WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
       - WIREGUARD_MTU=1100
-      - SERVER_COUNTRIES=USA
-      - DNS_ADDRESS=10.64.0.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=on
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"

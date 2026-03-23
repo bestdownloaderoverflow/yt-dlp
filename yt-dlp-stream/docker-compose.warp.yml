@@ -26,7 +26,9 @@ services:
       - ./gluetun/data4:/gluetun
     restart: unless-stopped
     networks:
-      - ytdlp-warp-network
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-1
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
 
@@ -46,7 +48,7 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
@@ -80,7 +82,9 @@ services:
       - ./gluetun/data5:/gluetun
     restart: unless-stopped
     networks:
-      - ytdlp-warp-network
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-2
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
 
@@ -100,7 +104,7 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
@@ -115,7 +119,8 @@ services:
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     restart: unless-stopped
     networks:
-      - ytdlp-warp-network
+      ytdlp-warp-network:
+        ipv4_address: 172.30.0.250
 
   gateway-warp:
     build:
@@ -152,6 +157,9 @@ services:
 networks:
   ytdlp-warp-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
 
 volumes:
   redis-data:

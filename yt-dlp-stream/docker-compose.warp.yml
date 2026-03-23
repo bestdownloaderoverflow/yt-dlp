@@ -1,0 +1,95 @@
+services:
+  gluetun-1:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-warp-gluetun-1
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8004:8000"
+      - "9490:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
+      - WIREGUARD_MTU=1100
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=on
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+    volumes:
+      - ./gluetun/data4:/gluetun
+    restart: unless-stopped
+    networks:
+      - ytdlp-warp-network
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  gluetun-2:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-warp-gluetun-2
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8005:8000"
+      - "9491:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=AHWtP0AqdW2jTMkx8iS2gwND5T0xGcy/t2/cf9Z2R0c=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
+      - WIREGUARD_MTU=1100
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=on
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+    volumes:
+      - ./gluetun/data5:/gluetun
+    restart: unless-stopped
+    networks:
+      - ytdlp-warp-network
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  gateway-warp:
+    build:
+      context: .
+      dockerfile: gateway-go/Dockerfile
+    container_name: ytdlp-gateway-warp
+    ports:
+      - "9111:9111"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - GATEWAY_PORT=9111
+      - WORKER_COUNT=2
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - MAX_RETRIES=3
+      - RATE_LIMIT_COOLDOWN=300
+      - DRAIN_POLL_INTERVAL_MS=350
+      - DRAIN_TIMEOUT_SECONDS=120
+      - RESTART_BACKOFF_BASE=10
+      - RESTART_BACKOFF_MAX=90
+      - RESTART_BACKOFF_JITTER=2
+      - DEGRADED_RETRY_AFTER=5
+      - RESTART_STABILIZE_SECONDS=5
+    depends_on:
+      - gluetun-1
+      - gluetun-2
+    restart: unless-stopped
+    networks:
+      - ytdlp-warp-network
+
+networks:
+  ytdlp-warp-network:
+    driver: bridge

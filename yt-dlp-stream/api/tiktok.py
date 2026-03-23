@@ -431,10 +431,13 @@ async def process_tiktok(
         # Extract video info using ydl_manager for session integrity
         # Use impersonate for TLS fingerprinting if available (helps with TikTok)
         impersonate = request.impersonate  # May be None if not provided
-        info = ydl_manager.extract_info(
+        # yt-dlp extraction is blocking I/O; offload it to thread pool so
+        # concurrent TikTok fetch requests do not stall the event loop.
+        info = await asyncio.to_thread(
+            ydl_manager.extract_info,
             url,
-            proxy=request.proxy,
-            impersonate=impersonate,
+            request.proxy,
+            impersonate,
         )
 
         if not info:
@@ -552,10 +555,13 @@ async def _refresh_tiktok_url(original_url: str, proxy: Optional[str], impersona
     """
     try:
         logger.info(f"Refreshing TikTok URL: {original_url[:50]}...")
-        info = ydl_manager.extract_info(
+        # Keep refresh extraction off the event loop to prevent head-of-line
+        # blocking when many streams refresh simultaneously.
+        info = await asyncio.to_thread(
+            ydl_manager.extract_info,
             original_url,
-            proxy=proxy,
-            impersonate=impersonate,  # May be None
+            proxy,
+            impersonate,
         )
         return info
     except Exception as e:

@@ -716,6 +716,9 @@ func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
 		return
 	}
+	if !g.checkRateLimit(w, r, g.rlFetch, "tiktok") {
+		return
+	}
 	g.proxyWithRetry(w, r, "/tiktok", http.MethodPost, "", false)
 }
 

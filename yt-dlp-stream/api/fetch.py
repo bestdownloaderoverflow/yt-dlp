@@ -1,5 +1,7 @@
 """Fetch endpoint for metadata and download links."""
 
+import asyncio
+
 from typing import Optional
 
 import yt_dlp
@@ -197,7 +199,12 @@ async def fetch(
 
     try:
         # Gunakan ydl_manager untuk session integrity (CookieJar persistent)
-        info = ydl_manager.extract_info(url, proxy=proxy, impersonate=impersonate)
+        info = await asyncio.to_thread(
+            ydl_manager.extract_info,
+            url,
+            proxy,
+            impersonate,
+        )
 
         if not info:
             raise HTTPException(status_code=400, detail="Could not extract video info")

@@ -1,7 +1,7 @@
 services:
   gluetun-1:
     image: qmcgaw/gluetun:v3.41.1
-    container_name: ytdlp-warp-gluetun-1
+    container_name: ytdlp-gluetun-1
     cap_add:
       - NET_ADMIN
     devices:
@@ -30,9 +30,32 @@ services:
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
 
+  ytdlp-1:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-1
+    network_mode: "service:gluetun-1"
+    depends_on:
+      - gluetun-1
+      - redis
+    environment:
+      - WORKER_ID=w1
+      - API_PORT=9487
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://redis:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    restart: unless-stopped
+
   gluetun-2:
     image: qmcgaw/gluetun:v3.41.1
-    container_name: ytdlp-warp-gluetun-2
+    container_name: ytdlp-gluetun-2
     cap_add:
       - NET_ADMIN
     devices:
@@ -61,6 +84,39 @@ services:
     extra_hosts:
       - "host.docker.internal:172.17.0.1"
 
+  ytdlp-2:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-2
+    network_mode: "service:gluetun-2"
+    depends_on:
+      - gluetun-2
+      - redis
+    environment:
+      - WORKER_ID=w2
+      - API_PORT=9487
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://redis:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ytdlp-redis
+    volumes:
+      - redis-data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    networks:
+      - ytdlp-warp-network
+
   gateway-warp:
     build:
       context: .
@@ -86,6 +142,9 @@ services:
     depends_on:
       - gluetun-1
       - gluetun-2
+      - ytdlp-1
+      - ytdlp-2
+      - redis
     restart: unless-stopped
     networks:
       - ytdlp-warp-network
@@ -93,3 +152,6 @@ services:
 networks:
   ytdlp-warp-network:
     driver: bridge
+
+volumes:
+  redis-data:

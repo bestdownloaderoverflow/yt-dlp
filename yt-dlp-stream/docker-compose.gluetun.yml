@@ -13,7 +13,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
+      - WIREGUARD_PRIVATE_KEY=AHWtP0AqdW2jTMkx8iS2gwND5T0xGcy/t2/cf9Z2R0c=
       - WIREGUARD_ADDRESSES=172.16.0.2/32
       - WIREGUARD_MTU=1100
       - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
@@ -234,7 +234,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=mJNxbqpODxFWrNpoJnNJt3GAZaegIFuiY6XQekl0zkI=
+      - WIREGUARD_PRIVATE_KEY=AHWtP0AqdW2jTMkx8iS2gwND5T0xGcy/t2/cf9Z2R0c=
       - WIREGUARD_ADDRESSES=172.16.0.2/32
       - WIREGUARD_MTU=1100
       - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=

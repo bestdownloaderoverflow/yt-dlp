@@ -9,6 +9,7 @@ venv/
 ENV/
 build/
 develop-eggs/
+gluetun/
 dist/
 downloads/
 eggs/
@@ -49,3 +50,8 @@ cookies/*.txt
 
 # Gluetun VPN data
 gluetun/data/
+gluetun/data1/
+gluetun/data2/
+gluetun/data3/
+gluetun/data4/
+gluetun/data5/

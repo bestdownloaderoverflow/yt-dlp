@@ -13,6 +13,7 @@ import time
 from typing import Optional, Dict, Any, List
 from collections import OrderedDict
 import yt_dlp
+from yt_dlp.networking.impersonate import ImpersonateTarget
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -57,15 +58,19 @@ class YoutubeDLManager:
         if proxy:
             opts["proxy"] = proxy
         if impersonate:
-            # Check if impersonate is available before setting
             try:
-                # Test with a temporary YTDL instance
-                test_opts = {"quiet": True, "impersonate": impersonate}
+                impersonate_target = (
+                    impersonate
+                    if isinstance(impersonate, ImpersonateTarget)
+                    else ImpersonateTarget.from_str(impersonate)
+                )
+                # Check if impersonate is available before setting
+                test_opts = {"quiet": True, "impersonate": impersonate_target}
                 test_ydl = yt_dlp.YoutubeDL(test_opts)
                 test_ydl.close()
-                opts["impersonate"] = impersonate
+                opts["impersonate"] = impersonate_target
                 logger.info(f"Using impersonate target: {impersonate}")
-            except yt_dlp.utils.YoutubeDLError as e:
+            except Exception as e:
                 logger.warning(
                     f"Impersonate target '{impersonate}' not available: {e}. "
                     f"Falling back to default. Install 'curl_cffi' for impersonate support."

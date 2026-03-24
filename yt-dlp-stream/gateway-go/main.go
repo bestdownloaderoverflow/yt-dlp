@@ -84,7 +84,7 @@ func NewWorkerRegistry(cfg Config) *WorkerRegistry {
 			Host:        fmt.Sprintf("gluetun-%d", i),
 			APIPort:     9487,
 			ControlPort: 8000,
-			Healthy:     true,
+			Healthy:     false,
 			StartedAt:   now,
 		})
 	}
@@ -285,6 +285,24 @@ func (r *WorkerRegistry) CloseCircuit(workerID string) {
 	}
 }
 
+func (r *WorkerRegistry) SetHealthy(workerID string, healthy bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if w := r.getWorkerUnlocked(workerID); w != nil {
+		if w.Healthy != healthy {
+			if healthy {
+				log.Printf("[%s] marked healthy after successful probe", workerID)
+			} else {
+				log.Printf("[%s] marked unhealthy after failed probe", workerID)
+			}
+		}
+		w.Healthy = healthy
+		if healthy {
+			w.BreakerOpen = false
+		}
+	}
+}
+
 func (r *WorkerRegistry) GetWorkersNeedingRestart() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -479,9 +497,6 @@ func (v *VPNRotator) healthCheck(workerID string) bool {
 		if err == nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				log.Printf("[%s] gluetun control reachable", workerID)
-			}
 		}
 	}
 
@@ -494,7 +509,6 @@ func (v *VPNRotator) healthCheck(workerID string) bool {
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, resp.Body)
 	if resp.StatusCode == http.StatusOK {
-		log.Printf("[%s] worker API healthy", workerID)
 		return true
 	}
 	return false
@@ -1283,6 +1297,25 @@ func (g *Gateway) uptimeChecker() {
 	}
 }
 
+func (g *Gateway) healthMonitor() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-g.ctx.Done():
+			return
+		case <-ticker.C:
+			for _, worker := range g.registry.WorkersSnapshot() {
+				if worker.Restarting || worker.RestartScheduled {
+					g.registry.SetHealthy(worker.ID, false)
+					continue
+				}
+				g.registry.SetHealthy(worker.ID, g.rotator.healthCheck(worker.ID))
+			}
+		}
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -1337,6 +1370,7 @@ func main() {
 	gateway := NewGateway(cfg)
 	go gateway.restartScheduler()
 	go gateway.uptimeChecker()
+	go gateway.healthMonitor()
 
 	addr := fmt.Sprintf(":%d", cfg.GatewayPort)
 	server := &http.Server{Addr: addr, Handler: gateway}

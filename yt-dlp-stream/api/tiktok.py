@@ -5,7 +5,7 @@ import logging
 import tempfile
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import httpx
 import yt_dlp
@@ -13,7 +13,12 @@ from fastapi import APIRouter, HTTPException, Query, Request as FastAPIRequest
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
-from core.error_mapping import map_generic_exception, map_yt_dlp_exception
+from core.error_mapping import (
+    is_dns_failure_message,
+    is_geo_restricted_message,
+    map_generic_exception,
+    map_yt_dlp_exception,
+)
 from core.generators import slideshow_stream_generator
 from core.helpers import _enforce_rate_limit
 from core.redis_cache import download_cache
@@ -84,6 +89,59 @@ class TikTokPhotoResponse(BaseModel):
 def is_tiktok_url(url: str) -> bool:
     """Check if URL is a TikTok or Douyin URL."""
     return "tiktok.com" in url or "douyin.com" in url
+
+
+def normalize_tiktok_url(url: str) -> str:
+    """Normalize obvious user-input mistakes before sending to yt-dlp."""
+    normalized = (url or "").strip()
+    if normalized.startswith("httpsr://"):
+        normalized = "https://" + normalized[len("httpsr://"):]
+    elif normalized.startswith("httpr://"):
+        normalized = "http://" + normalized[len("httpr://"):]
+    elif "://" not in normalized and is_tiktok_url(normalized):
+        normalized = f"https://{normalized.lstrip('/')}"
+    return normalized
+
+
+def validate_tiktok_url(url: str) -> str:
+    """Return a normalized TikTok URL or raise 400 for invalid input."""
+    normalized = normalize_tiktok_url(url)
+    parsed = urlparse(normalized)
+
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="TikTok URL must use http or https")
+
+    if not parsed.netloc or not is_tiktok_url(normalized):
+        raise HTTPException(status_code=400, detail="Only TikTok and Douyin URLs are supported")
+
+    return normalized
+
+
+def map_tiktok_exception(exc: BaseException, *, default_status: int = 500) -> HTTPException:
+    message = str(exc)
+
+    if is_dns_failure_message(message):
+        return HTTPException(
+            status_code=503,
+            detail={"error": "UPSTREAM_DNS_FAILURE", "message": message},
+        )
+
+    if is_geo_restricted_message(message):
+        return HTTPException(
+            status_code=503,
+            detail={"error": "GEO_RESTRICTED", "message": message},
+        )
+
+    if "comfortable for some audiences" in message.lower():
+        return HTTPException(
+            status_code=403,
+            detail="TikTok requires an authenticated session for this content.",
+        )
+
+    mapped = map_generic_exception(exc, default_status=default_status)
+    if mapped.status_code == 500:
+        return HTTPException(status_code=500, detail=f"Internal server error: {message}")
+    return mapped
 
 
 def is_photo_content(info: dict) -> bool:
@@ -421,11 +479,7 @@ async def process_tiktok(
     if not url:
         raise HTTPException(status_code=400, detail="URL is required")
 
-    if not is_tiktok_url(url):
-        raise HTTPException(
-            status_code=400,
-            detail="Only TikTok and Douyin URLs are supported"
-        )
+    url = validate_tiktok_url(url)
 
     try:
         # Extract video info using ydl_manager for session integrity
@@ -507,6 +561,8 @@ async def process_tiktok(
             )
 
     except yt_dlp.utils.DownloadError as e:
+        if is_dns_failure_message(str(e)) or is_geo_restricted_message(str(e)):
+            raise map_tiktok_exception(e, default_status=503)
         raise map_yt_dlp_exception(
             e,
             default_status=400,
@@ -519,13 +575,7 @@ async def process_tiktok(
 
     except Exception as e:
         logger.exception(f"Error processing TikTok URL: {e}")
-        mapped = map_generic_exception(e, default_status=500)
-        if mapped.status_code == 500:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Internal server error: {str(e)}"
-            )
-        raise mapped
+        raise map_tiktok_exception(e, default_status=500)
 
 
 def _build_disposition_header(filename: str, download: bool) -> dict:
@@ -554,6 +604,7 @@ async def _refresh_tiktok_url(original_url: str, proxy: Optional[str], impersona
     Returns new format dict with refreshed URL and headers.
     """
     try:
+        original_url = validate_tiktok_url(original_url)
         logger.info(f"Refreshing TikTok URL: {original_url[:50]}...")
         # Keep refresh extraction off the event loop to prevent head-of-line
         # blocking when many streams refresh simultaneously.
@@ -769,6 +820,18 @@ async def _download_video(
 
                 logger.error(f"HTTP error during TikTok video download: {e}")
                 raise HTTPException(status_code=e.response.status_code, detail=f"Download failed: {e}")
+            except httpx.ConnectError as e:
+                logger.warning(f"TikTok stream connect error: {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "UPSTREAM_CONNECT_FAILURE", "message": str(e)},
+                )
+            except httpx.TimeoutException as e:
+                logger.warning(f"TikTok stream timeout: {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "UPSTREAM_TIMEOUT", "message": str(e)},
+                )
 
     response_headers = _build_disposition_header(filename, download)
     filesize = getattr(session, "filesize", None)

@@ -1,5 +1,6 @@
 """FFmpeg-based streaming endpoints."""
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -15,6 +16,13 @@ from core.helpers import _enforce_rate_limit, _build_ydl_opts
 
 router = APIRouter()
 logger = logging.getLogger("ytdl_stream")
+
+
+def _next_or_done(gen):
+    try:
+        return False, next(gen)
+    except StopIteration:
+        return True, None
 
 
 async def _streaming_response(
@@ -33,13 +41,20 @@ async def _streaming_response(
     )
 
     try:
-        _, filename = next(gen)
+        done, first_item = await asyncio.to_thread(_next_or_done, gen)
+        if done or first_item is None:
+            raise RuntimeError("FFmpeg generator ended before yielding metadata")
+        _, filename = first_item
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     async def chunk_generator():
         try:
-            for chunk, _ in gen:
+            while True:
+                done, item = await asyncio.to_thread(_next_or_done, gen)
+                if done or item is None:
+                    break
+                chunk, _ = item
                 if await request.is_disconnected():
                     logger.info("Client disconnected, stopping ffmpeg stream")
                     break

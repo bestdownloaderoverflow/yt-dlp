@@ -46,7 +46,8 @@ EXPOSE 9487
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9487/health')" || exit 1
 
-# Run with Granian (production config)
+# Run with Granian defaults for worker/thread concurrency while preserving
+# the app interface and bind address used by this deployment.
 CMD ["granian", "--interface", "asgi", "--loop", "uvloop", "--host", "0.0.0.0", "--port", "9487", "main:app"]
 
 # Development stage

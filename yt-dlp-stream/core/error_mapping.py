@@ -24,6 +24,22 @@ NOT_FOUND_PATTERNS = (
     "not found",
 )
 
+DNS_FAILURE_PATTERNS = (
+    "could not resolve host",
+    "temporary failure in name resolution",
+    "name or service not known",
+    "nodename nor servname provided",
+)
+
+GEO_RESTRICTED_PATTERNS = (
+    "not available in your region",
+    "not available in your country",
+    "region-blocked",
+    "geo-restricted",
+    "georestricted",
+    "geoblocked",
+)
+
 
 def _iter_exception_chain(exc: BaseException) -> Iterable[BaseException]:
     seen: set[int] = set()
@@ -78,6 +94,16 @@ def _is_not_found_message(message: str) -> bool:
     return any(pattern in lower for pattern in NOT_FOUND_PATTERNS)
 
 
+def is_dns_failure_message(message: str) -> bool:
+    lower = message.lower()
+    return any(pattern in lower for pattern in DNS_FAILURE_PATTERNS)
+
+
+def is_geo_restricted_message(message: str) -> bool:
+    lower = message.lower()
+    return any(pattern in lower for pattern in GEO_RESTRICTED_PATTERNS)
+
+
 def _rate_limited_exception(message: str) -> HTTPException:
     return HTTPException(
         status_code=429,
@@ -123,4 +149,3 @@ def map_generic_exception(exc: BaseException, *, default_status: int = 500) -> H
     if _is_rate_limited_message(message):
         return _rate_limited_exception(message)
     return HTTPException(status_code=default_status, detail=message)
-

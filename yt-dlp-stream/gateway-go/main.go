@@ -26,6 +26,9 @@ type Config struct {
 	WorkerCount              int
 	GluetunPassword          string
 	MaxRetries               int
+	HealthCheckTimeoutMs     int
+	HealthMonitorIntervalMs  int
+	HealthFailureThreshold   int
 	RateLimitCooldownSeconds int
 	RestartBackoffBase       int
 	RestartBackoffMax        int
@@ -52,6 +55,7 @@ type Worker struct {
 	RestartScheduled bool
 	Failures         int
 	RestartFailures  int
+	ProbeFailures    int
 	StartedAt        time.Time
 	ActiveRequests   int
 	LastRateLimit    time.Time
@@ -303,6 +307,39 @@ func (r *WorkerRegistry) SetHealthy(workerID string, healthy bool) {
 	}
 }
 
+func (r *WorkerRegistry) RecordProbe(workerID string, healthy bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	w := r.getWorkerUnlocked(workerID)
+	if w == nil {
+		return
+	}
+
+	threshold := r.cfg.HealthFailureThreshold
+	if threshold < 1 {
+		threshold = 1
+	}
+
+	if healthy {
+		w.ProbeFailures = 0
+		if !w.Healthy {
+			log.Printf("[%s] marked healthy after successful probe", workerID)
+		}
+		w.Healthy = true
+		w.BreakerOpen = false
+		return
+	}
+
+	w.ProbeFailures++
+	if w.ProbeFailures >= threshold {
+		if w.Healthy {
+			log.Printf("[%s] marked unhealthy after %d consecutive failed probes", workerID, w.ProbeFailures)
+		}
+		w.Healthy = false
+	}
+}
+
 func (r *WorkerRegistry) GetWorkersNeedingRestart() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -368,10 +405,14 @@ type VPNRotator struct {
 }
 
 func NewVPNRotator(registry *WorkerRegistry, cfg Config) *VPNRotator {
+	timeout := cfg.HealthCheckTimeoutMs
+	if timeout < 1000 {
+		timeout = 1000
+	}
 	return &VPNRotator{
 		registry: registry,
 		cfg:      cfg,
-		healthCl: &http.Client{Timeout: 5 * time.Second},
+		healthCl: &http.Client{Timeout: time.Duration(timeout) * time.Millisecond},
 	}
 }
 
@@ -1030,6 +1071,20 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 	body, _ := io.ReadAll(resp.Body)
 	text := strings.ToLower(string(body))
 
+	isGeoRestricted := strings.Contains(text, "geo_restricted") ||
+		strings.Contains(text, "not available in your region") ||
+		strings.Contains(text, "not available in your country") ||
+		strings.Contains(text, "region-blocked") ||
+		strings.Contains(text, "georestricted") ||
+		strings.Contains(text, "geoblocked")
+
+	isIPBlocked := strings.Contains(text, "ip blocked") ||
+		strings.Contains(text, "blocked by tiktok") ||
+		strings.Contains(text, "captcha") ||
+		strings.Contains(text, "verify you are human") ||
+		strings.Contains(text, "verify that you are human") ||
+		strings.Contains(text, "access denied")
+
 	if status == http.StatusForbidden || status == http.StatusTooManyRequests {
 		patterns := []string{
 			"rate-limited",
@@ -1047,12 +1102,18 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 				break
 			}
 		}
+		if isGeoRestricted {
+			log.Printf("[%s] received %d with geo restriction; failover without restart", worker.ID, status)
+			return proxyResult{success: false, status: status, shouldRestart: false}
+		}
 		if isRateLimit {
 			log.Printf("[%s] received %d with rate-limit pattern; failover + container restart", worker.ID, status)
-		} else {
-			log.Printf("[%s] received %d; failover + container restart (forbidden/rate path)", worker.ID, status)
+			return proxyResult{success: false, status: status, isRateLimit: true, shouldRestart: true}
 		}
-		return proxyResult{success: false, status: status, isRateLimit: true, shouldRestart: true}
+		if isIPBlocked {
+			log.Printf("[%s] received %d with IP-block pattern; failover + container restart", worker.ID, status)
+			return proxyResult{success: false, status: status, shouldRestart: true}
+		}
 	}
 
 	if status == http.StatusBadRequest {
@@ -1063,6 +1124,17 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 		w.WriteHeader(status)
 		_, _ = w.Write(body)
 		return proxyResult{success: true, wroteDirect: true}
+	}
+
+	if status == http.StatusServiceUnavailable {
+		if isGeoRestricted {
+			log.Printf("[%s] received 503 GEO_RESTRICTED; failover without restart", worker.ID)
+			return proxyResult{success: false, status: status, shouldRestart: false}
+		}
+		if isIPBlocked {
+			log.Printf("[%s] received 503 with IP-block pattern; failover + container restart", worker.ID)
+			return proxyResult{success: false, status: status, shouldRestart: true}
+		}
 	}
 
 	if status >= 400 && status < 500 {
@@ -1298,7 +1370,11 @@ func (g *Gateway) uptimeChecker() {
 }
 
 func (g *Gateway) healthMonitor() {
-	ticker := time.NewTicker(2 * time.Second)
+	interval := g.cfg.HealthMonitorIntervalMs
+	if interval < 1000 {
+		interval = 1000
+	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -1310,7 +1386,7 @@ func (g *Gateway) healthMonitor() {
 					g.registry.SetHealthy(worker.ID, false)
 					continue
 				}
-				g.registry.SetHealthy(worker.ID, g.rotator.healthCheck(worker.ID))
+				g.registry.RecordProbe(worker.ID, g.rotator.healthCheck(worker.ID))
 			}
 		}
 	}
@@ -1340,6 +1416,9 @@ func loadConfig() Config {
 		WorkerCount:              envInt("WORKER_COUNT", 3),
 		GluetunPassword:          getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
 		MaxRetries:               envInt("MAX_RETRIES", 3),
+		HealthCheckTimeoutMs:     envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
+		HealthMonitorIntervalMs:  envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
+		HealthFailureThreshold:   envInt("HEALTH_FAILURE_THRESHOLD", 3),
 		RateLimitCooldownSeconds: envInt("RATE_LIMIT_COOLDOWN", 300),
 		RestartBackoffBase:       envInt("RESTART_BACKOFF_BASE", 30),
 		RestartBackoffMax:        envInt("RESTART_BACKOFF_MAX", 300),

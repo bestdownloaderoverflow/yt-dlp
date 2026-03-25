@@ -381,7 +381,7 @@ async def _download_photo(
     # Use ydl_manager for session integrity (preserves cookies)
     from ytdl_manager import ydl_manager
 
-    info = ydl_manager.extract_info(url)
+    info = await asyncio.to_thread(ydl_manager.extract_info, url)
 
     photo_url = None
     width = None

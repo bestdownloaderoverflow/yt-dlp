@@ -189,6 +189,46 @@ def extract_format_headers(
     return safe_headers, cookies
 
 
+def _parse_content_length(headers: httpx.Headers) -> Optional[int]:
+    """Parse file size from Content-Length or Content-Range headers."""
+    content_length = headers.get("Content-Length")
+    if content_length and content_length.isdigit():
+        return int(content_length)
+
+    content_range = headers.get("Content-Range")
+    if content_range and "/" in content_range:
+        total = content_range.rsplit("/", 1)[-1].strip()
+        if total.isdigit():
+            return int(total)
+    return None
+
+
+async def _probe_content_length(url: str, headers: dict) -> Optional[int]:
+    """
+    Best-effort probe to get exact content length from origin server.
+    Falls back from HEAD to a ranged GET when needed.
+    """
+    if not url:
+        return None
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
+            head_resp = await client.request("HEAD", url, headers=headers)
+            size = _parse_content_length(head_resp.headers)
+            if size and size > 0:
+                return size
+
+            range_headers = {**headers, "Range": "bytes=0-0"}
+            range_resp = await client.get(url, headers=range_headers)
+            size = _parse_content_length(range_resp.headers)
+            if size and size > 0:
+                return size
+    except Exception as e:
+        logger.debug(f"Could not probe content length: {e}")
+
+    return None
+
+
 def generate_video_download_links(
     info: dict,
     author: TikTokAuthor,
@@ -794,6 +834,8 @@ async def _download_photo(
 ):
     """Download TikTok photo with URL refresh on 403."""
     direct_url = session.direct_url
+    http_headers = session.http_headers or {}
+    cookies = session.cookies
     photo_index = session.photo_index or 1
     original_url = session.url
     proxy = session.proxy
@@ -807,18 +849,26 @@ async def _download_photo(
     safe_author = "".join(c if c.isalnum() else "_" for c in author)
     filename = f"{safe_author}_photo_{photo_index}.jpg"
 
+    safe_headers = {
+        k: v for k, v in http_headers.items()
+        if k.lower() not in ("accept-encoding", "cookie")
+    }
+    safe_headers["Accept-Encoding"] = "identity"
+    if cookies:
+        safe_headers["Cookie"] = cookies
+
     max_refreshes = 2
     refresh_count = 0
 
     async def _stream_photo():
-        nonlocal direct_url, refresh_count
+        nonlocal direct_url, safe_headers, refresh_count
 
         while True:
             try:
                 async with httpx.AsyncClient(
                     follow_redirects=True, timeout=60
                 ) as client:
-                    async with client.stream("GET", direct_url) as resp:
+                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
                         if resp.status_code == 403 and refresh_count < max_refreshes and original_url:
                             logger.warning(f"Photo URL expired, attempting refresh")
                             # Try to refresh by re-extracting
@@ -831,7 +881,22 @@ async def _download_photo(
                                 formats = refreshed_info.get("formats", [])
                                 image_formats = [f for f in formats if f.get("format_id", "").startswith("image-")]
                                 if photo_index <= len(image_formats):
-                                    direct_url = image_formats[photo_index - 1].get("url")
+                                    new_fmt = image_formats[photo_index - 1]
+                                    direct_url = new_fmt.get("url")
+                                    new_headers, new_cookies = extract_format_headers(
+                                        new_fmt,
+                                        refreshed_info,
+                                        original_url,
+                                        proxy=proxy,
+                                        impersonate=impersonate,
+                                    )
+                                    safe_headers = {
+                                        k: v for k, v in new_headers.items()
+                                        if k.lower() not in ("accept-encoding", "cookie")
+                                    }
+                                    safe_headers["Accept-Encoding"] = "identity"
+                                    if new_cookies:
+                                        safe_headers["Cookie"] = new_cookies
                                     refresh_count += 1
                                     continue
 
@@ -851,8 +916,11 @@ async def _download_photo(
 
     response_headers = _build_disposition_header(filename, download)
     filesize = getattr(session, "filesize", None)
-    if filesize and int(filesize) > 0:
-        response_headers["Content-Length"] = str(int(filesize))
+    resolved_size = int(filesize) if filesize and int(filesize) > 0 else None
+    if not resolved_size:
+        resolved_size = await _probe_content_length(direct_url, safe_headers)
+    if resolved_size and resolved_size > 0:
+        response_headers["Content-Length"] = str(resolved_size)
 
     return StreamingResponse(
         _stream_photo(),
@@ -955,8 +1023,11 @@ async def _download_mp3(
     response_headers = _build_disposition_header(filename, download)
     filesize = getattr(session, "filesize", None)
     duration = getattr(session, "duration", None)
-    if filesize and int(filesize) > 0:
-        response_headers["Content-Length"] = str(int(filesize))
+    resolved_size = int(filesize) if filesize and int(filesize) > 0 else None
+    if not resolved_size:
+        resolved_size = await _probe_content_length(direct_url, safe_headers)
+    if resolved_size and resolved_size > 0:
+        response_headers["Content-Length"] = str(resolved_size)
     else:
         estimated_size = estimate_mp3_size(duration)
         if estimated_size > 0:

@@ -48,7 +48,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Run with Granian defaults for worker/thread concurrency while preserving
 # the app interface and bind address used by this deployment.
-CMD ["granian", "--interface", "asgi", "--loop", "uvloop", "--host", "0.0.0.0", "--port", "9487", "main:app"]
+CMD ["granian", "--interface", "asgi", "--loop", "uvloop", "--workers", "4", "--blocking-threads", "2", "--host", "0.0.0.0", "--port", "9487", "main:app"]
 
 # Development stage
 FROM base AS development
@@ -57,4 +57,4 @@ FROM base AS development
 RUN pip install --no-cache-dir watchfiles
 
 # Run with reload for development
-CMD ["granian", "--interface", "asgi", "--loop", "uvloop", "--host", "0.0.0.0", "--port", "9487", "--reload", "main:app"]
+CMD ["granian", "--interface", "asgi", "--loop", "uvloop", "--workers", "4", "--blocking-threads", "2", "--host", "0.0.0.0", "--port", "9487", "--reload", "main:app"]

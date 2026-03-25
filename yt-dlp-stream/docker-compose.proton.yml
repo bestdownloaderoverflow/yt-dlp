@@ -13,7 +13,7 @@ services:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=KA7zTspoZrUUJf6bggRengejFYMlbNFdfqtRJqcTtnY=
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=United States
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -64,7 +64,7 @@ services:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=SLudVJoxaNu8sNPd9ZtLwXJ3gAVBkh141l8AToL/FVs=
-      - SERVER_COUNTRIES=Vietnam
+      - SERVER_COUNTRIES=United States
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -115,7 +115,7 @@ services:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=eP3kJINT4hysMywYiZwLVrdBkJog+WyqmT8jQSQ4fmg=
-      - SERVER_COUNTRIES=Vietnam
+      - SERVER_COUNTRIES=United States
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -166,7 +166,7 @@ services:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=eC9jDejs7rpewBf9qbAk7e9Yowb9Dw1ms2hydC8UBUo=
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=United States
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -217,7 +217,7 @@ services:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=uFcIOh42f6kvtZd5AQojGZ58CHHUhycmIp19LC4Kokw=
-      - SERVER_COUNTRIES=Malaysia
+      - SERVER_COUNTRIES=United States
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"

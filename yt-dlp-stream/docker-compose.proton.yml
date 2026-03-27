@@ -237,7 +237,7 @@ services:
     environment:
       - WORKER_ID=w1
       - API_PORT=9487
-      - GRANIAN_WORKERS=1
+      - GRANIAN_WORKERS=2
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -249,7 +249,7 @@ services:
     environment:
       - WORKER_ID=w2
       - API_PORT=9487
-      - GRANIAN_WORKERS=1
+      - GRANIAN_WORKERS=2
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -261,7 +261,7 @@ services:
     environment:
       - WORKER_ID=w3
       - API_PORT=9487
-      - GRANIAN_WORKERS=1
+      - GRANIAN_WORKERS=2
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -273,7 +273,7 @@ services:
     environment:
       - WORKER_ID=w4
       - API_PORT=9487
-      - GRANIAN_WORKERS=1
+      - GRANIAN_WORKERS=2
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp

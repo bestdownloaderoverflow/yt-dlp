@@ -40,6 +40,7 @@ services:
     environment:
       - WORKER_ID=w1
       - API_PORT=9487
+      - GRANIAN_WORKERS=${GRANIAN_WORKERS:-2}
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -91,6 +92,7 @@ services:
     environment:
       - WORKER_ID=w2
       - API_PORT=9487
+      - GRANIAN_WORKERS=${GRANIAN_WORKERS:-2}
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -142,6 +144,7 @@ services:
     environment:
       - WORKER_ID=w3
       - API_PORT=9487
+      - GRANIAN_WORKERS=${GRANIAN_WORKERS:-2}
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -193,6 +196,7 @@ services:
     environment:
       - WORKER_ID=w4
       - API_PORT=9487
+      - GRANIAN_WORKERS=${GRANIAN_WORKERS:-2}
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -244,6 +248,7 @@ services:
     environment:
       - WORKER_ID=w5
       - API_PORT=9487
+      - GRANIAN_WORKERS=${GRANIAN_WORKERS:-2}
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -290,6 +295,7 @@ services:
       - RESTART_BACKOFF_JITTER=2
       - DEGRADED_RETRY_AFTER=5
       - RESTART_STABILIZE_SECONDS=5
+      - UNHEALTHY_RESTART_THRESHOLD=6
     depends_on:
       - gluetun-1
       - gluetun-2

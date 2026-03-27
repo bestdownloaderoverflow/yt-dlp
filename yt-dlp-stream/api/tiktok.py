@@ -638,6 +638,35 @@ def _build_disposition_header(filename: str, download: bool) -> dict:
     }
 
 
+async def _should_refresh_tiktok_stream(resp: httpx.Response) -> bool:
+    """
+    Refresh only when a 403 looks transient instead of permanent.
+    """
+    if resp.status_code != 403:
+        return False
+
+    try:
+        text = (await resp.aread()).decode("utf-8", errors="ignore").lower()
+    except Exception:
+        return True
+
+    permanent_patterns = (
+        "geo_restricted",
+        "geo restricted",
+        "region",
+        "country",
+        "blocked",
+        "permission",
+        "do not have permission",
+        "login",
+        "log in",
+        "captcha",
+        "verify you are human",
+        "access denied",
+    )
+    return not any(pattern in text for pattern in permanent_patterns)
+
+
 async def _refresh_tiktok_url(original_url: str, proxy: Optional[str], impersonate: Optional[str]) -> Optional[dict]:
     """
     Refresh expired TikTok URL by re-extracting info.
@@ -739,7 +768,7 @@ async def _download_video(
     filename = f"{safe_author}_{quality}.mp4"
 
     # Track refresh attempts
-    max_refreshes = 3
+    max_refreshes = 1
     refresh_count = 0
 
     async def _stream_with_refresh():
@@ -752,7 +781,12 @@ async def _download_video(
                 ) as client:
                     async with client.stream("GET", direct_url, headers=safe_headers) as resp:
                         # Handle 403 - try to refresh URL
-                        if resp.status_code == 403 and refresh_count < max_refreshes:
+                        if (
+                            resp.status_code == 403
+                            and refresh_count < max_refreshes
+                            and original_url
+                            and await _should_refresh_tiktok_stream(resp)
+                        ):
                             logger.warning(f"TikTok URL expired (403), attempting refresh {refresh_count + 1}/{max_refreshes}")
 
                             # Refresh URL by re-extracting
@@ -814,50 +848,6 @@ async def _download_video(
                         break  # Success, exit loop
 
             except httpx.HTTPStatusError as e:
-                if e.response.status_code == 403 and refresh_count < max_refreshes:
-                    logger.warning(f"HTTP 403 during stream, attempting refresh...")
-                    refreshed_info = await _refresh_tiktok_url(
-                        original_url,
-                        proxy,
-                        impersonate,
-                    )
-                    if refreshed_info:
-                        formats = refreshed_info.get("formats", [])
-                        video_formats = [
-                            f for f in formats
-                            if f.get("vcodec") and f["vcodec"] != "none"
-                            and f.get("acodec") and f["acodec"] != "none"
-                        ]
-                        video_formats.sort(key=lambda x: (x.get("height", 0) * x.get("width", 0)), reverse=True)
-
-                        new_fmt = None
-                        if quality == "watermark":
-                            new_fmt = next((f for f in formats if f.get("format_id") == "download"), None)
-                        elif quality == "no_watermark_hd" and video_formats:
-                            new_fmt = video_formats[0]
-                        elif video_formats:
-                            new_fmt = next((f for f in video_formats if f.get("height", 0) < 720), video_formats[0])
-
-                        if new_fmt:
-                            direct_url = new_fmt.get("url")
-                            http_headers, cookies = extract_format_headers(
-                                new_fmt,
-                                refreshed_info,
-                                original_url,
-                                proxy=proxy,
-                                impersonate=impersonate,
-                            )
-                            safe_headers = {
-                                k: v for k, v in http_headers.items()
-                                if k.lower() not in ("accept-encoding", "cookie")
-                            }
-                            safe_headers["Accept-Encoding"] = "identity"
-                            if cookies:
-                                safe_headers["Cookie"] = cookies
-
-                            refresh_count += 1
-                            continue  # Retry
-
                 logger.error(f"HTTP error during TikTok video download: {e}")
                 raise HTTPException(status_code=e.response.status_code, detail=f"Download failed: {e}")
             except httpx.ConnectError as e:
@@ -920,7 +910,7 @@ async def _download_photo(
     if cookies:
         safe_headers["Cookie"] = cookies
 
-    max_refreshes = 2
+    max_refreshes = 1
     refresh_count = 0
 
     async def _stream_photo():
@@ -932,7 +922,12 @@ async def _download_photo(
                     follow_redirects=True, timeout=60
                 ) as client:
                     async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                        if resp.status_code == 403 and refresh_count < max_refreshes and original_url:
+                        if (
+                            resp.status_code == 403
+                            and refresh_count < max_refreshes
+                            and original_url
+                            and await _should_refresh_tiktok_stream(resp)
+                        ):
                             logger.warning(f"Photo URL expired, attempting refresh")
                             # Try to refresh by re-extracting
                             refreshed_info = await _refresh_tiktok_url(
@@ -971,10 +966,7 @@ async def _download_photo(
                             yield data
                         break
 
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 403 and refresh_count < max_refreshes:
-                    refresh_count += 1
-                    continue
+            except httpx.HTTPStatusError:
                 raise
 
     response_headers = _build_disposition_header(filename, download)
@@ -1023,7 +1015,7 @@ async def _download_mp3(
     safe_author = "".join(c if c.isalnum() else "_" for c in author)
     filename = f"{safe_author}.mp3"
 
-    max_refreshes = 3
+    max_refreshes = 1
     refresh_count = 0
 
     async def _stream_audio():
@@ -1035,7 +1027,12 @@ async def _download_mp3(
                     follow_redirects=True, timeout=300
                 ) as client:
                     async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                        if resp.status_code == 403 and refresh_count < max_refreshes and original_url:
+                        if (
+                            resp.status_code == 403
+                            and refresh_count < max_refreshes
+                            and original_url
+                            and await _should_refresh_tiktok_stream(resp)
+                        ):
                             logger.warning(f"Audio URL expired, attempting refresh {refresh_count + 1}/{max_refreshes}")
                             refreshed_info = await _refresh_tiktok_url(
                                 original_url,
@@ -1077,10 +1074,7 @@ async def _download_mp3(
                             yield data
                         break
 
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 403 and refresh_count < max_refreshes:
-                    refresh_count += 1
-                    continue
+            except httpx.HTTPStatusError:
                 raise
 
     response_headers = _build_disposition_header(filename, download)

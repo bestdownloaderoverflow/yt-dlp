@@ -254,6 +254,261 @@ services:
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
     restart: unless-stopped
 
+  gluetun-6:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-6
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8006:8000"
+      - "9492:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_6}
+      - SERVER_COUNTRIES=Indonesia
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+    volumes:
+      - ./gluetun/data6:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-6
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-6:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-6
+    network_mode: "service:gluetun-6"
+    depends_on:
+      - gluetun-6
+      - redis
+    environment:
+      - WORKER_ID=w6
+      - API_PORT=9487
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    restart: unless-stopped
+
+  gluetun-7:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-7
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8007:8000"
+      - "9493:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_7}
+      - SERVER_COUNTRIES=Indonesia
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+    volumes:
+      - ./gluetun/data7:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-7
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-7:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-7
+    network_mode: "service:gluetun-7"
+    depends_on:
+      - gluetun-7
+      - redis
+    environment:
+      - WORKER_ID=w7
+      - API_PORT=9487
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    restart: unless-stopped
+
+  gluetun-8:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-8
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8008:8000"
+      - "9494:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_8}
+      - SERVER_COUNTRIES=Indonesia
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+    volumes:
+      - ./gluetun/data8:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-8
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-8:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-8
+    network_mode: "service:gluetun-8"
+    depends_on:
+      - gluetun-8
+      - redis
+    environment:
+      - WORKER_ID=w8
+      - API_PORT=9487
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    restart: unless-stopped
+
+  gluetun-9:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-9
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8009:8000"
+      - "9495:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_9}
+      - SERVER_COUNTRIES=Indonesia
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+    volumes:
+      - ./gluetun/data9:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-9
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-9:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-9
+    network_mode: "service:gluetun-9"
+    depends_on:
+      - gluetun-9
+      - redis
+    environment:
+      - WORKER_ID=w9
+      - API_PORT=9487
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    restart: unless-stopped
+
+  gluetun-10:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-10
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8010:8000"
+      - "9496:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_10}
+      - SERVER_COUNTRIES=Indonesia
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+    volumes:
+      - ./gluetun/data10:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-10
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-10:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-10
+    network_mode: "service:gluetun-10"
+    depends_on:
+      - gluetun-10
+      - redis
+    environment:
+      - WORKER_ID=w10
+      - API_PORT=9487
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     container_name: ytdlp-redis
@@ -276,7 +531,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - GATEWAY_PORT=9111
-      - WORKER_COUNT=5
+      - WORKER_COUNT=10
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
       - MAX_RETRIES=3
       - HEALTH_CHECK_TIMEOUT_MS=15000
@@ -296,11 +551,21 @@ services:
       - gluetun-3
       - gluetun-4
       - gluetun-5
+      - gluetun-6
+      - gluetun-7
+      - gluetun-8
+      - gluetun-9
+      - gluetun-10
       - ytdlp-1
       - ytdlp-2
       - ytdlp-3
       - ytdlp-4
       - ytdlp-5
+      - ytdlp-6
+      - ytdlp-7
+      - ytdlp-8
+      - ytdlp-9
+      - ytdlp-10
       - redis
     restart: unless-stopped
     networks:

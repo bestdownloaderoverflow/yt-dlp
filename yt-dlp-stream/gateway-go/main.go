@@ -43,6 +43,7 @@ type Config struct {
 	DrainTimeoutSeconds      int
 	DrainPollIntervalMs      int
 	RestartStabilizeSeconds  int
+	UnhealthyRestartThreshold int
 }
 
 type Worker struct {
@@ -386,6 +387,34 @@ func (r *WorkerRegistry) DecrementActive(workerID string) {
 	if w := r.getWorkerUnlocked(workerID); w != nil && w.ActiveRequests > 0 {
 		w.ActiveRequests--
 	}
+}
+
+func (r *WorkerRegistry) ShouldRestartUnhealthy(workerID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	w := r.getWorkerUnlocked(workerID)
+	if w == nil {
+		return false
+	}
+
+	threshold := r.cfg.UnhealthyRestartThreshold
+	if threshold < 1 {
+		return false
+	}
+	if w.Healthy || w.Restarting || w.RestartScheduled {
+		return false
+	}
+	if w.ActiveRequests > 0 {
+		return false
+	}
+
+	now := time.Now()
+	if now.Before(w.QuarantineUntil) || now.Before(w.NextRestartAt) {
+		return false
+	}
+
+	return w.ProbeFailures >= threshold
 }
 
 func (r *WorkerRegistry) WorkersSnapshot() []Worker {
@@ -1387,6 +1416,10 @@ func (g *Gateway) healthMonitor() {
 					continue
 				}
 				g.registry.RecordProbe(worker.ID, g.rotator.healthCheck(worker.ID))
+				if g.registry.ShouldRestartUnhealthy(worker.ID) {
+					log.Printf("[%s] unhealthy for %d consecutive probes; scheduling restart", worker.ID, g.cfg.UnhealthyRestartThreshold)
+					_ = g.registry.ScheduleRestart(worker.ID)
+				}
 			}
 		}
 	}
@@ -1433,6 +1466,7 @@ func loadConfig() Config {
 		DrainTimeoutSeconds:      envInt("DRAIN_TIMEOUT_SECONDS", 90),
 		DrainPollIntervalMs:      envInt("DRAIN_POLL_INTERVAL_MS", 500),
 		RestartStabilizeSeconds:  envInt("RESTART_STABILIZE_SECONDS", 2),
+		UnhealthyRestartThreshold: envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
 	}
 }
 

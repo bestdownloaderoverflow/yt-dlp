@@ -28,6 +28,17 @@ Gateway listen di port `9111` (default).
 
 - `GATEWAY_PORT` (default `9111`)
 - `WORKER_COUNT` (default `3`)
+- `WORKER_HOST_PREFIX` (default `ytdlp-worker-`)
+- `WORKER_CONTAINER_PREFIX` (default `ytdlp-worker-`)
+- `WORKER_API_PORT` (default `9487`)
+- `PROXY_COUNT` (default `10`)
+- `PROXY_HOST_PREFIX` (default `gluetun-`)
+- `PROXY_CONTAINER_PREFIX` (default `ytdlp-gluetun-`)
+- `PROXY_HTTP_PORT` (default `8888`)
+- `PROXY_CONTROL_PORT` (default `8000`)
+- `MAX_ACTIVE_PER_WORKER` (default `40`)
+- `MAX_ACTIVE_PER_PROXY` (default `30`)
+- `WORKER_PICK_STRATEGY` (default `p2c`; opsi: `p2c`, `least`, `random`)
 - `GLUETUN_PASSWORD` (default `secretpassword`)
 - `MAX_RETRIES` (default `3`)
 - `HEALTH_CHECK_TIMEOUT_MS` (default `8000`)
@@ -46,6 +57,10 @@ Gateway listen di port `9111` (default).
 - `GATEWAY_RL_DOWNLOAD_LIMIT` (default `45`)
 - `DRAIN_TIMEOUT_SECONDS` (default `90`)
 - `DRAIN_POLL_INTERVAL_MS` (default `500`)
+- `GATEWAY_READ_HEADER_TIMEOUT_SECONDS` (default `10`)
+- `GATEWAY_READ_TIMEOUT_SECONDS` (default `30`)
+- `GATEWAY_WRITE_TIMEOUT_SECONDS` (default `0`, nonaktif)
+- `GATEWAY_IDLE_TIMEOUT_SECONDS` (default `120`)
 
 ## Error Policy Matrix
 

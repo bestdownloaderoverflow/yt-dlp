@@ -12,7 +12,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=KA7zTspoZrUUJf6bggRengejFYMlbNFdfqtRJqcTtnY=
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_1}
       - SERVER_COUNTRIES=Indonesia
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
@@ -64,7 +64,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=SLudVJoxaNu8sNPd9ZtLwXJ3gAVBkh141l8AToL/FVs=
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_2}
       - SERVER_COUNTRIES=Indonesia
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
@@ -116,7 +116,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=eP3kJINT4hysMywYiZwLVrdBkJog+WyqmT8jQSQ4fmg=
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_3}
       - SERVER_COUNTRIES=Indonesia
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
@@ -168,7 +168,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=eC9jDejs7rpewBf9qbAk7e9Yowb9Dw1ms2hydC8UBUo=
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_4}
       - SERVER_COUNTRIES=Indonesia
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
@@ -220,7 +220,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=uFcIOh42f6kvtZd5AQojGZ58CHHUhycmIp19LC4Kokw=
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_5}
       - SERVER_COUNTRIES=Indonesia
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off

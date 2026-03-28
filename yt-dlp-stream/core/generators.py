@@ -12,7 +12,8 @@ from typing import Optional, AsyncIterator
 import httpx
 from fastapi import HTTPException, Request as FastAPIRequest
 
-from core.config import CHUNK_SIZE, VIDEO_CHUNK_SIZE, AUDIO_FORMAT
+from core.config import CHUNK_SIZE, VIDEO_CHUNK_SIZE, AUDIO_FORMAT, STREAM_BUFFER_SIZE
+from core.http_pool import get_async_pool, get_sync_pool
 from core.ffmpeg import build_ffmpeg_merge_cmd, build_ffmpeg_single_cmd
 from core.helpers import _extract_info_and_resolve, needs_ios_video_transcode
 from process_manager import process_manager
@@ -180,15 +181,15 @@ async def _chunked_range_generator(
     and the connection never times out on large files.
     """
     read = 0
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-        while read < total_size:
-            end = min(read + chunk_size - 1, total_size - 1)
-            range_headers = {**headers, "Range": f"bytes={read}-{end}"}
-            async with client.stream("GET", url, headers=range_headers) as resp:
-                resp.raise_for_status()
-                async for data in resp.aiter_bytes():
-                    yield data
-                    read += len(data)
+    client = get_async_pool()
+    while read < total_size:
+        end = min(read + chunk_size - 1, total_size - 1)
+        range_headers = {**headers, "Range": f"bytes={read}-{end}"}
+        async with client.stream("GET", url, headers=range_headers) as resp:
+            resp.raise_for_status()
+            async for data in resp.aiter_bytes():
+                yield data
+                read += len(data)
 
 
 async def _chunked_video_generator(
@@ -218,166 +219,166 @@ async def _chunked_video_generator(
 
     safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-        while read < total_size:
-            # Check for cancellation
+    client = get_async_pool()
+    while read < total_size:
+        # Check for cancellation
+        if cancel_event and cancel_event.is_set():
+            logger.info(f"Chunked download cancelled at byte {read}/{total_size}")
+            break
+
+        end = min(read + chunk_size - 1, total_size - 1)
+        range_headers = {**safe_headers, "Range": f"bytes={read}-{end}"}
+
+        chunk_retries = 0
+        chunk_success = False
+
+        while chunk_retries < max_retries_per_chunk and not chunk_success:
+            # Check for cancellation before retry
             if cancel_event and cancel_event.is_set():
                 logger.info(f"Chunked download cancelled at byte {read}/{total_size}")
                 break
 
-            end = min(read + chunk_size - 1, total_size - 1)
-            range_headers = {**safe_headers, "Range": f"bytes={read}-{end}"}
+            try:
+                async with client.stream("GET", url, headers=range_headers) as resp:
+                    # 416: requested range cannot be satisfied. If we're already at EOF,
+                    # treat this as completion to match resilient downloader behaviour.
+                    if resp.status_code == 416:
+                        if read >= total_size:
+                            chunk_success = True
+                            break
+                        raise HTTPException(
+                            status_code=416,
+                            detail=f"Requested range not satisfiable at {read}/{total_size} bytes",
+                        )
 
-            chunk_retries = 0
-            chunk_success = False
-
-            while chunk_retries < max_retries_per_chunk and not chunk_success:
-                # Check for cancellation before retry
-                if cancel_event and cancel_event.is_set():
-                    logger.info(f"Chunked download cancelled at byte {read}/{total_size}")
-                    break
-
-                try:
-                    async with client.stream("GET", url, headers=range_headers) as resp:
-                        # 416: requested range cannot be satisfied. If we're already at EOF,
-                        # treat this as completion to match resilient downloader behaviour.
-                        if resp.status_code == 416:
-                            if read >= total_size:
-                                chunk_success = True
-                                break
-                            raise HTTPException(
-                                status_code=416,
-                                detail=f"Requested range not satisfiable at {read}/{total_size} bytes",
-                            )
-
-                        # Handle 403 - URL expired, try transplant
-                        if resp.status_code == 403:
-                            if refresh_count < max_refreshes:
-                                logger.warning(f"URL expired at byte {read}/{total_size}, attempting refresh {refresh_count+1}/{max_refreshes}...")
-                                new_url = await _refresh_url(ydl_refresh_info)
-                                if new_url:
-                                    url = new_url
-                                    refresh_count += 1
-                                    logger.info(f"URL refreshed successfully (attempt {refresh_count})")
-                                    continue  # Retry same chunk with new URL
-                                else:
-                                    logger.error("Failed to refresh URL")
-                                    raise HTTPException(
-                                        status_code=403,
-                                        detail=f"URL expired at {read}/{total_size} bytes and could not be refreshed"
-                                    )
+                    # Handle 403 - URL expired, try transplant
+                    if resp.status_code == 403:
+                        if refresh_count < max_refreshes:
+                            logger.warning(f"URL expired at byte {read}/{total_size}, attempting refresh {refresh_count+1}/{max_refreshes}...")
+                            new_url = await _refresh_url(ydl_refresh_info)
+                            if new_url:
+                                url = new_url
+                                refresh_count += 1
+                                logger.info(f"URL refreshed successfully (attempt {refresh_count})")
+                                continue  # Retry same chunk with new URL
                             else:
+                                logger.error("Failed to refresh URL")
                                 raise HTTPException(
                                     status_code=403,
-                                    detail=f"Max refresh attempts ({max_refreshes}) exceeded at {read}/{total_size} bytes"
+                                    detail=f"URL expired at {read}/{total_size} bytes and could not be refreshed"
                                 )
+                        else:
+                            raise HTTPException(
+                                status_code=403,
+                                detail=f"Max refresh attempts ({max_refreshes}) exceeded at {read}/{total_size} bytes"
+                            )
 
-                        # Handle other errors
-                        if resp.status_code >= 400:
-                            logger.error(f"HTTP {resp.status_code} at byte {read}/{total_size}")
-                            resp.raise_for_status()
+                    # Handle other errors
+                    if resp.status_code >= 400:
+                        logger.error(f"HTTP {resp.status_code} at byte {read}/{total_size}")
+                        resp.raise_for_status()
 
-                        # Range semantics validation (yt-dlp HttpFD style safety):
-                        # - 206 should match requested range start
-                        # - 200 is acceptable only on first chunk (server ignored Range)
-                        if resp.status_code == 206:
-                            cr_start, _, cr_total = _parse_content_range(resp.headers.get("Content-Range"))
-                            if cr_start is None or cr_start != read:
-                                raise HTTPException(
-                                    status_code=502,
-                                    detail=(
-                                        f"Invalid Content-Range response at byte {read}: "
-                                        f"{resp.headers.get('Content-Range')}"
-                                    ),
-                                )
-                            if cr_total is not None and cr_total != total_size:
-                                logger.warning(
-                                    "Content-Range total (%s) differs from expected total_size (%s)",
-                                    cr_total, total_size,
-                                )
-                        elif resp.status_code == 200 and read > 0:
+                    # Range semantics validation (yt-dlp HttpFD style safety):
+                    # - 206 should match requested range start
+                    # - 200 is acceptable only on first chunk (server ignored Range)
+                    if resp.status_code == 206:
+                        cr_start, _, cr_total = _parse_content_range(resp.headers.get("Content-Range"))
+                        if cr_start is None or cr_start != read:
                             raise HTTPException(
                                 status_code=502,
                                 detail=(
-                                    "Server ignored Range request mid-download; "
-                                    "cannot continue safely without duplicate bytes"
+                                    f"Invalid Content-Range response at byte {read}: "
+                                    f"{resp.headers.get('Content-Range')}"
                                 ),
                             )
+                        if cr_total is not None and cr_total != total_size:
+                            logger.warning(
+                                "Content-Range total (%s) differs from expected total_size (%s)",
+                                cr_total, total_size,
+                            )
+                    elif resp.status_code == 200 and read > 0:
+                        raise HTTPException(
+                            status_code=502,
+                            detail=(
+                                "Server ignored Range request mid-download; "
+                                "cannot continue safely without duplicate bytes"
+                            ),
+                        )
 
-                        # Success - stream chunk data
-                        chunk_bytes_read = 0
-                        async for data in resp.aiter_bytes():
-                            # Check for cancellation during streaming
-                            if cancel_event and cancel_event.is_set():
-                                logger.info(f"Chunked download cancelled during streaming at byte {read}/{total_size}")
-                                break
-                            yield data
-                            read += len(data)
-                            chunk_bytes_read += len(data)
-
-                        # If cancelled during streaming, exit outer loop
+                    # Success - stream chunk data
+                    chunk_bytes_read = 0
+                    async for data in resp.aiter_bytes():
+                        # Check for cancellation during streaming
                         if cancel_event and cancel_event.is_set():
+                            logger.info(f"Chunked download cancelled during streaming at byte {read}/{total_size}")
                             break
+                        yield data
+                        read += len(data)
+                        chunk_bytes_read += len(data)
 
-                        chunk_success = True
+                    # If cancelled during streaming, exit outer loop
+                    if cancel_event and cancel_event.is_set():
+                        break
 
-                        # Log progress setiap 10%
-                        progress = (read / total_size) * 100
-                        if int(progress) % 10 == 0:
-                            logger.info(f"Download progress: {progress:.1f}% ({read}/{total_size} bytes)")
+                    chunk_success = True
 
-                except httpx.HTTPStatusError as e:
-                    chunk_retries += 1
+                    # Log progress setiap 10%
+                    progress = (read / total_size) * 100
+                    if int(progress) % 10 == 0:
+                        logger.info(f"Download progress: {progress:.1f}% ({read}/{total_size} bytes)")
 
-                    # Special handling untuk 403
-                    if e.response.status_code == 403 and refresh_count < max_refreshes:
-                        logger.warning(f"HTTP 403 at byte {read}, attempting refresh...")
-                        new_url = await _refresh_url(ydl_refresh_info)
-                        if new_url:
-                            url = new_url
-                            refresh_count += 1
-                            continue
+            except httpx.HTTPStatusError as e:
+                chunk_retries += 1
 
-                    # Retry lain dengan backoff
-                    if chunk_retries < max_retries_per_chunk:
-                        backoff = min(2 ** chunk_retries, 10)  # Max 10s
-                        logger.warning(f"Chunk failed (retry {chunk_retries}/{max_retries_per_chunk}), retrying in {backoff}s: {e}")
-                        await asyncio.sleep(backoff)
-                    else:
-                        logger.error(f"Chunk failed after {max_retries_per_chunk} retries at byte {read}/{total_size}: {e}")
-                        raise HTTPException(
-                            status_code=e.response.status_code,
-                            detail=f"Download failed at {read}/{total_size} bytes after {max_retries_per_chunk} retries: {str(e)}"
-                        )
+                # Special handling untuk 403
+                if e.response.status_code == 403 and refresh_count < max_refreshes:
+                    logger.warning(f"HTTP 403 at byte {read}, attempting refresh...")
+                    new_url = await _refresh_url(ydl_refresh_info)
+                    if new_url:
+                        url = new_url
+                        refresh_count += 1
+                        continue
 
-                except (httpx.TimeoutException, httpx.NetworkError) as e:
-                    chunk_retries += 1
-                    if chunk_retries < max_retries_per_chunk:
-                        backoff = min(2 ** chunk_retries, 10)
-                        logger.warning(f"Network error (retry {chunk_retries}/{max_retries_per_chunk}), retrying in {backoff}s: {e}")
-                        await asyncio.sleep(backoff)
-                    else:
-                        logger.error(f"Network error after {max_retries_per_chunk} retries at byte {read}/{total_size}: {e}")
-                        raise HTTPException(
-                            status_code=503,
-                            detail=f"Network error at {read}/{total_size} bytes after {max_retries_per_chunk} retries: {str(e)}"
-                        )
-
-                except HTTPException:
-                    raise
-
-                except Exception as e:
-                    logger.error(f"Unexpected error at byte {read}/{total_size}: {e}")
+                # Retry lain dengan backoff
+                if chunk_retries < max_retries_per_chunk:
+                    backoff = min(2 ** chunk_retries, 10)  # Max 10s
+                    logger.warning(f"Chunk failed (retry {chunk_retries}/{max_retries_per_chunk}), retrying in {backoff}s: {e}")
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error(f"Chunk failed after {max_retries_per_chunk} retries at byte {read}/{total_size}: {e}")
                     raise HTTPException(
-                        status_code=500,
-                        detail=f"Unexpected error at {read}/{total_size} bytes: {str(e)}"
+                        status_code=e.response.status_code,
+                        detail=f"Download failed at {read}/{total_size} bytes after {max_retries_per_chunk} retries: {str(e)}"
                     )
 
-            if not chunk_success:
+            except (httpx.TimeoutException, httpx.NetworkError) as e:
+                chunk_retries += 1
+                if chunk_retries < max_retries_per_chunk:
+                    backoff = min(2 ** chunk_retries, 10)
+                    logger.warning(f"Network error (retry {chunk_retries}/{max_retries_per_chunk}), retrying in {backoff}s: {e}")
+                    await asyncio.sleep(backoff)
+                else:
+                    logger.error(f"Network error after {max_retries_per_chunk} retries at byte {read}/{total_size}: {e}")
+                    raise HTTPException(
+                        status_code=503,
+                        detail=f"Network error at {read}/{total_size} bytes after {max_retries_per_chunk} retries: {str(e)}"
+                    )
+
+            except HTTPException:
+                raise
+
+            except Exception as e:
+                logger.error(f"Unexpected error at byte {read}/{total_size}: {e}")
                 raise HTTPException(
                     status_code=500,
-                    detail=f"Failed to download chunk at {read}/{total_size} bytes after all retries"
+                    detail=f"Unexpected error at {read}/{total_size} bytes: {str(e)}"
                 )
+
+        if not chunk_success:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to download chunk at {read}/{total_size} bytes after all retries"
+            )
 
 
 async def _chunked_video_generator_with_disconnect(
@@ -627,7 +628,7 @@ async def _stream_chunked_merge(
                 break
 
             chunk = await loop.run_in_executor(
-                None, ffmpeg_proc.stdout.read, 65536
+                None, ffmpeg_proc.stdout.read, STREAM_BUFFER_SIZE
             )
             if not chunk:
                 break
@@ -782,7 +783,7 @@ async def _stream_mp3_chunked(
 
             # Read dari stdout dalam executor agar tidak blocking
             chunk = await loop.run_in_executor(
-                None, ffmpeg_proc.stdout.read, 65536
+                None, ffmpeg_proc.stdout.read, STREAM_BUFFER_SIZE
             )
             if not chunk:
                 break
@@ -903,13 +904,13 @@ async def _download_chunked_to_queue(url, headers, size, chunk_size, refresh_inf
 async def _download_simple_to_queue(url, headers, q, cancel_event=None):
     """Helper: simple download dan push ke queue."""
     safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
-    async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-        async with client.stream("GET", url, headers=safe_headers) as resp:
-            resp.raise_for_status()
-            async for data in resp.aiter_bytes():
-                if cancel_event and cancel_event.is_set():
-                    break
-                q.put(data)
+    client = get_async_pool()
+    async with client.stream("GET", url, headers=safe_headers) as resp:
+        resp.raise_for_status()
+        async for data in resp.aiter_bytes():
+            if cancel_event and cancel_event.is_set():
+                break
+            q.put(data)
 
 
 def slideshow_generator(
@@ -940,23 +941,23 @@ def slideshow_generator(
     # Download images and audio with a single reusable client
     image_paths = []
     audio_path = None
-    with httpx.Client(timeout=60, follow_redirects=True) as client:
-        for i, img_url in enumerate(image_urls):
-            img_path = work_dir / f"image_{i}.jpg"
-            with client.stream("GET", img_url) as response:
-                response.raise_for_status()
-                with open(img_path, "wb") as f:
-                    for chunk in response.iter_bytes(chunk_size=8192):
-                        f.write(chunk)
-            image_paths.append(str(img_path))
+    client = get_sync_pool()
+    for i, img_url in enumerate(image_urls):
+        img_path = work_dir / f"image_{i}.jpg"
+        with client.stream("GET", img_url) as response:
+            response.raise_for_status()
+            with open(img_path, "wb") as f:
+                for chunk in response.iter_bytes(chunk_size=8192):
+                    f.write(chunk)
+        image_paths.append(str(img_path))
 
-        if audio_url:
-            audio_path = work_dir / "audio.mp3"
-            with client.stream("GET", audio_url) as response:
-                response.raise_for_status()
-                with open(audio_path, "wb") as f:
-                    for chunk in response.iter_bytes(chunk_size=8192):
-                        f.write(chunk)
+    if audio_url:
+        audio_path = work_dir / "audio.mp3"
+        with client.stream("GET", audio_url) as response:
+            response.raise_for_status()
+            with open(audio_path, "wb") as f:
+                for chunk in response.iter_bytes(chunk_size=8192):
+                    f.write(chunk)
 
     if not image_paths:
         raise ValueError("No images downloaded")

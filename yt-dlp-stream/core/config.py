@@ -46,6 +46,7 @@ AUDIO_FORMAT_M4A = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"
 # Chunk sizes for streaming
 CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB per range request (mirrors cobalt)
 VIDEO_CHUNK_SIZE = 10 * 1024 * 1024  # 10 MB for video chunks
+STREAM_BUFFER_SIZE = 256 * 1024  # 256 KB per iteration for streaming responses
 
 
 # -----------------------------------------------------------------------------

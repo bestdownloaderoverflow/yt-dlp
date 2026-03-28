@@ -10,7 +10,8 @@ from fastapi import APIRouter, HTTPException, Query, Request as FastAPIRequest
 from fastapi.responses import StreamingResponse
 from urllib.parse import quote
 
-from core.config import AUDIO_FORMAT_M4A
+from core.config import AUDIO_FORMAT_M4A, STREAM_BUFFER_SIZE
+from core.http_pool import get_async_pool
 from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import stream_generator_direct
 from core.helpers import _enforce_rate_limit, _build_ydl_opts, _build_internal_chunked_stream
@@ -76,14 +77,14 @@ async def stream_m4a(
         )
     else:
         async def _simple_stream() -> AsyncIterator[bytes]:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-                async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                    resp.raise_for_status()
-                    async for data in resp.aiter_bytes(65536):
-                        if await request.is_disconnected():
-                            logger.info("Client disconnected, stopping m4a stream")
-                            break
-                        yield data
+            client = get_async_pool()
+            async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                resp.raise_for_status()
+                async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
+                    if await request.is_disconnected():
+                        logger.info("Client disconnected, stopping m4a stream")
+                        break
+                    yield data
         body = _simple_stream()
 
     return StreamingResponse(body, media_type=media_type, headers=response_headers)

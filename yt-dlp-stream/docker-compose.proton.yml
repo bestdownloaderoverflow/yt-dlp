@@ -234,6 +234,8 @@ services:
     networks:
       - ytdlp-warp-network
     container_name: ytdlp-worker-1
+    volumes:
+      - worker1-cookies:/tmp/ytdlp_cookies
     environment:
       - WORKER_ID=w1
       - API_PORT=9487
@@ -241,11 +243,13 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
 
   ytdlp-worker-2:
     <<: *ytdlp-worker-common
     container_name: ytdlp-worker-2
+    volumes:
+      - worker2-cookies:/tmp/ytdlp_cookies
     environment:
       - WORKER_ID=w2
       - API_PORT=9487
@@ -253,11 +257,13 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
 
   ytdlp-worker-3:
     <<: *ytdlp-worker-common
     container_name: ytdlp-worker-3
+    volumes:
+      - worker3-cookies:/tmp/ytdlp_cookies
     environment:
       - WORKER_ID=w3
       - API_PORT=9487
@@ -265,11 +271,13 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
 
   ytdlp-worker-4:
     <<: *ytdlp-worker-common
     container_name: ytdlp-worker-4
+    volumes:
+      - worker4-cookies:/tmp/ytdlp_cookies
     environment:
       - WORKER_ID=w4
       - API_PORT=9487
@@ -277,16 +285,16 @@ services:
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
 
   redis:
     image: redis:7-alpine
     container_name: ytdlp-redis
     volumes:
       - redis-data:/data
-    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --requirepass ${REDIS_PASSWORD} --appendonly yes --appendfsync everysec
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -370,3 +378,7 @@ networks:
 
 volumes:
   redis-data:
+  worker1-cookies:
+  worker2-cookies:
+  worker3-cookies:
+  worker4-cookies:

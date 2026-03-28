@@ -41,8 +41,9 @@ type Config struct {
 	GluetunPassword           string
 	MaxRetries                int
 	HealthCheckTimeoutMs      int
-	HealthMonitorIntervalMs   int
-	HealthFailureThreshold    int
+	HealthMonitorIntervalMs      int
+	ProxyHealthMonitorIntervalMs int
+	HealthFailureThreshold       int
 	RateLimitCooldownSeconds  int
 	RestartBackoffBase        int
 	RestartBackoffMax         int
@@ -1084,10 +1085,13 @@ type Gateway struct {
 
 func NewGateway(cfg Config) *Gateway {
 	tr := &http.Transport{
-		MaxIdleConns:        512,
-		MaxIdleConnsPerHost: 128,
-		IdleConnTimeout:     90 * time.Second,
-		DisableCompression:  false,
+		MaxIdleConns:          512,
+		MaxIdleConnsPerHost:   128,
+		IdleConnTimeout:       90 * time.Second,
+		DisableCompression:    false,
+		ResponseHeaderTimeout: 30 * time.Second,
+		TLSHandshakeTimeout:  10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	registry := NewWorkerRegistry(cfg)
@@ -2115,17 +2119,27 @@ func (g *Gateway) uptimeChecker() {
 }
 
 func (g *Gateway) healthMonitor() {
-	interval := g.cfg.HealthMonitorIntervalMs
-	if interval < 1000 {
-		interval = 1000
+	workerInterval := g.cfg.HealthMonitorIntervalMs
+	if workerInterval < 1000 {
+		workerInterval = 1000
 	}
-	ticker := time.NewTicker(time.Duration(interval) * time.Millisecond)
-	defer ticker.Stop()
+	proxyInterval := g.cfg.ProxyHealthMonitorIntervalMs
+	if proxyInterval < 1000 {
+		proxyInterval = 1000
+	}
+
+	workerTicker := time.NewTicker(time.Duration(workerInterval) * time.Millisecond)
+	proxyTicker := time.NewTicker(time.Duration(proxyInterval) * time.Millisecond)
+	defer workerTicker.Stop()
+	defer proxyTicker.Stop()
+
+	log.Printf("health monitor started: workers every %dms, proxies every %dms", workerInterval, proxyInterval)
+
 	for {
 		select {
 		case <-g.ctx.Done():
 			return
-		case <-ticker.C:
+		case <-workerTicker.C:
 			for _, worker := range g.registry.WorkersSnapshot() {
 				if worker.Restarting || worker.RestartScheduled {
 					g.registry.SetHealthy(worker.ID, false)
@@ -2137,6 +2151,7 @@ func (g *Gateway) healthMonitor() {
 					_ = g.registry.ScheduleRestart(worker.ID)
 				}
 			}
+		case <-proxyTicker.C:
 			for _, proxy := range g.proxyRegistry.ProxiesSnapshot() {
 				if proxy.Restarting || proxy.RestartScheduled {
 					continue
@@ -2187,7 +2202,8 @@ func loadConfig() Config {
 		GluetunPassword:           getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
 		MaxRetries:                envInt("MAX_RETRIES", 3),
 		HealthCheckTimeoutMs:      envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
-		HealthMonitorIntervalMs:   envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
+		HealthMonitorIntervalMs:      envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
+		ProxyHealthMonitorIntervalMs: envInt("PROXY_HEALTH_MONITOR_INTERVAL_MS", 20000),
 		HealthFailureThreshold:    envInt("HEALTH_FAILURE_THRESHOLD", 3),
 		RateLimitCooldownSeconds:  envInt("RATE_LIMIT_COOLDOWN", 300),
 		RestartBackoffBase:        envInt("RESTART_BACKOFF_BASE", 30),

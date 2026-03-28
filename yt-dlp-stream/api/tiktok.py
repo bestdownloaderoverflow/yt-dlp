@@ -23,7 +23,9 @@ from core.error_mapping import (
 from core.generators import slideshow_stream_generator
 from core.helpers import _enforce_rate_limit
 from core.redis_cache import download_cache
-from core.config import estimate_video_size, estimate_mp3_size
+from core.config import AUDIO_FORMAT, STREAM_BUFFER_SIZE, estimate_video_size, estimate_mp3_size
+from core.http_pool import get_async_pool
+from core.extraction_cache import extraction_cache
 from ytdl_manager import ydl_manager
 
 router = APIRouter()
@@ -271,17 +273,17 @@ async def _probe_content_length(url: str, headers: dict) -> Optional[int]:
         return None
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
-            head_resp = await client.request("HEAD", url, headers=headers)
-            size = _parse_content_length(head_resp.headers)
-            if size and size > 0:
-                return size
+        client = get_async_pool()
+        head_resp = await client.request("HEAD", url, headers=headers)
+        size = _parse_content_length(head_resp.headers)
+        if size and size > 0:
+            return size
 
-            range_headers = {**headers, "Range": "bytes=0-0"}
-            range_resp = await client.get(url, headers=range_headers)
-            size = _parse_content_length(range_resp.headers)
-            if size and size > 0:
-                return size
+        range_headers = {**headers, "Range": "bytes=0-0"}
+        range_resp = await client.get(url, headers=range_headers)
+        size = _parse_content_length(range_resp.headers)
+        if size and size > 0:
+            return size
     except Exception as e:
         logger.debug(f"Could not probe content length: {e}")
 
@@ -479,23 +481,32 @@ async def process_tiktok(
         # Extract video info using ydl_manager for session integrity
         # Use impersonate for TLS fingerprinting if available (helps with TikTok)
         impersonate = request.impersonate  # May be None if not provided
-        # yt-dlp extraction is blocking I/O; offload it to thread pool so
-        # concurrent TikTok fetch requests do not stall the event loop.
-        try:
-            info = await asyncio.wait_for(
-                asyncio.to_thread(
-                    ydl_manager.extract_info,
-                    url,
-                    request.proxy,
-                    impersonate,
-                ),
-                timeout=30.0,
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(
-                status_code=504,
-                detail="TikTok extraction timed out. Please try again.",
-            )
+
+        # Check extraction cache first to avoid redundant yt-dlp calls
+        info = extraction_cache.get(url, proxy=request.proxy)
+        if info:
+            logger.info(f"Extraction cache hit for TikTok URL: {url[:60]}...")
+        else:
+            # yt-dlp extraction is blocking I/O; offload it to thread pool so
+            # concurrent TikTok fetch requests do not stall the event loop.
+            try:
+                info = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        ydl_manager.extract_info,
+                        url,
+                        request.proxy,
+                        impersonate,
+                    ),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=504,
+                    detail="TikTok extraction timed out. Please try again.",
+                )
+            # Cache the result for subsequent requests
+            if info:
+                extraction_cache.put(url, info, proxy=request.proxy)
 
         if not info:
             raise HTTPException(
@@ -719,76 +730,74 @@ async def _tiktok_stream_with_refresh(
     """
     refresh_count = 0
 
-    async with httpx.AsyncClient(
-        follow_redirects=True, timeout=timeout
-    ) as client:
-        while True:
-            try:
-                async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                    if (
-                        resp.status_code == 403
-                        and refresh_count < max_refreshes
-                        and original_url
-                        and await _should_refresh_tiktok_stream(resp)
-                    ):
-                        logger.warning(
-                            f"{content_label} URL expired (403), attempting refresh "
-                            f"{refresh_count + 1}/{max_refreshes}"
-                        )
-                        refreshed_info = await _refresh_tiktok_url(
-                            original_url, proxy, impersonate,
-                        )
-                        if refreshed_info:
-                            new_fmt = format_finder(refreshed_info)
-                            if new_fmt:
-                                direct_url = new_fmt.get("url")
-                                new_headers, new_cookies = extract_format_headers(
-                                    new_fmt, refreshed_info, original_url,
-                                    proxy=proxy, impersonate=impersonate,
-                                )
-                                safe_headers = {
-                                    k: v for k, v in new_headers.items()
-                                    if k.lower() not in ("accept-encoding", "cookie")
-                                }
-                                safe_headers["Accept-Encoding"] = "identity"
-                                if new_cookies:
-                                    safe_headers["Cookie"] = new_cookies
-                                refresh_count += 1
-                                logger.info(f"{content_label} URL refreshed successfully")
-                                continue
+    client = get_async_pool()
+    while True:
+        try:
+            async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                if (
+                    resp.status_code == 403
+                    and refresh_count < max_refreshes
+                    and original_url
+                    and await _should_refresh_tiktok_stream(resp)
+                ):
+                    logger.warning(
+                        f"{content_label} URL expired (403), attempting refresh "
+                        f"{refresh_count + 1}/{max_refreshes}"
+                    )
+                    refreshed_info = await _refresh_tiktok_url(
+                        original_url, proxy, impersonate,
+                    )
+                    if refreshed_info:
+                        new_fmt = format_finder(refreshed_info)
+                        if new_fmt:
+                            direct_url = new_fmt.get("url")
+                            new_headers, new_cookies = extract_format_headers(
+                                new_fmt, refreshed_info, original_url,
+                                proxy=proxy, impersonate=impersonate,
+                            )
+                            safe_headers = {
+                                k: v for k, v in new_headers.items()
+                                if k.lower() not in ("accept-encoding", "cookie")
+                            }
+                            safe_headers["Accept-Encoding"] = "identity"
+                            if new_cookies:
+                                safe_headers["Cookie"] = new_cookies
+                            refresh_count += 1
+                            logger.info(f"{content_label} URL refreshed successfully")
+                            continue
 
-                        logger.error(f"Failed to refresh {content_label} URL")
-                        raise HTTPException(
-                            status_code=403,
-                            detail=f"{content_label} URL expired and could not be refreshed",
-                        )
+                    logger.error(f"Failed to refresh {content_label} URL")
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"{content_label} URL expired and could not be refreshed",
+                    )
 
-                    resp.raise_for_status()
-                    async for data in resp.aiter_bytes(65536):
-                        if await request.is_disconnected():
-                            logger.info(f"Client disconnected from TikTok {content_label} stream")
-                            break
-                        yield data
-                    break
+                resp.raise_for_status()
+                async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
+                    if await request.is_disconnected():
+                        logger.info(f"Client disconnected from TikTok {content_label} stream")
+                        break
+                    yield data
+                break
 
-            except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error during TikTok {content_label} download: {e}")
-                raise HTTPException(
-                    status_code=e.response.status_code,
-                    detail=f"Download failed: {e}",
-                )
-            except httpx.ConnectError as e:
-                logger.warning(f"TikTok {content_label} stream connect error: {e}")
-                raise HTTPException(
-                    status_code=503,
-                    detail={"error": "UPSTREAM_CONNECT_FAILURE", "message": str(e)},
-                )
-            except httpx.TimeoutException as e:
-                logger.warning(f"TikTok {content_label} stream timeout: {e}")
-                raise HTTPException(
-                    status_code=503,
-                    detail={"error": "UPSTREAM_TIMEOUT", "message": str(e)},
-                )
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error during TikTok {content_label} download: {e}")
+            raise HTTPException(
+                status_code=e.response.status_code,
+                detail=f"Download failed: {e}",
+            )
+        except httpx.ConnectError as e:
+            logger.warning(f"TikTok {content_label} stream connect error: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "UPSTREAM_CONNECT_FAILURE", "message": str(e)},
+            )
+        except httpx.TimeoutException as e:
+            logger.warning(f"TikTok {content_label} stream timeout: {e}")
+            raise HTTPException(
+                status_code=503,
+                detail={"error": "UPSTREAM_TIMEOUT", "message": str(e)},
+            )
 
 
 def _build_safe_headers(http_headers: dict, cookies: Optional[str]) -> dict:

@@ -35,6 +35,14 @@ app = FastAPI(title="yt-dlp Stream API", version="3.0.0")
 app.include_router(api_router)
 
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup shared resources on shutdown."""
+    from core.http_pool import close_async_pool, close_sync_pool
+    await close_async_pool()
+    close_sync_pool()
+
+
 @app.get("/")
 def root():
     """API root with endpoint documentation."""

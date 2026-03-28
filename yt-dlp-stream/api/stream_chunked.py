@@ -10,7 +10,8 @@ from fastapi import APIRouter, HTTPException, Query, Request as FastAPIRequest
 from fastapi.responses import StreamingResponse
 from urllib.parse import quote
 
-from core.config import QUALITY_FORMATS, AUDIO_FORMAT, VIDEO_CHUNK_SIZE, estimate_video_size, estimate_mp3_size
+from core.config import QUALITY_FORMATS, AUDIO_FORMAT, VIDEO_CHUNK_SIZE, STREAM_BUFFER_SIZE, estimate_video_size, estimate_mp3_size
+from core.http_pool import get_async_pool
 from core.delivery import plan_delivery
 from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import (
@@ -127,14 +128,14 @@ async def stream_video_chunked(
             safe_headers["Accept-Encoding"] = "identity"
 
             async def _strict_simple_stream() -> AsyncIterator[bytes]:
-                async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                        resp.raise_for_status()
-                        async for data in resp.aiter_bytes(65536):
-                            if await request.is_disconnected():
-                                logger.info("Client disconnected, stopping strict video stream")
-                                break
-                            yield data
+                client = get_async_pool()
+                async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                    resp.raise_for_status()
+                    async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
+                        if await request.is_disconnected():
+                            logger.info("Client disconnected, stopping strict video stream")
+                            break
+                        yield data
 
             disposition = "attachment" if download else "inline"
             ascii_name = out_filename.encode("ascii", "ignore").decode()
@@ -186,14 +187,14 @@ async def stream_video_chunked(
                     safe_headers = {k: v for k, v in http_headers.items() if k.lower() != "accept-encoding"}
                     safe_headers["Accept-Encoding"] = "identity"
                     async def _simple_stream() -> AsyncIterator[bytes]:
-                        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-                            async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                                resp.raise_for_status()
-                                async for data in resp.aiter_bytes(65536):
-                                    if await request.is_disconnected():
-                                        logger.info("Client disconnected, stopping simple video stream")
-                                        break
-                                    yield data
+                        client = get_async_pool()
+                        async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                            resp.raise_for_status()
+                            async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
+                                if await request.is_disconnected():
+                                    logger.info("Client disconnected, stopping simple video stream")
+                                    break
+                                yield data
                     body = _simple_stream()
 
                 # Build response headers dengan Content-Length atau estimasi

@@ -12,7 +12,8 @@ from fastapi.responses import StreamingResponse, RedirectResponse
 from urllib.parse import quote
 
 from core.redis_cache import download_cache
-from core.config import QUALITY_FORMATS
+from core.config import QUALITY_FORMATS, STREAM_BUFFER_SIZE
+from core.http_pool import get_async_pool
 from core.delivery import plan_delivery
 from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import (
@@ -153,63 +154,61 @@ async def _download_video_direct(
     async def _stream_video() -> AsyncIterator[bytes]:
         nonlocal direct_url, safe_headers, refresh_count
 
-        async with httpx.AsyncClient(
-            follow_redirects=True, timeout=300
-        ) as client:
-            while True:
-                try:
-                    async with client.stream(
-                        "GET", direct_url, headers=safe_headers
-                    ) as resp:
-                        if resp.status_code == 403 and refresh_count < max_refreshes and url:
-                            logger.warning(
-                                f"Direct video URL expired (403), refresh {refresh_count + 1}/{max_refreshes}"
+        client = get_async_pool()
+        while True:
+            try:
+                async with client.stream(
+                    "GET", direct_url, headers=safe_headers
+                ) as resp:
+                    if resp.status_code == 403 and refresh_count < max_refreshes and url:
+                        logger.warning(
+                            f"Direct video URL expired (403), refresh {refresh_count + 1}/{max_refreshes}"
+                        )
+                        from ytdl_manager import ydl_manager
+                        try:
+                            info = await asyncio.wait_for(
+                                asyncio.to_thread(ydl_manager.extract_info, url, proxy, impersonate),
+                                timeout=30,
                             )
-                            from ytdl_manager import ydl_manager
-                            try:
-                                info = await asyncio.wait_for(
-                                    asyncio.to_thread(ydl_manager.extract_info, url, proxy, impersonate),
-                                    timeout=30,
+                            if info:
+                                formats = info.get("formats", [])
+                                new_fmt = next(
+                                    (f for f in formats
+                                     if f.get("protocol") in ("http", "https", "")
+                                     and f.get("url")),
+                                    None,
                                 )
-                                if info:
-                                    formats = info.get("formats", [])
-                                    new_fmt = next(
-                                        (f for f in formats
-                                         if f.get("protocol") in ("http", "https", "")
-                                         and f.get("url")),
-                                        None,
-                                    )
-                                    if new_fmt:
-                                        direct_url = new_fmt["url"]
-                                        new_headers = new_fmt.get("http_headers") or info.get("http_headers") or {}
-                                        safe_headers = {
-                                            k: v for k, v in new_headers.items()
-                                            if k.lower() not in ("accept-encoding", "cookie")
-                                        }
-                                        safe_headers["Accept-Encoding"] = "identity"
-                                        try:
-                                            calc = ydl_manager.calc_headers(new_fmt, load_cookies=True, proxy=proxy, impersonate=impersonate)
-                                            c = calc.get("Cookie") or calc.get("cookie")
-                                            if c:
-                                                safe_headers["Cookie"] = c
-                                        except Exception:
-                                            pass
-                                        refresh_count += 1
-                                        continue
-                            except Exception as exc:
-                                logger.error(f"Refresh failed: {exc}")
-                            raise HTTPException(status_code=403, detail="Video URL expired and could not be refreshed")
+                                if new_fmt:
+                                    direct_url = new_fmt["url"]
+                                    new_headers = new_fmt.get("http_headers") or info.get("http_headers") or {}
+                                    safe_headers = {
+                                        k: v for k, v in new_headers.items()
+                                        if k.lower() not in ("accept-encoding", "cookie")
+                                    }
+                                    safe_headers["Accept-Encoding"] = "identity"
+                                    try:
+                                        calc = ydl_manager.calc_headers(new_fmt, load_cookies=True, proxy=proxy, impersonate=impersonate)
+                                        c = calc.get("Cookie") or calc.get("cookie")
+                                        if c:
+                                            safe_headers["Cookie"] = c
+                                    except Exception:
+                                        pass
+                                    refresh_count += 1
+                                    continue
+                        except Exception as exc:
+                            logger.error(f"Refresh failed: {exc}")
+                        raise HTTPException(status_code=403, detail="Video URL expired and could not be refreshed")
 
-                        resp.raise_for_status()
-                        async for data in resp.aiter_bytes(65536):
-                            if await request.is_disconnected():
-                                logger.info("Client disconnected from direct video stream")
-                                break
-                            yield data
-                        break
+                    resp.raise_for_status()
+                    async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
+                        if await request.is_disconnected():
+                            logger.info("Client disconnected from direct video stream")
+                            break
+                        yield data
+                    break
 
-                except httpx.HTTPStatusError as e:
-                    raise HTTPException(status_code=e.response.status_code, detail=f"Download failed: {e}")
+            except httpx.HTTPStatusError as e:
+                raise HTTPException(status_code=e.response.status_code, detail=f"Download failed: {e}")
 
     response_headers = _build_disposition_header(filename, download)
 
@@ -275,18 +274,16 @@ async def _download_video(
             safe_headers["Accept-Encoding"] = "identity"
 
             async def _strict_simple_stream() -> AsyncIterator[bytes]:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=60
-                ) as client:
-                    async with client.stream(
-                        "GET", direct_url, headers=safe_headers
-                    ) as resp:
-                        resp.raise_for_status()
-                        async for data in resp.aiter_bytes(65536):
-                            if await request.is_disconnected():
-                                logger.info("Client disconnected")
-                                break
-                            yield data
+                client = get_async_pool()
+                async with client.stream(
+                    "GET", direct_url, headers=safe_headers
+                ) as resp:
+                    resp.raise_for_status()
+                    async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
+                        if await request.is_disconnected():
+                            logger.info("Client disconnected")
+                            break
+                        yield data
 
             body = _strict_simple_stream()
         elif filesize:
@@ -312,18 +309,16 @@ async def _download_video(
             }
 
             async def _simple_stream() -> AsyncIterator[bytes]:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=60
-                ) as client:
-                    async with client.stream(
-                        "GET", direct_url, headers=safe_headers
-                    ) as resp:
-                        resp.raise_for_status()
-                        async for data in resp.aiter_bytes(65536):
-                            if await request.is_disconnected():
-                                logger.info("Client disconnected")
-                                break
-                            yield data
+                client = get_async_pool()
+                async with client.stream(
+                    "GET", direct_url, headers=safe_headers
+                ) as resp:
+                    resp.raise_for_status()
+                    async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
+                        if await request.is_disconnected():
+                            logger.info("Client disconnected")
+                            break
+                        yield data
 
             body = _simple_stream()
 
@@ -517,14 +512,14 @@ async def _download_photo(
     filename = f"photo_{photo_index}.{ext}"
 
     async def _stream_photo() -> AsyncIterator[bytes]:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-            async with client.stream("GET", photo_url, headers=safe_headers) as resp:
-                resp.raise_for_status()
-                async for data in resp.aiter_bytes(65536):
-                    if await request.is_disconnected():
-                        logger.info("Client disconnected from photo stream")
-                        break
-                    yield data
+        client = get_async_pool()
+        async with client.stream("GET", photo_url, headers=safe_headers) as resp:
+            resp.raise_for_status()
+            async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
+                if await request.is_disconnected():
+                    logger.info("Client disconnected from photo stream")
+                    break
+                yield data
 
     response_headers = _build_disposition_header(filename, download)
 

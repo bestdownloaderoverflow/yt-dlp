@@ -394,11 +394,16 @@ def generate_photo_download_links(
             img, info, request_url, proxy=proxy, impersonate=impersonate
         )
 
+        # Direct CDN URL for display (photos array)
+        direct_url = img.get("url")
+        photos.append({"type": "photo", "url": direct_url})
+
+        # Wrapped download URL for download endpoint (download_link)
         key = download_cache.create_session(
-            url=img["url"],
+            url=direct_url,
             type="photo",
             photo_index=i + 1,
-            direct_url=img.get("url"),
+            direct_url=direct_url,
             http_headers=http_headers,
             cookies=cookies,
             author=author.nickname,
@@ -410,7 +415,6 @@ def generate_photo_download_links(
         )
         download_url = f"/tiktok/download?key={key}"
         photo_keys.append(download_url)
-        photos.append({"type": "photo", "url": download_url})
 
     links = {"no_watermark": photo_keys}
 

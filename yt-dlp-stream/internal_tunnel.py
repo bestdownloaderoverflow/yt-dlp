@@ -184,7 +184,7 @@ class InternalTunnelManager:
         expired = [
             sid
             for sid, stream in self._streams.items()
-            if (now - stream.created_at).seconds > max_age_seconds
+            if (now - stream.created_at).total_seconds() > max_age_seconds
         ]
         for sid in expired:
             self.destroy_stream(sid)

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -326,91 +327,44 @@ def generate_video_download_links(
     hd_formats = [f for f in video_formats if f.get("height", 0) >= 720]
     sd_formats = [f for f in video_formats if f.get("height", 0) < 720]
 
+    # Extract headers/cookies once and reuse across all formats
+    # (avoids repeated lock acquisition + cookiejar lookups)
+    representative_fmt = download_format or (video_formats[0] if video_formats else audio_format)
+    if representative_fmt is None:
+        return links
+    shared_headers, shared_cookies = extract_format_headers(
+        representative_fmt, info, request_url, proxy=proxy, impersonate=impersonate
+    )
+
+    def _create_link(fmt, link_type, quality=None):
+        key = download_cache.create_session(
+            url=request_url,
+            type=link_type,
+            quality=quality,
+            direct_url=fmt.get("url"),
+            http_headers=shared_headers,
+            cookies=shared_cookies,
+            author=author.nickname,
+            platform="tiktok",
+            proxy=proxy,
+            impersonate=impersonate,
+            filesize=fmt.get("filesize") or fmt.get("filesize_approx"),
+            duration=duration_seconds,
+        )
+        return f"/tiktok/download?key={key}"
+
     # Generate download links with session keys
     if download_format:
-        http_headers, cookies = extract_format_headers(
-            download_format, info, request_url, proxy=proxy, impersonate=impersonate
-        )
-
-        key = download_cache.create_session(
-            url=request_url,
-            type="video",
-            quality="watermark",
-            direct_url=download_format.get("url"),
-            http_headers=http_headers,
-            cookies=cookies,
-            author=author.nickname,
-            platform="tiktok",
-            proxy=proxy,
-            impersonate=impersonate,
-            filesize=download_format.get("filesize") or download_format.get("filesize_approx"),
-            duration=duration_seconds,
-        )
-        links["watermark"] = f"/tiktok/download?key={key}"
+        links["watermark"] = _create_link(download_format, "video", "watermark")
 
     if sd_formats:
-        fmt = sd_formats[0]
-        http_headers, cookies = extract_format_headers(
-            fmt, info, request_url, proxy=proxy, impersonate=impersonate
-        )
-
-        key = download_cache.create_session(
-            url=request_url,
-            type="video",
-            quality="no_watermark",
-            direct_url=fmt.get("url"),
-            http_headers=http_headers,
-            cookies=cookies,
-            author=author.nickname,
-            platform="tiktok",
-            proxy=proxy,
-            impersonate=impersonate,
-            filesize=fmt.get("filesize") or fmt.get("filesize_approx"),
-            duration=duration_seconds,
-        )
-        links["no_watermark"] = f"/tiktok/download?key={key}"
+        links["no_watermark"] = _create_link(sd_formats[0], "video", "no_watermark")
 
     if hd_formats:
-        fmt = hd_formats[0]
-        http_headers, cookies = extract_format_headers(
-            fmt, info, request_url, proxy=proxy, impersonate=impersonate
-        )
-
-        key = download_cache.create_session(
-            url=request_url,
-            type="video",
-            quality="no_watermark_hd",
-            direct_url=fmt.get("url"),
-            http_headers=http_headers,
-            cookies=cookies,
-            author=author.nickname,
-            platform="tiktok",
-            proxy=proxy,
-            impersonate=impersonate,
-            filesize=fmt.get("filesize") or fmt.get("filesize_approx"),
-            duration=duration_seconds,
-        )
-        links["no_watermark_hd"] = f"/tiktok/download?key={key}"
+        links["no_watermark_hd"] = _create_link(hd_formats[0], "video", "no_watermark_hd")
 
     if audio_format:
-        http_headers, cookies = extract_format_headers(
-            audio_format, info, request_url, proxy=proxy, impersonate=impersonate
-        )
-
-        key = download_cache.create_session(
-            url=request_url,
-            type="mp3",
-            direct_url=audio_format.get("url"),
-            http_headers=http_headers,
-            cookies=cookies,
-            author=author.nickname,
-            platform="tiktok",
-            proxy=proxy,
-            impersonate=impersonate,
-            filesize=audio_format.get("filesize") or audio_format.get("filesize_approx"),
-            duration=duration_seconds,
-        )
-        links["mp3"] = f"/tiktok/download?key={key}"
+        links["mp3"] = _create_link(audio_format, "mp3")
 
     return links
 
@@ -430,11 +384,9 @@ def generate_photo_download_links(
     audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
     duration_seconds = int(info.get("duration", 0) or 0)
 
-    # Create photo picker list
-    photos = [{"type": "photo", "url": img["url"]} for img in image_formats]
-
     # Generate individual photo download links
     photo_keys = []
+    photos = []
     for i, img in enumerate(image_formats):
         http_headers, cookies = extract_format_headers(
             img, info, request_url, proxy=proxy, impersonate=impersonate
@@ -454,7 +406,9 @@ def generate_photo_download_links(
             filesize=img.get("filesize") or img.get("filesize_approx"),
             duration=duration_seconds,
         )
-        photo_keys.append(f"/tiktok/download?key={key}")
+        download_url = f"/tiktok/download?key={key}"
+        photo_keys.append(download_url)
+        photos.append({"type": "photo", "url": download_url})
 
     links = {"no_watermark": photo_keys}
 
@@ -527,12 +481,21 @@ async def process_tiktok(
         impersonate = request.impersonate  # May be None if not provided
         # yt-dlp extraction is blocking I/O; offload it to thread pool so
         # concurrent TikTok fetch requests do not stall the event loop.
-        info = await asyncio.to_thread(
-            ydl_manager.extract_info,
-            url,
-            request.proxy,
-            impersonate,
-        )
+        try:
+            info = await asyncio.wait_for(
+                asyncio.to_thread(
+                    ydl_manager.extract_info,
+                    url,
+                    request.proxy,
+                    impersonate,
+                ),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail="TikTok extraction timed out. Please try again.",
+            )
 
         if not info:
             raise HTTPException(
@@ -566,7 +529,7 @@ async def process_tiktok(
                 artist=author.nickname,
                 cover=info.get("thumbnail", ""),
                 duration=duration_ms,
-                audio=audio_format.get("url") if audio_format else None,
+                audio=None,
                 download_link=links,
                 photos=photos,
                 download_slideshow=slideshow_link,
@@ -594,7 +557,7 @@ async def process_tiktok(
                 artist=author.nickname,
                 cover=info.get("thumbnail", ""),
                 duration=duration_ms,
-                audio=audio_format.get("url") if audio_format else None,
+                audio=None,
                 download_link=links,
                 music_duration=duration_ms,
                 author=author,
@@ -735,6 +698,111 @@ async def download_tiktok(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+async def _tiktok_stream_with_refresh(
+    direct_url: str,
+    safe_headers: dict,
+    request: FastAPIRequest,
+    original_url: Optional[str],
+    proxy: Optional[str],
+    impersonate: Optional[str],
+    format_finder,
+    content_label: str = "content",
+    timeout: int = 300,
+    max_refreshes: int = 2,
+):
+    """Shared streaming helper with 403 URL refresh logic.
+
+    Args:
+        format_finder: callable(refreshed_info) -> format dict or None.
+            Receives the re-extracted info dict and returns the new format to use,
+            or raises HTTPException on irrecoverable error.
+    """
+    refresh_count = 0
+
+    async with httpx.AsyncClient(
+        follow_redirects=True, timeout=timeout
+    ) as client:
+        while True:
+            try:
+                async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                    if (
+                        resp.status_code == 403
+                        and refresh_count < max_refreshes
+                        and original_url
+                        and await _should_refresh_tiktok_stream(resp)
+                    ):
+                        logger.warning(
+                            f"{content_label} URL expired (403), attempting refresh "
+                            f"{refresh_count + 1}/{max_refreshes}"
+                        )
+                        refreshed_info = await _refresh_tiktok_url(
+                            original_url, proxy, impersonate,
+                        )
+                        if refreshed_info:
+                            new_fmt = format_finder(refreshed_info)
+                            if new_fmt:
+                                direct_url = new_fmt.get("url")
+                                new_headers, new_cookies = extract_format_headers(
+                                    new_fmt, refreshed_info, original_url,
+                                    proxy=proxy, impersonate=impersonate,
+                                )
+                                safe_headers = {
+                                    k: v for k, v in new_headers.items()
+                                    if k.lower() not in ("accept-encoding", "cookie")
+                                }
+                                safe_headers["Accept-Encoding"] = "identity"
+                                if new_cookies:
+                                    safe_headers["Cookie"] = new_cookies
+                                refresh_count += 1
+                                logger.info(f"{content_label} URL refreshed successfully")
+                                continue
+
+                        logger.error(f"Failed to refresh {content_label} URL")
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"{content_label} URL expired and could not be refreshed",
+                        )
+
+                    resp.raise_for_status()
+                    async for data in resp.aiter_bytes(65536):
+                        if await request.is_disconnected():
+                            logger.info(f"Client disconnected from TikTok {content_label} stream")
+                            break
+                        yield data
+                    break
+
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP error during TikTok {content_label} download: {e}")
+                raise HTTPException(
+                    status_code=e.response.status_code,
+                    detail=f"Download failed: {e}",
+                )
+            except httpx.ConnectError as e:
+                logger.warning(f"TikTok {content_label} stream connect error: {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "UPSTREAM_CONNECT_FAILURE", "message": str(e)},
+                )
+            except httpx.TimeoutException as e:
+                logger.warning(f"TikTok {content_label} stream timeout: {e}")
+                raise HTTPException(
+                    status_code=503,
+                    detail={"error": "UPSTREAM_TIMEOUT", "message": str(e)},
+                )
+
+
+def _build_safe_headers(http_headers: dict, cookies: Optional[str]) -> dict:
+    """Build safe headers dict from session headers and cookies."""
+    safe_headers = {
+        k: v for k, v in http_headers.items()
+        if k.lower() not in ("accept-encoding", "cookie")
+    }
+    safe_headers["Accept-Encoding"] = "identity"
+    if cookies:
+        safe_headers["Cookie"] = cookies
+    return safe_headers
+
+
 async def _download_video(
     session,
     download: bool,
@@ -742,126 +810,31 @@ async def _download_video(
 ):
     """Download TikTok video with session integrity headers and URL refresh on 403."""
     direct_url = session.direct_url
-    http_headers = session.http_headers or {}
-    cookies = session.cookies
-    original_url = session.url
-    proxy = session.proxy
-    impersonate = session.impersonate
-
     if not direct_url:
         raise HTTPException(status_code=400, detail="No video URL available")
 
-    # Build safe headers
-    safe_headers = {
-        k: v for k, v in http_headers.items()
-        if k.lower() not in ("accept-encoding", "cookie")
-    }
-    safe_headers["Accept-Encoding"] = "identity"
-
-    if cookies:
-        safe_headers["Cookie"] = cookies
-
-    # Generate filename
-    author = session.author or "tiktok"
     quality = session.quality or "video"
+    safe_headers = _build_safe_headers(session.http_headers or {}, session.cookies)
+
+    author = session.author or "tiktok"
     safe_author = "".join(c if c.isalnum() else "_" for c in author)
     filename = f"{safe_author}_{quality}.mp4"
 
-    # Track refresh attempts
-    max_refreshes = 1
-    refresh_count = 0
-
-    async def _stream_with_refresh():
-        nonlocal direct_url, safe_headers, refresh_count
-
-        while True:
-            try:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=300
-                ) as client:
-                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                        # Handle 403 - try to refresh URL
-                        if (
-                            resp.status_code == 403
-                            and refresh_count < max_refreshes
-                            and original_url
-                            and await _should_refresh_tiktok_stream(resp)
-                        ):
-                            logger.warning(f"TikTok URL expired (403), attempting refresh {refresh_count + 1}/{max_refreshes}")
-
-                            # Refresh URL by re-extracting
-                            refreshed_info = await _refresh_tiktok_url(
-                                original_url,
-                                proxy,
-                                impersonate,
-                            )
-                            if refreshed_info:
-                                # Find new format with same quality
-                                formats = refreshed_info.get("formats", [])
-                                video_formats = [
-                                    f for f in formats
-                                    if f.get("vcodec") and f["vcodec"] != "none"
-                                    and f.get("acodec") and f["acodec"] != "none"
-                                ]
-
-                                # Sort by quality and find matching quality
-                                video_formats.sort(key=lambda x: (x.get("height", 0) * x.get("width", 0)), reverse=True)
-
-                                new_fmt = None
-                                if quality == "watermark":
-                                    new_fmt = next((f for f in formats if f.get("format_id") == "download"), None)
-                                elif quality == "no_watermark_hd" and video_formats:
-                                    new_fmt = video_formats[0]  # Best quality
-                                elif video_formats:
-                                    new_fmt = next((f for f in video_formats if f.get("height", 0) < 720), video_formats[0])
-
-                                if new_fmt:
-                                    direct_url = new_fmt.get("url")
-                                    http_headers, cookies = extract_format_headers(
-                                        new_fmt,
-                                        refreshed_info,
-                                        original_url,
-                                        proxy=proxy,
-                                        impersonate=impersonate,
-                                    )
-                                    safe_headers = {
-                                        k: v for k, v in http_headers.items()
-                                        if k.lower() not in ("accept-encoding", "cookie")
-                                    }
-                                    safe_headers["Accept-Encoding"] = "identity"
-                                    if cookies:
-                                        safe_headers["Cookie"] = cookies
-
-                                    refresh_count += 1
-                                    logger.info(f"URL refreshed successfully, retrying with new URL")
-                                    continue  # Retry with new URL
-
-                            logger.error("Failed to refresh URL")
-                            raise HTTPException(status_code=403, detail="Video URL expired and could not be refreshed")
-
-                        resp.raise_for_status()
-                        async for data in resp.aiter_bytes(65536):
-                            if await request.is_disconnected():
-                                logger.info("Client disconnected from TikTok video stream")
-                                break
-                            yield data
-                        break  # Success, exit loop
-
-            except httpx.HTTPStatusError as e:
-                logger.error(f"HTTP error during TikTok video download: {e}")
-                raise HTTPException(status_code=e.response.status_code, detail=f"Download failed: {e}")
-            except httpx.ConnectError as e:
-                logger.warning(f"TikTok stream connect error: {e}")
-                raise HTTPException(
-                    status_code=503,
-                    detail={"error": "UPSTREAM_CONNECT_FAILURE", "message": str(e)},
-                )
-            except httpx.TimeoutException as e:
-                logger.warning(f"TikTok stream timeout: {e}")
-                raise HTTPException(
-                    status_code=503,
-                    detail={"error": "UPSTREAM_TIMEOUT", "message": str(e)},
-                )
+    def _find_video_format(refreshed_info):
+        formats = refreshed_info.get("formats", [])
+        video_formats = [
+            f for f in formats
+            if f.get("vcodec") and f["vcodec"] != "none"
+            and f.get("acodec") and f["acodec"] != "none"
+        ]
+        video_formats.sort(key=lambda x: (x.get("height", 0) * x.get("width", 0)), reverse=True)
+        if quality == "watermark":
+            return next((f for f in formats if f.get("format_id") == "download"), None)
+        elif quality == "no_watermark_hd" and video_formats:
+            return video_formats[0]
+        elif video_formats:
+            return next((f for f in video_formats if f.get("height", 0) < 720), video_formats[0])
+        return None
 
     response_headers = _build_disposition_header(filename, download)
     filesize = getattr(session, "filesize", None)
@@ -874,7 +847,17 @@ async def _download_video(
             response_headers["Estimated-Content-Length"] = str(estimated_size)
 
     return StreamingResponse(
-        _stream_with_refresh(),
+        _tiktok_stream_with_refresh(
+            direct_url=direct_url,
+            safe_headers=safe_headers,
+            request=request,
+            original_url=session.url,
+            proxy=session.proxy,
+            impersonate=session.impersonate,
+            format_finder=_find_video_format,
+            content_label="Video",
+            timeout=300,
+        ),
         media_type="video/mp4",
         headers=response_headers,
     )
@@ -887,87 +870,26 @@ async def _download_photo(
 ):
     """Download TikTok photo with URL refresh on 403."""
     direct_url = session.direct_url
-    http_headers = session.http_headers or {}
-    cookies = session.cookies
-    photo_index = session.photo_index or 1
-    original_url = session.url
-    proxy = session.proxy
-    impersonate = session.impersonate
-
     if not direct_url:
         raise HTTPException(status_code=400, detail="No photo URL available")
 
-    # Generate filename
+    photo_index = session.photo_index or 1
+    safe_headers = _build_safe_headers(session.http_headers or {}, session.cookies)
+
     author = session.author or "tiktok"
     safe_author = "".join(c if c.isalnum() else "_" for c in author)
     filename = f"{safe_author}_photo_{photo_index}.jpg"
 
-    safe_headers = {
-        k: v for k, v in http_headers.items()
-        if k.lower() not in ("accept-encoding", "cookie")
-    }
-    safe_headers["Accept-Encoding"] = "identity"
-    if cookies:
-        safe_headers["Cookie"] = cookies
-
-    max_refreshes = 1
-    refresh_count = 0
-
-    async def _stream_photo():
-        nonlocal direct_url, safe_headers, refresh_count
-
-        while True:
-            try:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=60
-                ) as client:
-                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                        if (
-                            resp.status_code == 403
-                            and refresh_count < max_refreshes
-                            and original_url
-                            and await _should_refresh_tiktok_stream(resp)
-                        ):
-                            logger.warning(f"Photo URL expired, attempting refresh")
-                            # Try to refresh by re-extracting
-                            refreshed_info = await _refresh_tiktok_url(
-                                original_url,
-                                proxy,
-                                impersonate,
-                            )
-                            if refreshed_info:
-                                formats = refreshed_info.get("formats", [])
-                                image_formats = [f for f in formats if f.get("format_id", "").startswith("image-")]
-                                if photo_index <= len(image_formats):
-                                    new_fmt = image_formats[photo_index - 1]
-                                    direct_url = new_fmt.get("url")
-                                    new_headers, new_cookies = extract_format_headers(
-                                        new_fmt,
-                                        refreshed_info,
-                                        original_url,
-                                        proxy=proxy,
-                                        impersonate=impersonate,
-                                    )
-                                    safe_headers = {
-                                        k: v for k, v in new_headers.items()
-                                        if k.lower() not in ("accept-encoding", "cookie")
-                                    }
-                                    safe_headers["Accept-Encoding"] = "identity"
-                                    if new_cookies:
-                                        safe_headers["Cookie"] = new_cookies
-                                    refresh_count += 1
-                                    continue
-
-                        resp.raise_for_status()
-                        async for data in resp.aiter_bytes(65536):
-                            if await request.is_disconnected():
-                                logger.info("Client disconnected from TikTok photo stream")
-                                break
-                            yield data
-                        break
-
-            except httpx.HTTPStatusError:
-                raise
+    def _find_photo_format(refreshed_info):
+        formats = refreshed_info.get("formats", [])
+        image_formats = [f for f in formats if f.get("format_id", "").startswith("image-")]
+        if photo_index <= len(image_formats):
+            return image_formats[photo_index - 1]
+        logger.error(
+            f"Photo index {photo_index} out of range after refresh "
+            f"(got {len(image_formats)} images)"
+        )
+        raise HTTPException(status_code=404, detail="Photo no longer available after refresh")
 
     response_headers = _build_disposition_header(filename, download)
     filesize = getattr(session, "filesize", None)
@@ -978,7 +900,17 @@ async def _download_photo(
         response_headers["Content-Length"] = str(resolved_size)
 
     return StreamingResponse(
-        _stream_photo(),
+        _tiktok_stream_with_refresh(
+            direct_url=direct_url,
+            safe_headers=safe_headers,
+            request=request,
+            original_url=session.url,
+            proxy=session.proxy,
+            impersonate=session.impersonate,
+            format_finder=_find_photo_format,
+            content_label="Photo",
+            timeout=60,
+        ),
         media_type="image/jpeg",
         headers=response_headers,
     )
@@ -991,91 +923,23 @@ async def _download_mp3(
 ):
     """Download TikTok audio with URL refresh on 403."""
     direct_url = session.direct_url
-    http_headers = session.http_headers or {}
-    cookies = session.cookies
-    original_url = session.url
-    proxy = session.proxy
-    impersonate = session.impersonate
-
     if not direct_url:
         raise HTTPException(status_code=400, detail="No audio URL available")
 
-    # Build safe headers
-    safe_headers = {
-        k: v for k, v in http_headers.items()
-        if k.lower() not in ("accept-encoding", "cookie")
-    }
-    safe_headers["Accept-Encoding"] = "identity"
+    safe_headers = _build_safe_headers(session.http_headers or {}, session.cookies)
 
-    if cookies:
-        safe_headers["Cookie"] = cookies
-
-    # Generate filename
     author = session.author or "tiktok"
     safe_author = "".join(c if c.isalnum() else "_" for c in author)
     filename = f"{safe_author}.mp3"
 
-    max_refreshes = 1
-    refresh_count = 0
-
-    async def _stream_audio():
-        nonlocal direct_url, safe_headers, refresh_count
-
-        while True:
-            try:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=300
-                ) as client:
-                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
-                        if (
-                            resp.status_code == 403
-                            and refresh_count < max_refreshes
-                            and original_url
-                            and await _should_refresh_tiktok_stream(resp)
-                        ):
-                            logger.warning(f"Audio URL expired, attempting refresh {refresh_count + 1}/{max_refreshes}")
-                            refreshed_info = await _refresh_tiktok_url(
-                                original_url,
-                                proxy,
-                                impersonate,
-                            )
-                            if refreshed_info:
-                                formats = refreshed_info.get("formats", [])
-                                audio_format = next(
-                                    (f for f in formats
-                                     if f.get("acodec") and f["acodec"] != "none"
-                                     and (not f.get("vcodec") or f["vcodec"] == "none")),
-                                    None
-                                )
-                                if audio_format:
-                                    direct_url = audio_format.get("url")
-                                    http_headers, cookies = extract_format_headers(
-                                        audio_format,
-                                        refreshed_info,
-                                        original_url,
-                                        proxy=proxy,
-                                        impersonate=impersonate,
-                                    )
-                                    safe_headers = {
-                                        k: v for k, v in http_headers.items()
-                                        if k.lower() not in ("accept-encoding", "cookie")
-                                    }
-                                    safe_headers["Accept-Encoding"] = "identity"
-                                    if cookies:
-                                        safe_headers["Cookie"] = cookies
-                                    refresh_count += 1
-                                    continue
-
-                        resp.raise_for_status()
-                        async for data in resp.aiter_bytes(65536):
-                            if await request.is_disconnected():
-                                logger.info("Client disconnected from TikTok audio stream")
-                                break
-                            yield data
-                        break
-
-            except httpx.HTTPStatusError:
-                raise
+    def _find_audio_format(refreshed_info):
+        formats = refreshed_info.get("formats", [])
+        return next(
+            (f for f in formats
+             if f.get("acodec") and f["acodec"] != "none"
+             and (not f.get("vcodec") or f["vcodec"] == "none")),
+            None
+        )
 
     response_headers = _build_disposition_header(filename, download)
     filesize = getattr(session, "filesize", None)
@@ -1091,7 +955,17 @@ async def _download_mp3(
             response_headers["Estimated-Content-Length"] = str(estimated_size)
 
     return StreamingResponse(
-        _stream_audio(),
+        _tiktok_stream_with_refresh(
+            direct_url=direct_url,
+            safe_headers=safe_headers,
+            request=request,
+            original_url=session.url,
+            proxy=session.proxy,
+            impersonate=session.impersonate,
+            format_finder=_find_audio_format,
+            content_label="Audio",
+            timeout=300,
+        ),
         media_type="audio/mpeg",
         headers=response_headers,
     )
@@ -1112,8 +986,17 @@ async def _download_slideshow(
     if not photo_urls:
         raise HTTPException(status_code=400, detail="No photos available for slideshow")
 
-    # Try to refresh if needed
-    if original_url:
+    # Only refresh if session is older than 5 minutes (URLs may have expired)
+    session_age = None
+    if hasattr(session, "created_at") and session.created_at:
+        from datetime import datetime
+        try:
+            created = datetime.fromisoformat(session.created_at) if isinstance(session.created_at, str) else session.created_at
+            session_age = (datetime.now() - created).total_seconds()
+        except Exception:
+            session_age = None
+
+    if original_url and (session_age is None or session_age > 300):
         try:
             refreshed_info = await _refresh_tiktok_url(
                 original_url,
@@ -1147,13 +1030,23 @@ async def _download_slideshow(
     if estimated_size > 0:
         response_headers["Estimated-Content-Length"] = str(estimated_size)
 
+    async def _slideshow_with_cleanup():
+        try:
+            async for chunk in slideshow_stream_generator(
+                image_urls=photo_urls,
+                audio_url=audio_url,
+                temp_dir=temp_dir,
+                filename=filename,
+            ):
+                yield chunk
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
     return StreamingResponse(
-        slideshow_stream_generator(
-            image_urls=photo_urls,
-            audio_url=audio_url,
-            temp_dir=temp_dir,
-            filename=filename,
-        ),
+        _slideshow_with_cleanup(),
         media_type="video/mp4",
         headers=response_headers,
     )

@@ -702,6 +702,51 @@ func (r *ProxyRegistry) RecordProbe(proxyID string, healthy bool) {
 	}
 }
 
+func (r *ProxyRegistry) ShouldRestartUnhealthy(proxyID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	p := r.getProxyUnlocked(proxyID)
+	if p == nil {
+		return false
+	}
+
+	threshold := r.cfg.UnhealthyRestartThreshold
+	if threshold < 1 {
+		return false
+	}
+	if p.Healthy || p.Restarting || p.RestartScheduled {
+		return false
+	}
+	if p.ActiveRequests > 0 {
+		return false
+	}
+
+	now := time.Now()
+	if now.Before(p.QuarantineUntil) || now.Before(p.NextRestartAt) {
+		return false
+	}
+
+	return p.ProbeFailures >= threshold
+}
+
+func (r *ProxyRegistry) IsProxyIdle(proxyID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p := r.getProxyUnlocked(proxyID)
+	return p != nil && p.ActiveRequests == 0
+}
+
+func (r *ProxyRegistry) ProxyActiveRequests(proxyID string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p := r.getProxyUnlocked(proxyID)
+	if p == nil {
+		return 0
+	}
+	return p.ActiveRequests
+}
+
 func (r *ProxyRegistry) IncrementActive(proxyID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -809,7 +854,39 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	return false
 }
 
+func (v *VPNRotator) waitForProxyDrain(ctx context.Context, proxyID string) bool {
+	timeout := time.Duration(v.cfg.DrainTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
+	interval := time.Duration(v.cfg.DrainPollIntervalMs) * time.Millisecond
+	if interval <= 0 {
+		interval = 500 * time.Millisecond
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		if v.proxyRegistry.IsProxyIdle(proxyID) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(interval):
+			active := v.proxyRegistry.ProxyActiveRequests(proxyID)
+			log.Printf("[%s] proxy drain wait: active_requests=%d", proxyID, active)
+		}
+	}
+}
+
 func (v *VPNRotator) RestartProxy(ctx context.Context, proxyID string) bool {
+	drained := v.waitForProxyDrain(ctx, proxyID)
+	if !drained {
+		log.Printf("[%s] proxy drain timeout reached; forcing container restart", proxyID)
+	}
+
 	v.proxyRegistry.UpdateRestartState(proxyID, true)
 	container := fmt.Sprintf("%s%s", v.cfg.ProxyContainerPrefix, strings.TrimPrefix(proxyID, "p"))
 	log.Printf("[%s] restarting %s", proxyID, container)
@@ -911,8 +988,18 @@ func (v *VPNRotator) healthCheckProxy(proxyID string) bool {
 		return false
 	}
 	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	return resp.StatusCode == http.StatusOK
+	body, err := io.ReadAll(resp.Body)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return false
+	}
+	// Verify we got a non-empty IP (ensures VPN tunnel is actually connected,
+	// not just Gluetun API responding while tunnel is down)
+	ip := strings.TrimSpace(string(body))
+	if ip == "" || ip == "0.0.0.0" {
+		log.Printf("[%s] proxy returned empty/invalid VPN IP: %q", proxyID, ip)
+		return false
+	}
+	return true
 }
 
 type SlidingWindowRateLimiter struct {
@@ -1141,6 +1228,9 @@ func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) handleTikTokDownload(w http.ResponseWriter, r *http.Request) {
+	if !g.checkRateLimit(w, r, g.rlDownload, "tiktok_download") {
+		return
+	}
 	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), false)
 }
 
@@ -1180,16 +1270,24 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"restart_backoff_remaining": positiveSeconds(proxy.NextRestartAt.Sub(now)),
 		})
 	}
-	status := "degraded"
+	status := "down"
 	httpStatus := http.StatusServiceUnavailable
 	if len(healthy) > 0 && len(healthyProxies) > 0 {
 		status = "healthy"
 		httpStatus = http.StatusOK
+	} else if len(healthy) > 0 {
+		status = "degraded_proxy"
+		httpStatus = http.StatusOK
+	} else if len(healthyProxies) > 0 {
+		status = "degraded_worker"
+		httpStatus = http.StatusServiceUnavailable
 	}
 	writeJSON(w, httpStatus, map[string]any{
-		"status":  status,
-		"workers": rows,
-		"proxies": proxyRows,
+		"status":          status,
+		"healthy_workers": len(healthy),
+		"healthy_proxies": len(healthyProxies),
+		"workers":         rows,
+		"proxies":         proxyRows,
 	})
 }
 
@@ -1324,7 +1422,8 @@ func (g *Gateway) selectProxy(proxies []*Proxy) *Proxy {
 func (g *Gateway) shouldInjectProxy(path, method string) bool {
 	if method == http.MethodGet {
 		switch path {
-		case "/fetch", "/info", "/stream/video", "/stream/video-chunked", "/stream/mp3", "/stream/mp3-chunked", "/stream/m4a":
+		case "/fetch", "/info", "/stream/video", "/stream/video-chunked", "/stream/mp3", "/stream/mp3-chunked", "/stream/m4a",
+			"/tiktok/download":
 			return true
 		}
 	}
@@ -2043,6 +2142,10 @@ func (g *Gateway) healthMonitor() {
 					continue
 				}
 				g.proxyRegistry.RecordProbe(proxy.ID, g.rotator.healthCheckProxy(proxy.ID))
+				if g.proxyRegistry.ShouldRestartUnhealthy(proxy.ID) {
+					log.Printf("[%s] proxy unhealthy for %d consecutive probes; scheduling restart", proxy.ID, g.cfg.UnhealthyRestartThreshold)
+					_ = g.proxyRegistry.ScheduleRestart(proxy.ID)
+				}
 			}
 		}
 	}
@@ -2116,7 +2219,6 @@ func getenvDefault(key, fallback string) string {
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
 	cfg := loadConfig()
 	gateway := NewGateway(cfg)
 	go gateway.restartScheduler()

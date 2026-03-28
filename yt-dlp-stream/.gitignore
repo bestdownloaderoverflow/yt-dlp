@@ -48,6 +48,9 @@ Thumbs.db
 cookies/*.txt
 !cookies/.gitkeep
 
+# Go binary
+gateway-go/gateway-go
+
 # Gluetun VPN data
 gluetun/data/
 gluetun/data1/

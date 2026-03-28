@@ -618,7 +618,7 @@ async def _stream_chunked_merge(
 
     # Async generator: baca dari ffmpeg stdout dengan disconnect detection
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while True:
             # Check for client disconnect
             if await request.is_disconnected():
@@ -772,7 +772,7 @@ async def _stream_mp3_chunked(
 
     # Async generator: baca dari ffmpeg stdout dan yield ke client dengan disconnect detection
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while True:
             # Check for client disconnect
             if await request.is_disconnected():
@@ -820,7 +820,7 @@ async def _refresh_url(ydl_refresh_info: dict) -> Optional[str]:
     NOTE: Sekarang menggunakan singleton ydl_manager untuk session integrity.
     """
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         def _extract():
             # Gunakan singleton manager untuk session integrity
@@ -937,17 +937,26 @@ def slideshow_generator(
     work_dir = Path(temp_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Download images
+    # Download images and audio with a single reusable client
     image_paths = []
-    for i, img_url in enumerate(image_urls):
-        img_path = work_dir / f"image_{i}.jpg"
-        with httpx.Client(timeout=60, follow_redirects=True) as client:
+    audio_path = None
+    with httpx.Client(timeout=60, follow_redirects=True) as client:
+        for i, img_url in enumerate(image_urls):
+            img_path = work_dir / f"image_{i}.jpg"
             with client.stream("GET", img_url) as response:
                 response.raise_for_status()
                 with open(img_path, "wb") as f:
                     for chunk in response.iter_bytes(chunk_size=8192):
                         f.write(chunk)
-        image_paths.append(str(img_path))
+            image_paths.append(str(img_path))
+
+        if audio_url:
+            audio_path = work_dir / "audio.mp3"
+            with client.stream("GET", audio_url) as response:
+                response.raise_for_status()
+                with open(audio_path, "wb") as f:
+                    for chunk in response.iter_bytes(chunk_size=8192):
+                        f.write(chunk)
 
     if not image_paths:
         raise ValueError("No images downloaded")
@@ -961,16 +970,7 @@ def slideshow_generator(
     for img_path in image_paths:
         cmd.extend(["-loop", "1", "-t", str(duration_per_image), "-i", img_path])
 
-    audio_path = None
-    if audio_url:
-        # Download audio
-        audio_path = work_dir / "audio.mp3"
-        with httpx.Client(timeout=60, follow_redirects=True) as client:
-            with client.stream("GET", audio_url) as response:
-                response.raise_for_status()
-                with open(audio_path, "wb") as f:
-                    for chunk in response.iter_bytes(chunk_size=8192):
-                        f.write(chunk)
+    if audio_url and audio_path:
         # Add audio input with loop
         cmd.extend(["-stream_loop", "-1", "-i", str(audio_path)])
 
@@ -1059,7 +1059,7 @@ async def slideshow_stream_generator(
     output_path = None
     try:
         # Run slideshow generator in thread
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         output_path, _ = await loop.run_in_executor(
             None,
             slideshow_generator,

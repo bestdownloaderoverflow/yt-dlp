@@ -52,9 +52,4 @@ cookies/*.txt
 gateway-go/gateway-go
 
 # Gluetun VPN data
-gluetun/data/
-gluetun/data1/
-gluetun/data2/
-gluetun/data3/
-gluetun/data4/
-gluetun/data5/
+gluetun/data*/

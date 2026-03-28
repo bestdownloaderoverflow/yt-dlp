@@ -138,7 +138,7 @@ def get_photo_url(formats: list) -> str:
     return None
 
 
-def generate_photo_links(url: str, info: dict) -> list:
+def generate_photo_links(url: str, info: dict, proxy: Optional[str] = None, impersonate: Optional[str] = None) -> list:
     """Generate download links for photos."""
     photos = []
 
@@ -149,7 +149,8 @@ def generate_photo_links(url: str, info: dict) -> list:
             formats = entry.get("formats", [])
             photo_url = get_photo_url(formats)
             key = download_cache.create_session(
-                url=url, type="photo", photo_index=idx
+                url=url, type="photo", photo_index=idx,
+                proxy=proxy, impersonate=impersonate,
             )
             photos.append({
                 "index": idx,
@@ -162,7 +163,10 @@ def generate_photo_links(url: str, info: dict) -> list:
         # Single photo
         formats = info.get("formats", [])
         photo_url = get_photo_url(formats)
-        key = download_cache.create_session(url=url, type="photo", photo_index=1)
+        key = download_cache.create_session(
+            url=url, type="photo", photo_index=1,
+            proxy=proxy, impersonate=impersonate,
+        )
         photos.append({
             "index": 1,
             "width": info.get("width"),
@@ -199,11 +203,14 @@ async def fetch(
 
     try:
         # Gunakan ydl_manager untuk session integrity (CookieJar persistent)
-        info = await asyncio.to_thread(
-            ydl_manager.extract_info,
-            url,
-            proxy,
-            impersonate,
+        info = await asyncio.wait_for(
+            asyncio.to_thread(
+                ydl_manager.extract_info,
+                url,
+                proxy,
+                impersonate,
+            ),
+            timeout=30,
         )
 
         if not info:
@@ -240,7 +247,7 @@ async def fetch(
             }
 
         elif content_type == "photos":
-            response["photos"] = generate_photo_links(url, info)
+            response["photos"] = generate_photo_links(url, info, proxy=proxy, impersonate=impersonate)
 
         elif content_type == "playlist":
             response["playlist_count"] = info.get("playlist_count")
@@ -255,6 +262,8 @@ async def fetch(
 
         return response
 
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Extraction timed out")
     except yt_dlp.utils.DownloadError as e:
         raise map_yt_dlp_exception(e, default_status=400)
     except Exception as e:

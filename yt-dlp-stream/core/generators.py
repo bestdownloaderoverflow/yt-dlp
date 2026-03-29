@@ -7,6 +7,7 @@ import queue
 import re
 import subprocess
 import threading
+import time
 from typing import Optional, AsyncIterator
 
 import httpx
@@ -477,14 +478,14 @@ async def _stream_chunked_merge(
             if cancel_event.is_set():
                 return
             if video_size:
-                asyncio.run(_download_chunked_to_queue(
+                _sync_chunked_download_to_queue(
                     video_url, video_headers, video_size,
                     VIDEO_CHUNK_SIZE, ydl_refresh_info_video, video_queue, cancel_event
-                ))
+                )
             else:
-                asyncio.run(_download_simple_to_queue(
+                _sync_simple_download_to_queue(
                     video_url, video_headers, video_queue, cancel_event
-                ))
+                )
         except Exception as e:
             if not cancel_event.is_set():
                 logger.error(f"Video download error: {e}")
@@ -499,14 +500,14 @@ async def _stream_chunked_merge(
             if cancel_event.is_set():
                 return
             if audio_size:
-                asyncio.run(_download_chunked_to_queue(
+                _sync_chunked_download_to_queue(
                     audio_url, audio_headers, audio_size,
                     VIDEO_CHUNK_SIZE, ydl_refresh_info_audio, audio_queue, cancel_event
-                ))
+                )
             else:
-                asyncio.run(_download_simple_to_queue(
+                _sync_simple_download_to_queue(
                     audio_url, audio_headers, audio_queue, cancel_event
-                ))
+                )
         except Exception as e:
             if not cancel_event.is_set():
                 logger.error(f"Audio download error: {e}")
@@ -712,16 +713,14 @@ async def _stream_mp3_chunked(
             if cancel_event.is_set():
                 return
             if audio_size:
-                # Use chunked download
-                asyncio.run(_download_chunked_to_queue(
+                _sync_chunked_download_to_queue(
                     audio_url, audio_headers, audio_size,
                     CHUNK_SIZE, ydl_refresh_info, download_queue, cancel_event
-                ))
+                )
             else:
-                # Simple download
-                asyncio.run(_download_simple_to_queue(
+                _sync_simple_download_to_queue(
                     audio_url, audio_headers, download_queue, cancel_event
-                ))
+                )
         except Exception as e:
             if not cancel_event.is_set():
                 download_error[0] = e
@@ -908,6 +907,165 @@ async def _download_simple_to_queue(url, headers, q, cancel_event=None):
     async with client.stream("GET", url, headers=safe_headers) as resp:
         resp.raise_for_status()
         async for data in resp.aiter_bytes():
+            if cancel_event and cancel_event.is_set():
+                break
+            q.put(data)
+
+
+def _sync_refresh_url(refresh_info: dict) -> Optional[str]:
+    """
+    Sync version of _refresh_url for use in daemon threads.
+    Calls ydl_manager directly without creating a new event loop.
+    """
+    try:
+        info = ydl_manager.extract_info(
+            refresh_info["url"],
+            proxy=refresh_info["ydl_opts"].get("proxy"),
+            impersonate=refresh_info["ydl_opts"].get("impersonate"),
+        )
+        if not info:
+            return None
+        resolved = ydl_manager.resolve_formats(
+            info, refresh_info["format_str"],
+            proxy=refresh_info["ydl_opts"].get("proxy"),
+            impersonate=refresh_info["ydl_opts"].get("impersonate"),
+        )
+        if not resolved:
+            return None
+
+        target = refresh_info.get("target", "single")
+        target_format_id = refresh_info.get("format_id")
+        target_idx = refresh_info.get("format_idx")
+
+        if target_format_id:
+            matched = next((f for f in resolved if f.get("format_id") == target_format_id), None)
+            if matched and matched.get("url"):
+                return matched["url"]
+
+        if target == "video":
+            matched = next(
+                (f for f in resolved if (f.get("vcodec") or "none") not in (None, "", "none")),
+                None,
+            )
+            if matched and matched.get("url"):
+                return matched["url"]
+        elif target == "audio":
+            matched = next(
+                (
+                    f for f in resolved
+                    if (f.get("acodec") or "none") not in (None, "", "none")
+                    and (f.get("vcodec") or "none") in (None, "", "none")
+                ),
+                None,
+            )
+            if matched and matched.get("url"):
+                return matched["url"]
+
+        if isinstance(target_idx, int) and 0 <= target_idx < len(resolved):
+            if resolved[target_idx].get("url"):
+                return resolved[target_idx]["url"]
+        return resolved[0].get("url")
+    except Exception as e:
+        logger.error(f"Sync URL refresh failed: {e}")
+        return None
+
+
+def _sync_chunked_download_to_queue(
+    url: str,
+    headers: dict,
+    size: int,
+    chunk_size: int,
+    refresh_info: dict,
+    q: queue.Queue,
+    cancel_event: threading.Event = None,
+) -> None:
+    """
+    Sync chunked range download for use in daemon threads.
+
+    Uses get_sync_pool() (httpx.Client) instead of the async pool so this
+    function can be called directly from a thread without creating a new
+    event loop, avoiding the event-loop cross-contamination that occurs
+    when asyncio.run() uses a shared async httpx.AsyncClient.
+    """
+    read = 0
+    refresh_count = 0
+    max_refreshes = 10
+    max_retries_per_chunk = 3
+    safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
+    client = get_sync_pool()
+
+    while read < size:
+        if cancel_event and cancel_event.is_set():
+            break
+
+        end = min(read + chunk_size - 1, size - 1)
+        range_headers = {**safe_headers, "Range": f"bytes={read}-{end}"}
+        chunk_retries = 0
+        chunk_success = False
+
+        while chunk_retries < max_retries_per_chunk and not chunk_success:
+            if cancel_event and cancel_event.is_set():
+                break
+            try:
+                with client.stream("GET", url, headers=range_headers) as resp:
+                    if resp.status_code == 416:
+                        if read >= size:
+                            chunk_success = True
+                            break
+                        raise Exception(f"Range not satisfiable at {read}/{size}")
+
+                    if resp.status_code == 403 and refresh_count < max_refreshes:
+                        new_url = _sync_refresh_url(refresh_info)
+                        if new_url:
+                            url = new_url
+                            refresh_count += 1
+                            continue
+
+                    resp.raise_for_status()
+
+                    for data in resp.iter_bytes():
+                        if cancel_event and cancel_event.is_set():
+                            return
+                        q.put(data)
+                        read += len(data)
+
+                    chunk_success = True
+
+            except httpx.HTTPStatusError as e:
+                chunk_retries += 1
+                if e.response.status_code == 403 and refresh_count < max_refreshes:
+                    new_url = _sync_refresh_url(refresh_info)
+                    if new_url:
+                        url = new_url
+                        refresh_count += 1
+                        continue
+                if chunk_retries < max_retries_per_chunk:
+                    time.sleep(min(2 ** chunk_retries, 10))
+                else:
+                    raise
+            except Exception as e:
+                chunk_retries += 1
+                if chunk_retries < max_retries_per_chunk:
+                    time.sleep(min(2 ** chunk_retries, 10))
+                else:
+                    raise
+
+        if not chunk_success and not (cancel_event and cancel_event.is_set()):
+            raise Exception(f"Failed to download chunk at {read}/{size} after all retries")
+
+
+def _sync_simple_download_to_queue(
+    url: str,
+    headers: dict,
+    q: queue.Queue,
+    cancel_event: threading.Event = None,
+) -> None:
+    """Sync simple download for daemon threads. Uses get_sync_pool()."""
+    safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
+    client = get_sync_pool()
+    with client.stream("GET", url, headers=safe_headers) as resp:
+        resp.raise_for_status()
+        for data in resp.iter_bytes():
             if cancel_event and cancel_event.is_set():
                 break
             q.put(data)

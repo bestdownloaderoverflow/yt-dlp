@@ -8,6 +8,7 @@ from dataclasses import dataclass, asdict
 from typing import Optional
 
 import redis
+import redis.asyncio as aioredis
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DEFAULT_TTL = 300  # 5 minutes
@@ -45,7 +46,8 @@ class RedisDownloadCache:
     """Redis-based cache for download sessions with TTL."""
 
     def __init__(self, ttl_seconds: int = DEFAULT_TTL):
-        self._redis = redis.from_url(REDIS_URL, decode_responses=True)
+        self._redis = aioredis.from_url(REDIS_URL, decode_responses=True)
+        self._redis_sync = redis.from_url(REDIS_URL, decode_responses=True)
         self._ttl = ttl_seconds
         self._key_prefix = "download:"
 
@@ -68,7 +70,7 @@ class RedisDownloadCache:
             return raw_key
         return key
 
-    def create_session(
+    async def create_session(
         self,
         url: str,
         type: str,
@@ -114,14 +116,14 @@ class RedisDownloadCache:
         )
 
         redis_key = f"{self._key_prefix}{raw_key}"
-        self._redis.setex(redis_key, self._ttl, json.dumps(asdict(session)))
+        await self._redis.setex(redis_key, self._ttl, json.dumps(asdict(session)))
         return key
 
-    def get_session(self, key: str) -> Optional[DownloadSession]:
+    async def get_session(self, key: str) -> Optional[DownloadSession]:
         """Get session if valid, else None."""
         raw_key = self._raw_key_from_public_key(key)
         redis_key = f"{self._key_prefix}{raw_key}"
-        data = self._redis.get(redis_key)
+        data = await self._redis.get(redis_key)
 
         if not data:
             return None
@@ -129,16 +131,16 @@ class RedisDownloadCache:
         session_dict = json.loads(data)
         return DownloadSession(**session_dict)
 
-    def delete_session(self, key: str):
+    async def delete_session(self, key: str):
         """Delete session manually."""
         raw_key = self._raw_key_from_public_key(key)
         redis_key = f"{self._key_prefix}{raw_key}"
-        self._redis.delete(redis_key)
+        await self._redis.delete(redis_key)
 
     def health_check(self) -> bool:
-        """Check Redis connection."""
+        """Synchronous health check for background-thread monitoring."""
         try:
-            self._redis.ping()
+            self._redis_sync.ping()
             return True
         except redis.ConnectionError:
             return False

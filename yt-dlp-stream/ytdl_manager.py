@@ -68,17 +68,23 @@ class YoutubeDLManager:
         # key -> list[_InstanceSlot]
         self._pools: OrderedDict[str, List[_InstanceSlot]] = OrderedDict()
         self._global_lock = threading.Lock()
+        self._count_lock = threading.Lock()  # Dedicated lock for request counter
         self._request_count = 0
-        self._max_keys = 10  # LRU cache size (number of distinct config keys)
+        self._max_keys = 30  # LRU cache size (number of distinct config keys)
         self._cleanup_interval = 3600  # Cleanup every hour
         self._last_cleanup = time.time()
 
     @staticmethod
     def _cookie_path(opts_key: str, slot_index: int) -> str:
-        """Return the file path for persisting cookies for a given slot."""
+        """Return the file path for persisting cookies for a given slot.
+
+        Includes os.getpid() so each Granian worker process writes to a
+        separate file, preventing cookie corruption from concurrent writes.
+        """
         COOKIE_DIR.mkdir(parents=True, exist_ok=True)
         safe_key = opts_key.replace(":", "_").replace("/", "_")
-        return str(COOKIE_DIR / f"cookies_{safe_key}_{slot_index}.txt")
+        pid = os.getpid()
+        return str(COOKIE_DIR / f"cookies_{safe_key}_{pid}_{slot_index}.txt")
 
     def _create_ydl(self, proxy: Optional[str] = None,
                     impersonate: Optional[str] = None,
@@ -231,7 +237,8 @@ class YoutubeDLManager:
         """
         slot = self._acquire_slot(proxy, impersonate)
         try:
-            self._request_count += 1
+            with self._count_lock:
+                self._request_count += 1
             info = slot.ydl.extract_info(url, download=False)
             if isinstance(info, dict) and info.get("url"):
                 info["http_headers"] = self._build_outbound_headers_locked(slot.ydl, info)

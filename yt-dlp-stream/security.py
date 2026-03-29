@@ -15,6 +15,10 @@ import secrets
 from typing import Optional, Dict, Tuple
 from dataclasses import dataclass
 
+import redis as _redis_lib
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -119,8 +123,14 @@ def generate_stream_id() -> str:
 
 
 class RateLimiter:
-    """Simple in-memory rate limiter."""
-    
+    """
+    Distributed Redis-backed rate limiter using a fixed-window counter.
+
+    Shared across all Granian worker processes via Redis so the configured
+    limit is honoured globally, not per-process.  Falls back to in-memory
+    sliding-window counting when Redis is unavailable.
+    """
+
     def __init__(self, max_requests: int = 100, window: int = 60):
         """
         Args:
@@ -129,46 +139,72 @@ class RateLimiter:
         """
         self.max_requests = max_requests
         self.window = window
-        self._requests: Dict[str, list] = {}
-    
+        self._redis: Optional[_redis_lib.Redis] = None
+        self._local_fallback: Dict[str, list] = {}
+        self._connect_redis()
+
+    def _connect_redis(self) -> None:
+        try:
+            self._redis = _redis_lib.from_url(
+                REDIS_URL,
+                decode_responses=True,
+                socket_connect_timeout=2,
+                socket_timeout=1,
+            )
+            self._redis.ping()
+        except Exception as e:
+            logger.warning(f"RateLimiter: Redis unavailable, falling back to in-memory: {e}")
+            self._redis = None
+
     def is_allowed(self, client_id: str) -> bool:
         """Check if client is allowed to make request."""
+        if self._redis is not None:
+            try:
+                return self._is_allowed_redis(client_id)
+            except Exception as e:
+                logger.warning(f"RateLimiter Redis error, using fallback: {e}")
+                self._redis = None
+        return self._is_allowed_local(client_id)
+
+    def _is_allowed_redis(self, client_id: str) -> bool:
+        """Fixed-window counter via atomic INCR + EXPIRE."""
+        key = f"rl:{client_id}"
+        pipe = self._redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, self.window)
+        count = pipe.execute()[0]
+        return count <= self.max_requests
+
+    def _is_allowed_local(self, client_id: str) -> bool:
+        """In-memory sliding-window fallback."""
         now = time.time()
-        
-        # Cleanup old entries
-        if client_id in self._requests:
-            self._requests[client_id] = [
-                ts for ts in self._requests[client_id]
+        if client_id in self._local_fallback:
+            self._local_fallback[client_id] = [
+                ts for ts in self._local_fallback[client_id]
                 if now - ts < self.window
             ]
-        
-        # Check rate
-        requests = self._requests.get(client_id, [])
+        requests = self._local_fallback.get(client_id, [])
         if len(requests) >= self.max_requests:
             return False
-        
-        # Record request
-        if client_id not in self._requests:
-            self._requests[client_id] = []
-        self._requests[client_id].append(now)
-        
+        if client_id not in self._local_fallback:
+            self._local_fallback[client_id] = []
+        self._local_fallback[client_id].append(now)
         return True
-    
+
     def cleanup_old_entries(self):
-        """Remove expired entries."""
+        """Remove expired in-memory entries (no-op when Redis is active)."""
+        if self._redis is not None:
+            return
         now = time.time()
         to_remove = []
-        
-        for client_id, timestamps in self._requests.items():
-            # Filter expired
+        for client_id, timestamps in self._local_fallback.items():
             valid = [ts for ts in timestamps if now - ts < self.window]
             if not valid:
                 to_remove.append(client_id)
             else:
-                self._requests[client_id] = valid
-        
+                self._local_fallback[client_id] = valid
         for client_id in to_remove:
-            del self._requests[client_id]
+            del self._local_fallback[client_id]
 
 
 # Global rate limiter instance

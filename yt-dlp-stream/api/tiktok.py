@@ -190,63 +190,19 @@ def extract_format_headers(
     impersonate: Optional[str] = None,
 ) -> tuple[dict, str]:
     """
-    Extract headers and cookies from format using ydl_manager.
-    Returns (headers, cookies) tuple.
+    Extract headers and cookies from format.
 
-    This mimics the serverpy approach of extracting cookies directly
-    from the cookiejar using the format URL.
+    Uses pre-computed http_headers already embedded in the format dict
+    (built by ydl_manager._build_outbound_headers_locked during extract_info /
+    resolve_formats) so no extra ydl_manager slot is acquired here.
     """
-    # Get global headers from info
     global_headers = info.get("http_headers", {})
-
-    # Get format-specific headers
-    fmt_headers = fmt.get("http_headers", {})
-
-    # Merge headers (format headers override global)
-    headers = {**global_headers, **fmt_headers}
-
-    # Extract cookies using cookiejar directly (like serverpy)
-    cookies = None
-    fmt_url = fmt.get("url") or url
-
-    if fmt_url:
-        try:
-            # Try to get cookies from ydl_manager's cookiejar
-            cookiejar = ydl_manager.get_cookiejar(
-                proxy=proxy,
-                impersonate=impersonate,
-            )
-            if cookiejar and hasattr(cookiejar, 'get_cookie_header'):
-                cookie_header = cookiejar.get_cookie_header(fmt_url)
-                if cookie_header:
-                    cookies = cookie_header
-                    logger.debug(f"Extracted cookies for {fmt_url[:50]}...")
-        except Exception as e:
-            logger.debug(f"Could not extract cookies from cookiejar: {e}")
-
-    # Fallback to calc_headers if no cookies from cookiejar
-    if not cookies:
-        try:
-            calc_headers = ydl_manager.calc_headers(
-                fmt,
-                load_cookies=True,
-                proxy=proxy,
-                impersonate=impersonate,
-            )
-            cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
-            # Add other headers from calc_headers
-            for k, v in calc_headers.items():
-                if k.lower() not in ("cookie", "accept-encoding"):
-                    headers[k] = v
-        except Exception as e:
-            logger.debug(f"Could not calc_headers: {e}")
-
-    # Clean up headers for httpx
+    fmt_headers = {**global_headers, **fmt.get("http_headers", {})}
+    cookies = fmt_headers.get("Cookie") or fmt_headers.get("cookie")
     safe_headers = {
-        k: v for k, v in headers.items()
+        k: v for k, v in fmt_headers.items()
         if k.lower() not in ("accept-encoding", "cookie")
     }
-
     return safe_headers, cookies
 
 
@@ -290,7 +246,7 @@ async def _probe_content_length(url: str, headers: dict) -> Optional[int]:
     return None
 
 
-def generate_video_download_links(
+async def generate_video_download_links(
     info: dict,
     author: TikTokAuthor,
     request_url: str,
@@ -329,8 +285,6 @@ def generate_video_download_links(
     hd_formats = [f for f in video_formats if f.get("height", 0) >= 720]
     sd_formats = [f for f in video_formats if f.get("height", 0) < 720]
 
-    # Extract headers/cookies once and reuse across all formats
-    # (avoids repeated lock acquisition + cookiejar lookups)
     representative_fmt = download_format or (video_formats[0] if video_formats else audio_format)
     if representative_fmt is None:
         return links
@@ -338,8 +292,8 @@ def generate_video_download_links(
         representative_fmt, info, request_url, proxy=proxy, impersonate=impersonate
     )
 
-    def _create_link(fmt, link_type, quality=None):
-        key = download_cache.create_session(
+    async def _create_link(fmt, link_type, quality=None):
+        key = await download_cache.create_session(
             url=request_url,
             type=link_type,
             quality=quality,
@@ -357,21 +311,21 @@ def generate_video_download_links(
 
     # Generate download links with session keys
     if download_format:
-        links["watermark"] = _create_link(download_format, "video", "watermark")
+        links["watermark"] = await _create_link(download_format, "video", "watermark")
 
     if sd_formats:
-        links["no_watermark"] = _create_link(sd_formats[0], "video", "no_watermark")
+        links["no_watermark"] = await _create_link(sd_formats[0], "video", "no_watermark")
 
     if hd_formats:
-        links["no_watermark_hd"] = _create_link(hd_formats[0], "video", "no_watermark_hd")
+        links["no_watermark_hd"] = await _create_link(hd_formats[0], "video", "no_watermark_hd")
 
     if audio_format:
-        links["mp3"] = _create_link(audio_format, "mp3")
+        links["mp3"] = await _create_link(audio_format, "mp3")
 
     return links
 
 
-def generate_photo_download_links(
+async def generate_photo_download_links(
     info: dict,
     author: TikTokAuthor,
     request_url: str,
@@ -399,7 +353,7 @@ def generate_photo_download_links(
         photos.append({"type": "photo", "url": direct_url})
 
         # Wrapped download URL for download endpoint (download_link)
-        key = download_cache.create_session(
+        key = await download_cache.create_session(
             url=direct_url,
             type="photo",
             photo_index=i + 1,
@@ -424,7 +378,7 @@ def generate_photo_download_links(
             audio_format, info, request_url, proxy=proxy, impersonate=impersonate
         )
 
-        key = download_cache.create_session(
+        key = await download_cache.create_session(
             url=audio_format.get("url"),
             type="mp3",
             direct_url=audio_format.get("url"),
@@ -443,7 +397,7 @@ def generate_photo_download_links(
     photo_urls = [img["url"] for img in image_formats]
     audio_url = audio_format.get("url") if audio_format else None
 
-    slideshow_key = download_cache.create_session(
+    slideshow_key = await download_cache.create_session(
         url=request_url,
         type="slideshow",
         photo_urls=photo_urls,
@@ -486,15 +440,12 @@ async def process_tiktok(
         # Use impersonate for TLS fingerprinting if available (helps with TikTok)
         impersonate = request.impersonate  # May be None if not provided
 
-        # Check extraction cache first to avoid redundant yt-dlp calls
-        info = extraction_cache.get(url, proxy=request.proxy)
-        if info:
-            logger.info(f"Extraction cache hit for TikTok URL: {url[:60]}...")
-        else:
-            # yt-dlp extraction is blocking I/O; offload it to thread pool so
-            # concurrent TikTok fetch requests do not stall the event loop.
+        # Stampede-safe extraction: only one concurrent yt-dlp call per URL.
+        # Waiters poll the cache; if the lock holder crashes they fall through
+        # to their own extraction after STAMPEDE_WAIT_SECONDS.
+        async def _do_extract() -> dict:
             try:
-                info = await asyncio.wait_for(
+                return await asyncio.wait_for(
                     asyncio.to_thread(
                         ydl_manager.extract_info,
                         url,
@@ -508,9 +459,8 @@ async def process_tiktok(
                     status_code=504,
                     detail="TikTok extraction timed out. Please try again.",
                 )
-            # Cache the result for subsequent requests
-            if info:
-                extraction_cache.put(url, info, proxy=request.proxy)
+
+        info = await extraction_cache.get_or_extract(url, proxy=request.proxy, extract_fn=_do_extract)
 
         if not info:
             raise HTTPException(
@@ -526,7 +476,7 @@ async def process_tiktok(
         # Check if photo or video content
         if is_photo_content(info):
             # Photo/slideshow post
-            links, photos, slideshow_link = generate_photo_download_links(
+            links, photos, slideshow_link = await generate_photo_download_links(
                 info, author, url, request.proxy, impersonate
             )
 
@@ -553,7 +503,7 @@ async def process_tiktok(
 
         else:
             # Video post
-            links = generate_video_download_links(info, author, url, request.proxy, impersonate)
+            links = await generate_video_download_links(info, author, url, request.proxy, impersonate)
 
             # Find audio URL for response
             formats = info.get("formats", [])
@@ -682,7 +632,7 @@ async def download_tiktok(
     - mp3: Stream audio
     - slideshow: Generate and stream slideshow video from photos
     """
-    session = download_cache.get_session(key)
+    session = await download_cache.get_session(key)
     if not session:
         raise HTTPException(
             status_code=404,

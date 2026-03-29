@@ -55,7 +55,7 @@ async def download(
     Key expires in 5 minutes after being generated.
     For Twitter/X videos, uses direct URL proxy with session integrity headers.
     """
-    session = download_cache.get_session(key)
+    session = await download_cache.get_session(key)
     if not session:
         raise HTTPException(
             status_code=404, detail="Download link expired or invalid"

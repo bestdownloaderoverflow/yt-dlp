@@ -54,7 +54,7 @@ def get_available_qualities(formats: list) -> list:
     return qualities if qualities else ["best"]
 
 
-def generate_video_links(url: str, info: dict, qualities: list, platform: str) -> dict:
+async def generate_video_links(url: str, info: dict, qualities: list, platform: str) -> dict:
     """Generate download links for video qualities with session integrity."""
     links = {}
     formats = info.get("formats", [])
@@ -79,25 +79,23 @@ def generate_video_links(url: str, info: dict, qualities: list, platform: str) -
                     fmt = f
                     break
 
-        # Prepare session data
+        # Prepare session data — use pre-computed headers from the format dict
+        # (built by ydl_manager._build_outbound_headers_locked during extract_info)
+        # to avoid acquiring an extra ydl_manager slot just for header lookup.
         direct_url = None
         http_headers = None
         cookies = None
 
         if fmt and use_direct_proxy:
             direct_url = fmt.get("url")
-            # Get format-specific headers or global headers
             fmt_headers = fmt.get("http_headers") or global_headers
-            # Calculate headers with cookies using ydl_manager
-            try:
-                calc_headers = ydl_manager.calc_headers(fmt, load_cookies=True)
-                http_headers = {k: v for k, v in calc_headers.items() if k.lower() != "cookie"}
-                cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
-            except Exception:
-                # Fallback to format headers
-                http_headers = fmt_headers
+            http_headers = {
+                k: v for k, v in fmt_headers.items()
+                if k.lower() not in ("cookie", "accept-encoding")
+            }
+            cookies = fmt_headers.get("Cookie") or fmt_headers.get("cookie")
 
-        key = download_cache.create_session(
+        key = await download_cache.create_session(
             url=url,
             type="video",
             quality=quality.replace("p", ""),
@@ -113,9 +111,9 @@ def generate_video_links(url: str, info: dict, qualities: list, platform: str) -
     return links
 
 
-def generate_mp3_link(url: str, platform: str, title: Optional[str], proxy: Optional[str], impersonate: Optional[str]) -> str:
+async def generate_mp3_link(url: str, platform: str, title: Optional[str], proxy: Optional[str], impersonate: Optional[str]) -> str:
     """Generate download link for MP3."""
-    key = download_cache.create_session(
+    key = await download_cache.create_session(
         url=url,
         type="mp3",
         platform=platform,
@@ -138,7 +136,7 @@ def get_photo_url(formats: list) -> str:
     return None
 
 
-def generate_photo_links(url: str, info: dict, proxy: Optional[str] = None, impersonate: Optional[str] = None) -> list:
+async def generate_photo_links(url: str, info: dict, proxy: Optional[str] = None, impersonate: Optional[str] = None) -> list:
     """Generate download links for photos."""
     photos = []
 
@@ -148,7 +146,7 @@ def generate_photo_links(url: str, info: dict, proxy: Optional[str] = None, impe
         for idx, entry in enumerate(entries, 1):
             formats = entry.get("formats", [])
             photo_url = get_photo_url(formats)
-            key = download_cache.create_session(
+            key = await download_cache.create_session(
                 url=url, type="photo", photo_index=idx,
                 proxy=proxy, impersonate=impersonate,
             )
@@ -163,7 +161,7 @@ def generate_photo_links(url: str, info: dict, proxy: Optional[str] = None, impe
         # Single photo
         formats = info.get("formats", [])
         photo_url = get_photo_url(formats)
-        key = download_cache.create_session(
+        key = await download_cache.create_session(
             url=url, type="photo", photo_index=1,
             proxy=proxy, impersonate=impersonate,
         )
@@ -236,8 +234,8 @@ async def fetch(
         if content_type == "video":
             qualities = get_available_qualities(info.get("formats", []))
             response["download_links"] = {
-                "video": generate_video_links(url, info, qualities, platform),
-                "mp3": generate_mp3_link(
+                "video": await generate_video_links(url, info, qualities, platform),
+                "mp3": await generate_mp3_link(
                     url=url,
                     platform=platform,
                     title=info.get("title"),
@@ -247,7 +245,7 @@ async def fetch(
             }
 
         elif content_type == "photos":
-            response["photos"] = generate_photo_links(url, info, proxy=proxy, impersonate=impersonate)
+            response["photos"] = await generate_photo_links(url, info, proxy=proxy, impersonate=impersonate)
 
         elif content_type == "playlist":
             response["playlist_count"] = info.get("playlist_count")

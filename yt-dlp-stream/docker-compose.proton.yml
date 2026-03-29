@@ -239,49 +239,7 @@ services:
     environment:
       - WORKER_ID=w1
       - API_PORT=9487
-      - GRANIAN_WORKERS=3
-      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-
-  ytdlp-worker-2:
-    <<: *ytdlp-worker-common
-    container_name: ytdlp-worker-2
-    volumes:
-      - worker2-cookies:/tmp/ytdlp_cookies
-    environment:
-      - WORKER_ID=w2
-      - API_PORT=9487
-      - GRANIAN_WORKERS=3
-      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-
-  ytdlp-worker-3:
-    <<: *ytdlp-worker-common
-    container_name: ytdlp-worker-3
-    volumes:
-      - worker3-cookies:/tmp/ytdlp_cookies
-    environment:
-      - WORKER_ID=w3
-      - API_PORT=9487
-      - GRANIAN_WORKERS=3
-      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - PYTHONPATH=/app:/app/yt_dlp
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/0
-
-  ytdlp-worker-4:
-    <<: *ytdlp-worker-common
-    container_name: ytdlp-worker-4
-    volumes:
-      - worker4-cookies:/tmp/ytdlp_cookies
-    environment:
-      - WORKER_ID=w4
-      - API_PORT=9487
-      - GRANIAN_WORKERS=3
+      - GRANIAN_WORKERS=${GRANIAN_WORKERS:-6}
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - PYTHONPATH=/app:/app/yt_dlp
@@ -314,7 +272,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - GATEWAY_PORT=9111
-      - WORKER_COUNT=4
+      - WORKER_COUNT=1
       - PROXY_COUNT=10
       - WORKER_HOST_PREFIX=ytdlp-worker-
       - WORKER_CONTAINER_PREFIX=ytdlp-worker-
@@ -356,9 +314,6 @@ services:
       - gluetun-9
       - gluetun-10
       - ytdlp-worker-1
-      - ytdlp-worker-2
-      - ytdlp-worker-3
-      - ytdlp-worker-4
       - redis
     restart: unless-stopped
     healthcheck:
@@ -379,6 +334,3 @@ networks:
 volumes:
   redis-data:
   worker1-cookies:
-  worker2-cookies:
-  worker3-cookies:
-  worker4-cookies:

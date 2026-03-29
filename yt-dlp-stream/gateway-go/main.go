@@ -25,44 +25,44 @@ import (
 const uptimeRestartInterval = 24 * time.Hour
 
 type Config struct {
-	GatewayPort               int
-	WorkerCount               int
-	WorkerHostPrefix          string
-	WorkerContainerPrefix     string
-	WorkerAPIPort             int
-	ProxyCount                int
-	ProxyHostPrefix           string
-	ProxyContainerPrefix      string
-	ProxyHTTPPort             int
-	ProxyControlPort          int
-	MaxActivePerProxy         int
-	MaxActivePerWorker        int
-	WorkerPickStrategy        string
-	GluetunPassword           string
-	MaxRetries                int
-	HealthCheckTimeoutMs      int
+	GatewayPort                  int
+	WorkerCount                  int
+	WorkerHostPrefix             string
+	WorkerContainerPrefix        string
+	WorkerAPIPort                int
+	ProxyCount                   int
+	ProxyHostPrefix              string
+	ProxyContainerPrefix         string
+	ProxyHTTPPort                int
+	ProxyControlPort             int
+	MaxActivePerProxy            int
+	MaxActivePerWorker           int
+	WorkerPickStrategy           string
+	GluetunPassword              string
+	MaxRetries                   int
+	HealthCheckTimeoutMs         int
 	HealthMonitorIntervalMs      int
 	ProxyHealthMonitorIntervalMs int
 	HealthFailureThreshold       int
-	RateLimitCooldownSeconds  int
-	RestartBackoffBase        int
-	RestartBackoffMax         int
-	RestartBudgetLimit        int
-	RestartBudgetWindow       int
-	RestartQuarantineSeconds  int
-	RestartBackoffJitter      int
-	DegradedRetryAfter        int
-	GatewayRLWindowSeconds    int
-	GatewayRLFetchLimit       int
-	GatewayRLDownloadLimit    int
-	DrainTimeoutSeconds       int
-	DrainPollIntervalMs       int
-	RestartStabilizeSeconds   int
-	UnhealthyRestartThreshold int
-	GatewayReadHeaderTimeout  int
-	GatewayReadTimeout        int
-	GatewayWriteTimeout       int
-	GatewayIdleTimeout        int
+	RateLimitCooldownSeconds     int
+	RestartBackoffBase           int
+	RestartBackoffMax            int
+	RestartBudgetLimit           int
+	RestartBudgetWindow          int
+	RestartQuarantineSeconds     int
+	RestartBackoffJitter         int
+	DegradedRetryAfter           int
+	GatewayRLWindowSeconds       int
+	GatewayRLFetchLimit          int
+	GatewayRLDownloadLimit       int
+	DrainTimeoutSeconds          int
+	DrainPollIntervalMs          int
+	RestartStabilizeSeconds      int
+	UnhealthyRestartThreshold    int
+	GatewayReadHeaderTimeout     int
+	GatewayReadTimeout           int
+	GatewayWriteTimeout          int
+	GatewayIdleTimeout           int
 }
 
 type Worker struct {
@@ -164,154 +164,6 @@ func (r *WorkerRegistry) GetHealthyWorkers(exclude map[string]bool) []*Worker {
 	return result
 }
 
-func (r *WorkerRegistry) MarkRateLimited(workerID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if w := r.getWorkerUnlocked(workerID); w != nil {
-		w.LastRateLimit = time.Now()
-		w.Failures++
-		log.Printf("[%s] marked as rate limited", workerID)
-	}
-}
-
-func (r *WorkerRegistry) MarkFailure(workerID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if w := r.getWorkerUnlocked(workerID); w != nil {
-		w.Failures++
-		log.Printf("[%s] marked as failed", workerID)
-	}
-}
-
-func (r *WorkerRegistry) ScheduleRestart(workerID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if w := r.getWorkerUnlocked(workerID); w != nil {
-		if !w.Restarting && !w.RestartScheduled {
-			w.RestartScheduled = true
-			w.BreakerOpen = true
-			log.Printf("[%s] restart scheduled", workerID)
-			return true
-		}
-	}
-	return false
-}
-
-func (r *WorkerRegistry) CanStartRestart(workerID string) (bool, string, int) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	w := r.getWorkerUnlocked(workerID)
-	if w == nil {
-		return false, "unknown_worker", 0
-	}
-	now := time.Now()
-	if w.Restarting {
-		return false, "already_restarting", 0
-	}
-	if now.Before(w.QuarantineUntil) {
-		return false, "quarantine", int(time.Until(w.QuarantineUntil).Seconds())
-	}
-	if now.Before(w.NextRestartAt) {
-		return false, "backoff", int(time.Until(w.NextRestartAt).Seconds())
-	}
-	return true, "ok", 0
-}
-
-func (r *WorkerRegistry) UpdateRestartState(workerID string, restarting bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if w := r.getWorkerUnlocked(workerID); w != nil {
-		w.Restarting = restarting
-		if restarting {
-			w.Healthy = false
-		}
-	}
-}
-
-func (r *WorkerRegistry) MarkRestarted(workerID string, success bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	w := r.getWorkerUnlocked(workerID)
-	if w == nil {
-		return
-	}
-
-	w.Restarting = false
-	w.RestartScheduled = false
-	if success {
-		w.Healthy = true
-		w.Failures = 0
-		w.RestartFailures = 0
-		w.StartedAt = time.Now()
-		w.LastRateLimit = time.Time{}
-		w.NextRestartAt = time.Time{}
-		w.QuarantineUntil = time.Time{}
-		w.RestartEvents = nil
-		w.BreakerOpen = false
-		log.Printf("[%s] restarted successfully", workerID)
-		return
-	}
-
-	now := time.Now()
-	w.Healthy = false
-	w.Failures++
-	w.RestartFailures++
-
-	exp := w.RestartFailures - 1
-	if exp < 0 {
-		exp = 0
-	}
-	if exp > 6 {
-		exp = 6
-	}
-	delay := r.cfg.RestartBackoffBase * (1 << exp)
-	if delay > r.cfg.RestartBackoffMax {
-		delay = r.cfg.RestartBackoffMax
-	}
-	if r.cfg.RestartBackoffJitter > 0 {
-		delay += rand.Intn(r.cfg.RestartBackoffJitter + 1)
-	}
-	w.NextRestartAt = now.Add(time.Duration(delay) * time.Second)
-
-	windowStart := now.Add(-time.Duration(r.cfg.RestartBudgetWindow) * time.Second)
-	filtered := w.RestartEvents[:0]
-	for _, t := range w.RestartEvents {
-		if t.After(windowStart) {
-			filtered = append(filtered, t)
-		}
-	}
-	w.RestartEvents = append(filtered, now)
-	if len(w.RestartEvents) >= r.cfg.RestartBudgetLimit {
-		w.QuarantineUntil = now.Add(time.Duration(r.cfg.RestartQuarantineSeconds) * time.Second)
-		w.NextRestartAt = w.QuarantineUntil
-		log.Printf("[%s] entering quarantine for %ds after %d restart failures", workerID, r.cfg.RestartQuarantineSeconds, len(w.RestartEvents))
-	}
-
-	w.RestartScheduled = true
-	w.BreakerOpen = true
-	log.Printf("[%s] restart failed; retry after %ds", workerID, delay)
-}
-
-func (r *WorkerRegistry) OpenCircuit(workerID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if w := r.getWorkerUnlocked(workerID); w != nil {
-		if !w.BreakerOpen {
-			log.Printf("[%s] circuit opened (drain mode)", workerID)
-		}
-		w.BreakerOpen = true
-	}
-}
-
-func (r *WorkerRegistry) CloseCircuit(workerID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if w := r.getWorkerUnlocked(workerID); w != nil {
-		w.BreakerOpen = false
-	}
-}
-
 func (r *WorkerRegistry) SetHealthy(workerID string, healthy bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -363,38 +215,6 @@ func (r *WorkerRegistry) RecordProbe(workerID string, healthy bool) {
 	}
 }
 
-func (r *WorkerRegistry) GetWorkersNeedingRestart() []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	needing := []string{}
-	now := time.Now()
-	for _, w := range r.workers {
-		uptime := now.Sub(w.StartedAt)
-		if uptime >= uptimeRestartInterval && w.Healthy && !w.Restarting && !w.RestartScheduled {
-			needing = append(needing, w.ID)
-		}
-	}
-	return needing
-}
-
-func (r *WorkerRegistry) IsWorkerIdle(workerID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if w := r.getWorkerUnlocked(workerID); w != nil {
-		return w.ActiveRequests == 0
-	}
-	return false
-}
-
-func (r *WorkerRegistry) ActiveRequests(workerID string) int {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if w := r.getWorkerUnlocked(workerID); w != nil {
-		return w.ActiveRequests
-	}
-	return 0
-}
-
 func (r *WorkerRegistry) IncrementActive(workerID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -409,34 +229,6 @@ func (r *WorkerRegistry) DecrementActive(workerID string) {
 	if w := r.getWorkerUnlocked(workerID); w != nil && w.ActiveRequests > 0 {
 		w.ActiveRequests--
 	}
-}
-
-func (r *WorkerRegistry) ShouldRestartUnhealthy(workerID string) bool {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	w := r.getWorkerUnlocked(workerID)
-	if w == nil {
-		return false
-	}
-
-	threshold := r.cfg.UnhealthyRestartThreshold
-	if threshold < 1 {
-		return false
-	}
-	if w.Healthy || w.Restarting || w.RestartScheduled {
-		return false
-	}
-	if w.ActiveRequests > 0 {
-		return false
-	}
-
-	now := time.Now()
-	if now.Before(w.QuarantineUntil) || now.Before(w.NextRestartAt) {
-		return false
-	}
-
-	return w.ProbeFailures >= threshold
 }
 
 func (r *WorkerRegistry) WorkersSnapshot() []Worker {
@@ -731,6 +523,20 @@ func (r *ProxyRegistry) ShouldRestartUnhealthy(proxyID string) bool {
 	return p.ProbeFailures >= threshold
 }
 
+func (r *ProxyRegistry) GetProxiesNeedingRestart() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	needing := []string{}
+	now := time.Now()
+	for _, p := range r.proxies {
+		uptime := now.Sub(p.StartedAt)
+		if uptime >= uptimeRestartInterval && p.Healthy && !p.Restarting && !p.RestartScheduled {
+			needing = append(needing, p.ID)
+		}
+	}
+	return needing
+}
+
 func (r *ProxyRegistry) IsProxyIdle(proxyID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -803,58 +609,6 @@ func (v *VPNRotator) restartContainer(container string) error {
 	return nil
 }
 
-func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
-	drained := v.waitForDrain(ctx, workerID)
-	if !drained {
-		log.Printf("[%s] drain timeout reached; forcing container restart", workerID)
-	}
-
-	v.workerRegistry.UpdateRestartState(workerID, true)
-	ytdlp := fmt.Sprintf("%s%s", v.cfg.WorkerContainerPrefix, strings.TrimPrefix(workerID, "w"))
-	log.Printf("[%s] restarting %s", workerID, ytdlp)
-	if err := v.restartContainer(ytdlp); err != nil {
-		log.Printf("[%s] restart error: %v", workerID, err)
-		v.workerRegistry.MarkRestarted(workerID, false)
-		return false
-	}
-	select {
-	case <-ctx.Done():
-		return false
-	case <-time.After(5 * time.Second):
-	}
-
-	healthy := false
-	for i := 0; i < 6; i++ {
-		if v.healthCheck(workerID) {
-			healthy = true
-			break
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(5 * time.Second):
-		}
-	}
-
-	if healthy {
-		stabilize := time.Duration(v.cfg.RestartStabilizeSeconds) * time.Second
-		if stabilize < 0 {
-			stabilize = 0
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(stabilize):
-		}
-		v.workerRegistry.MarkRestarted(workerID, true)
-		return true
-	}
-
-	log.Printf("[%s] health check failed after restart", workerID)
-	v.workerRegistry.MarkRestarted(workerID, false)
-	return false
-}
-
 func (v *VPNRotator) waitForProxyDrain(ctx context.Context, proxyID string) bool {
 	timeout := time.Duration(v.cfg.DrainTimeoutSeconds) * time.Second
 	if timeout <= 0 {
@@ -920,41 +674,6 @@ func (v *VPNRotator) RestartProxy(ctx context.Context, proxyID string) bool {
 	}
 	v.proxyRegistry.MarkRestarted(proxyID, false)
 	return false
-}
-
-func (v *VPNRotator) waitForDrain(ctx context.Context, workerID string) bool {
-	timeout := time.Duration(v.cfg.DrainTimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 90 * time.Second
-	}
-	interval := time.Duration(v.cfg.DrainPollIntervalMs) * time.Millisecond
-	if interval <= 0 {
-		interval = 500 * time.Millisecond
-	}
-	logInterval := 5 * time.Second
-	deadline := time.Now().Add(timeout)
-	lastLoggedActive := -1
-	lastLogAt := time.Time{}
-	for {
-		if v.workerRegistry.IsWorkerIdle(workerID) {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(interval):
-			active := v.workerRegistry.ActiveRequests(workerID)
-			now := time.Now()
-			if active != lastLoggedActive || lastLogAt.IsZero() || now.Sub(lastLogAt) >= logInterval {
-				log.Printf("[%s] drain wait: active_requests=%d", workerID, active)
-				lastLoggedActive = active
-				lastLogAt = now
-			}
-		}
-	}
 }
 
 func (v *VPNRotator) healthCheck(workerID string) bool {
@@ -1075,8 +794,6 @@ type Gateway struct {
 	client            *http.Client
 	rlFetch           *SlidingWindowRateLimiter
 	rlDownload        *SlidingWindowRateLimiter
-	restartTasksMu    sync.Mutex
-	restartTasks      map[string]context.CancelFunc
 	proxyTasksMu      sync.Mutex
 	proxyRestartTasks map[string]context.CancelFunc
 	ctx               context.Context
@@ -1090,7 +807,7 @@ func NewGateway(cfg Config) *Gateway {
 		IdleConnTimeout:       90 * time.Second,
 		DisableCompression:    false,
 		ResponseHeaderTimeout: 30 * time.Second,
-		TLSHandshakeTimeout:  10 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1104,7 +821,6 @@ func NewGateway(cfg Config) *Gateway {
 		client:            &http.Client{Transport: tr},
 		rlFetch:           NewSlidingWindowRateLimiter(cfg.GatewayRLFetchLimit, cfg.GatewayRLWindowSeconds),
 		rlDownload:        NewSlidingWindowRateLimiter(cfg.GatewayRLDownloadLimit, cfg.GatewayRLWindowSeconds),
-		restartTasks:      map[string]context.CancelFunc{},
 		proxyRestartTasks: map[string]context.CancelFunc{},
 		ctx:               ctx,
 		cancel:            cancel,
@@ -1550,24 +1266,6 @@ func (g *Gateway) checkRateLimit(w http.ResponseWriter, r *http.Request, limiter
 	return false
 }
 
-func (g *Gateway) scheduleWorkerRestart(workerID string, rateLimited bool) {
-	g.registry.OpenCircuit(workerID)
-	if rateLimited {
-		g.registry.MarkRateLimited(workerID)
-	} else {
-		g.registry.MarkFailure(workerID)
-	}
-
-	scheduled := g.registry.ScheduleRestart(workerID)
-	if !scheduled {
-		log.Printf("[%s] restart already scheduled/running; skip duplicate schedule", workerID)
-		return
-	}
-	if !g.ensureRestartTask(workerID, true) {
-		log.Printf("[%s] restart task not started now (duplicate/in backoff/quarantine)", workerID)
-	}
-}
-
 func (g *Gateway) scheduleProxyRestart(proxyID string, rateLimited bool) {
 	if rateLimited {
 		g.proxyRegistry.MarkRateLimited(proxyID)
@@ -1585,53 +1283,15 @@ func (g *Gateway) scheduleProxyRestart(proxyID string, rateLimited bool) {
 	}
 }
 
-func queueRestartCandidate(queued map[string]bool, workerID string, rateLimited bool) {
-	prev := queued[workerID]
-	queued[workerID] = prev || rateLimited
-}
-
 func queueProxyRestartCandidate(queued map[string]bool, proxyID string, rateLimited bool) {
 	prev := queued[proxyID]
 	queued[proxyID] = prev || rateLimited
-}
-
-func (g *Gateway) flushQueuedRestarts(queued map[string]bool) {
-	for workerID, rateLimited := range queued {
-		g.scheduleWorkerRestart(workerID, rateLimited)
-	}
 }
 
 func (g *Gateway) flushQueuedProxyRestarts(queued map[string]bool) {
 	for proxyID, rateLimited := range queued {
 		g.scheduleProxyRestart(proxyID, rateLimited)
 	}
-}
-
-func (g *Gateway) ensureRestartTask(workerID string, logBlocked bool) bool {
-	canStart, reason, waitSeconds := g.registry.CanStartRestart(workerID)
-	if !canStart {
-		if logBlocked && (reason == "quarantine" || reason == "backoff") {
-			log.Printf("[%s] restart blocked by %s; wait %ds", workerID, reason, waitSeconds)
-		}
-		return false
-	}
-
-	g.restartTasksMu.Lock()
-	defer g.restartTasksMu.Unlock()
-	if _, exists := g.restartTasks[workerID]; exists {
-		return false
-	}
-	ctx, cancel := context.WithCancel(g.ctx)
-	g.restartTasks[workerID] = cancel
-	go func() {
-		defer func() {
-			g.restartTasksMu.Lock()
-			delete(g.restartTasks, workerID)
-			g.restartTasksMu.Unlock()
-		}()
-		_ = g.rotator.RestartWorker(ctx, workerID)
-	}()
-	return true
 }
 
 func (g *Gateway) ensureProxyRestartTask(proxyID string, logBlocked bool) bool {
@@ -1838,7 +1498,6 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID string, strictPreferred bool) {
 	triedWorkers := map[string]bool{}
 	triedProxies := map[string]bool{}
-	queuedWorkers := map[string]bool{}
 	queuedProxies := map[string]bool{}
 	var body []byte
 	if method == http.MethodPost {
@@ -1895,9 +1554,6 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 			g.proxyRegistry.DecrementActive(proxy.ID)
 		}
 		if result.success {
-			if len(queuedWorkers) > 0 {
-				g.flushQueuedRestarts(queuedWorkers)
-			}
 			if len(queuedProxies) > 0 {
 				g.flushQueuedProxyRestarts(queuedProxies)
 			}
@@ -1918,11 +1574,9 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 				}
 			} else {
 				if result.isRateLimit {
-					log.Printf("[%s] rate limit detected, scheduling worker restart...", worker.ID)
-					queueRestartCandidate(queuedWorkers, worker.ID, true)
+					log.Printf("[%s] rate limit detected on direct worker path; failover without worker restart", worker.ID)
 				} else {
-					log.Printf("[%s] retryable failure, scheduling worker restart", worker.ID)
-					queueRestartCandidate(queuedWorkers, worker.ID, false)
+					log.Printf("[%s] retryable failure on direct worker path; failover without worker restart", worker.ID)
 				}
 			}
 		} else {
@@ -1931,10 +1585,6 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 	}
 
 	log.Printf("all %d attempts failed", g.cfg.MaxRetries)
-	if len(queuedWorkers) > 0 {
-		log.Printf("flushing %d queued worker restart(s) after total retry failure", len(queuedWorkers))
-		g.flushQueuedRestarts(queuedWorkers)
-	}
 	if len(queuedProxies) > 0 {
 		log.Printf("flushing %d queued proxy restart(s) after total retry failure", len(queuedProxies))
 		g.flushQueuedProxyRestarts(queuedProxies)
@@ -1949,7 +1599,6 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 func (g *Gateway) proxyWithRotation(w http.ResponseWriter, r *http.Request, path string) {
 	triedWorkers := map[string]bool{}
 	triedProxies := map[string]bool{}
-	queuedWorkers := map[string]bool{}
 	queuedProxies := map[string]bool{}
 
 	for attempt := 0; attempt < g.cfg.MaxRetries; attempt++ {
@@ -1977,9 +1626,6 @@ func (g *Gateway) proxyWithRotation(w http.ResponseWriter, r *http.Request, path
 		g.proxyRegistry.DecrementActive(proxy.ID)
 
 		if result.success {
-			if len(queuedWorkers) > 0 {
-				g.flushQueuedRestarts(queuedWorkers)
-			}
 			if len(queuedProxies) > 0 {
 				g.flushQueuedProxyRestarts(queuedProxies)
 			}
@@ -2003,10 +1649,6 @@ func (g *Gateway) proxyWithRotation(w http.ResponseWriter, r *http.Request, path
 	}
 
 	w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
-	if len(queuedWorkers) > 0 {
-		log.Printf("flushing %d queued worker restart(s) after stream retry failure", len(queuedWorkers))
-		g.flushQueuedRestarts(queuedWorkers)
-	}
 	if len(queuedProxies) > 0 {
 		log.Printf("flushing %d queued proxy restart(s) after stream retry failure", len(queuedProxies))
 		g.flushQueuedProxyRestarts(queuedProxies)
@@ -2046,8 +1688,7 @@ func (g *Gateway) streamFromWorker(w http.ResponseWriter, r *http.Request, worke
 		estimated := resp.Header.Get("estimated-content-length")
 		contentLength := resp.Header.Get("content-length")
 		if estimated != "" && (contentLength == "" || contentLength == "0") {
-			log.Printf("[%s] possible rate limit in stream", worker.ID)
-			g.scheduleWorkerRestart(worker.ID, true)
+			log.Printf("[%s] possible rate limit in direct stream; worker restart disabled", worker.ID)
 		}
 	}
 
@@ -2074,12 +1715,6 @@ func (g *Gateway) restartScheduler() {
 		case <-g.ctx.Done():
 			return
 		case <-ticker.C:
-			workers := g.registry.WorkersSnapshot()
-			for _, worker := range workers {
-				if worker.RestartScheduled && !worker.Restarting {
-					g.ensureRestartTask(worker.ID, false)
-				}
-			}
 			proxies := g.proxyRegistry.ProxiesSnapshot()
 			for _, proxy := range proxies {
 				if proxy.RestartScheduled && !proxy.Restarting {
@@ -2098,10 +1733,10 @@ func (g *Gateway) uptimeChecker() {
 		case <-g.ctx.Done():
 			return
 		case <-ticker.C:
-			needing := g.registry.GetWorkersNeedingRestart()
-			for _, workerID := range needing {
+			needing := g.proxyRegistry.GetProxiesNeedingRestart()
+			for _, proxyID := range needing {
 				waited := 0
-				for !g.registry.IsWorkerIdle(workerID) && waited < 300 {
+				for !g.proxyRegistry.IsProxyIdle(proxyID) && waited < 300 {
 					select {
 					case <-g.ctx.Done():
 						return
@@ -2109,9 +1744,9 @@ func (g *Gateway) uptimeChecker() {
 						waited += 5
 					}
 				}
-				if g.registry.IsWorkerIdle(workerID) {
-					log.Printf("[uptime] restarting %s after 24h", workerID)
-					_ = g.registry.ScheduleRestart(workerID)
+				if g.proxyRegistry.IsProxyIdle(proxyID) {
+					log.Printf("[uptime] restarting %s after 24h", proxyID)
+					_ = g.proxyRegistry.ScheduleRestart(proxyID)
 				}
 			}
 		}
@@ -2141,15 +1776,7 @@ func (g *Gateway) healthMonitor() {
 			return
 		case <-workerTicker.C:
 			for _, worker := range g.registry.WorkersSnapshot() {
-				if worker.Restarting || worker.RestartScheduled {
-					g.registry.SetHealthy(worker.ID, false)
-					continue
-				}
 				g.registry.RecordProbe(worker.ID, g.rotator.healthCheck(worker.ID))
-				if g.registry.ShouldRestartUnhealthy(worker.ID) {
-					log.Printf("[%s] unhealthy for %d consecutive probes; scheduling restart", worker.ID, g.cfg.UnhealthyRestartThreshold)
-					_ = g.registry.ScheduleRestart(worker.ID)
-				}
 			}
 		case <-proxyTicker.C:
 			for _, proxy := range g.proxyRegistry.ProxiesSnapshot() {
@@ -2186,44 +1813,44 @@ func envInt(key string, fallback int) int {
 
 func loadConfig() Config {
 	return Config{
-		GatewayPort:               envInt("GATEWAY_PORT", 9111),
-		WorkerCount:               envInt("WORKER_COUNT", 3),
-		WorkerHostPrefix:          getenvDefault("WORKER_HOST_PREFIX", "ytdlp-worker-"),
-		WorkerContainerPrefix:     getenvDefault("WORKER_CONTAINER_PREFIX", "ytdlp-worker-"),
-		WorkerAPIPort:             envInt("WORKER_API_PORT", 9487),
-		ProxyCount:                envInt("PROXY_COUNT", 10),
-		ProxyHostPrefix:           getenvDefault("PROXY_HOST_PREFIX", "gluetun-"),
-		ProxyContainerPrefix:      getenvDefault("PROXY_CONTAINER_PREFIX", "ytdlp-gluetun-"),
-		ProxyHTTPPort:             envInt("PROXY_HTTP_PORT", 8888),
-		ProxyControlPort:          envInt("PROXY_CONTROL_PORT", 8000),
-		MaxActivePerProxy:         envInt("MAX_ACTIVE_PER_PROXY", 30),
-		MaxActivePerWorker:        envInt("MAX_ACTIVE_PER_WORKER", 40),
-		WorkerPickStrategy:        getenvDefault("WORKER_PICK_STRATEGY", "p2c"),
-		GluetunPassword:           getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
-		MaxRetries:                envInt("MAX_RETRIES", 3),
-		HealthCheckTimeoutMs:      envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
+		GatewayPort:                  envInt("GATEWAY_PORT", 9111),
+		WorkerCount:                  envInt("WORKER_COUNT", 3),
+		WorkerHostPrefix:             getenvDefault("WORKER_HOST_PREFIX", "ytdlp-worker-"),
+		WorkerContainerPrefix:        getenvDefault("WORKER_CONTAINER_PREFIX", "ytdlp-worker-"),
+		WorkerAPIPort:                envInt("WORKER_API_PORT", 9487),
+		ProxyCount:                   envInt("PROXY_COUNT", 10),
+		ProxyHostPrefix:              getenvDefault("PROXY_HOST_PREFIX", "gluetun-"),
+		ProxyContainerPrefix:         getenvDefault("PROXY_CONTAINER_PREFIX", "ytdlp-gluetun-"),
+		ProxyHTTPPort:                envInt("PROXY_HTTP_PORT", 8888),
+		ProxyControlPort:             envInt("PROXY_CONTROL_PORT", 8000),
+		MaxActivePerProxy:            envInt("MAX_ACTIVE_PER_PROXY", 30),
+		MaxActivePerWorker:           envInt("MAX_ACTIVE_PER_WORKER", 40),
+		WorkerPickStrategy:           getenvDefault("WORKER_PICK_STRATEGY", "p2c"),
+		GluetunPassword:              getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
+		MaxRetries:                   envInt("MAX_RETRIES", 3),
+		HealthCheckTimeoutMs:         envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
 		HealthMonitorIntervalMs:      envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
 		ProxyHealthMonitorIntervalMs: envInt("PROXY_HEALTH_MONITOR_INTERVAL_MS", 20000),
-		HealthFailureThreshold:    envInt("HEALTH_FAILURE_THRESHOLD", 3),
-		RateLimitCooldownSeconds:  envInt("RATE_LIMIT_COOLDOWN", 300),
-		RestartBackoffBase:        envInt("RESTART_BACKOFF_BASE", 30),
-		RestartBackoffMax:         envInt("RESTART_BACKOFF_MAX", 300),
-		RestartBudgetLimit:        envInt("RESTART_BUDGET_LIMIT", 3),
-		RestartBudgetWindow:       envInt("RESTART_BUDGET_WINDOW", 600),
-		RestartQuarantineSeconds:  envInt("RESTART_QUARANTINE_SECONDS", 600),
-		RestartBackoffJitter:      envInt("RESTART_BACKOFF_JITTER", 5),
-		DegradedRetryAfter:        envInt("DEGRADED_RETRY_AFTER", 5),
-		GatewayRLWindowSeconds:    envInt("GATEWAY_RL_WINDOW_SECONDS", 60),
-		GatewayRLFetchLimit:       envInt("GATEWAY_RL_FETCH_LIMIT", 45),
-		GatewayRLDownloadLimit:    envInt("GATEWAY_RL_DOWNLOAD_LIMIT", 45),
-		DrainTimeoutSeconds:       envInt("DRAIN_TIMEOUT_SECONDS", 90),
-		DrainPollIntervalMs:       envInt("DRAIN_POLL_INTERVAL_MS", 500),
-		RestartStabilizeSeconds:   envInt("RESTART_STABILIZE_SECONDS", 2),
-		UnhealthyRestartThreshold: envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
-		GatewayReadHeaderTimeout:  envInt("GATEWAY_READ_HEADER_TIMEOUT_SECONDS", 10),
-		GatewayReadTimeout:        envInt("GATEWAY_READ_TIMEOUT_SECONDS", 30),
-		GatewayWriteTimeout:       envInt("GATEWAY_WRITE_TIMEOUT_SECONDS", 0),
-		GatewayIdleTimeout:        envInt("GATEWAY_IDLE_TIMEOUT_SECONDS", 120),
+		HealthFailureThreshold:       envInt("HEALTH_FAILURE_THRESHOLD", 3),
+		RateLimitCooldownSeconds:     envInt("RATE_LIMIT_COOLDOWN", 300),
+		RestartBackoffBase:           envInt("RESTART_BACKOFF_BASE", 30),
+		RestartBackoffMax:            envInt("RESTART_BACKOFF_MAX", 300),
+		RestartBudgetLimit:           envInt("RESTART_BUDGET_LIMIT", 3),
+		RestartBudgetWindow:          envInt("RESTART_BUDGET_WINDOW", 600),
+		RestartQuarantineSeconds:     envInt("RESTART_QUARANTINE_SECONDS", 600),
+		RestartBackoffJitter:         envInt("RESTART_BACKOFF_JITTER", 5),
+		DegradedRetryAfter:           envInt("DEGRADED_RETRY_AFTER", 5),
+		GatewayRLWindowSeconds:       envInt("GATEWAY_RL_WINDOW_SECONDS", 60),
+		GatewayRLFetchLimit:          envInt("GATEWAY_RL_FETCH_LIMIT", 45),
+		GatewayRLDownloadLimit:       envInt("GATEWAY_RL_DOWNLOAD_LIMIT", 45),
+		DrainTimeoutSeconds:          envInt("DRAIN_TIMEOUT_SECONDS", 90),
+		DrainPollIntervalMs:          envInt("DRAIN_POLL_INTERVAL_MS", 500),
+		RestartStabilizeSeconds:      envInt("RESTART_STABILIZE_SECONDS", 2),
+		UnhealthyRestartThreshold:    envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
+		GatewayReadHeaderTimeout:     envInt("GATEWAY_READ_HEADER_TIMEOUT_SECONDS", 10),
+		GatewayReadTimeout:           envInt("GATEWAY_READ_TIMEOUT_SECONDS", 30),
+		GatewayWriteTimeout:          envInt("GATEWAY_WRITE_TIMEOUT_SECONDS", 0),
+		GatewayIdleTimeout:           envInt("GATEWAY_IDLE_TIMEOUT_SECONDS", 120),
 	}
 }
 

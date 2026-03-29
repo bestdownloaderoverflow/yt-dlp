@@ -921,18 +921,26 @@ func (g *Gateway) handleFetch(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlFetch, "fetch") {
 		return
 	}
-	g.proxyWithRetry(w, r, "/fetch", http.MethodGet, "", false)
+	g.proxyWithRetry(w, r, "/fetch", http.MethodGet, "", "", false)
 }
 
 func (g *Gateway) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlDownload, "download") {
 		return
 	}
-	g.proxyWithRetry(w, r, "/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), false)
+	g.proxyWithRetry(
+		w,
+		r,
+		"/download",
+		http.MethodGet,
+		extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount),
+		extractProxyID(r.URL.Query().Get("key"), g.cfg.ProxyCount),
+		false,
+	)
 }
 
 func (g *Gateway) handleInfo(w http.ResponseWriter, r *http.Request) {
-	g.proxyWithRetry(w, r, "/info", http.MethodGet, "", false)
+	g.proxyWithRetry(w, r, "/info", http.MethodGet, "", "", false)
 }
 
 func (g *Gateway) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -944,14 +952,22 @@ func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
 		return
 	}
-	g.proxyWithRetry(w, r, "/tiktok", http.MethodPost, "", false)
+	g.proxyWithRetry(w, r, "/tiktok", http.MethodPost, "", "", false)
 }
 
 func (g *Gateway) handleTikTokDownload(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlDownload, "tiktok_download") {
 		return
 	}
-	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), false)
+	g.proxyWithRetry(
+		w,
+		r,
+		"/tiktok/download",
+		http.MethodGet,
+		extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount),
+		extractProxyID(r.URL.Query().Get("key"), g.cfg.ProxyCount),
+		false,
+	)
 }
 
 func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -1053,6 +1069,22 @@ func extractWorkerID(key string, workerCount int) string {
 	return ""
 }
 
+func extractProxyID(key string, proxyCount int) string {
+	if key == "" {
+		return ""
+	}
+	parts := strings.Split(key, "-")
+	if len(parts) == 0 {
+		return ""
+	}
+	for i := 1; i <= proxyCount; i++ {
+		if parts[0] == fmt.Sprintf("p%d", i) {
+			return parts[0]
+		}
+	}
+	return ""
+}
+
 func (g *Gateway) isWorkerAcceptingRequests(worker *Worker) bool {
 	if worker == nil {
 		return false
@@ -1068,6 +1100,26 @@ func (g *Gateway) isWorkerAcceptingRequests(worker *Worker) bool {
 		return false
 	}
 	if g.cfg.MaxActivePerWorker > 0 && worker.ActiveRequests >= g.cfg.MaxActivePerWorker {
+		return false
+	}
+	return true
+}
+
+func (g *Gateway) isProxyAcceptingRequests(proxy *Proxy) bool {
+	if proxy == nil {
+		return false
+	}
+	if !proxy.Healthy || proxy.Restarting || proxy.RestartScheduled || proxy.BreakerOpen {
+		return false
+	}
+	now := time.Now()
+	if now.Before(proxy.QuarantineUntil) {
+		return false
+	}
+	if !proxy.LastRateLimit.IsZero() && now.Sub(proxy.LastRateLimit) <= time.Duration(g.cfg.RateLimitCooldownSeconds)*time.Second {
+		return false
+	}
+	if g.cfg.MaxActivePerProxy > 0 && proxy.ActiveRequests >= g.cfg.MaxActivePerProxy {
 		return false
 	}
 	return true
@@ -1495,7 +1547,7 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 	return proxyResult{success: false, status: status, shouldRestart: false}
 }
 
-func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID string, strictPreferred bool) {
+func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID, preferredProxyID string, strictPreferred bool) {
 	triedWorkers := map[string]bool{}
 	triedProxies := map[string]bool{}
 	queuedProxies := map[string]bool{}
@@ -1534,13 +1586,22 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 
 		var proxy *Proxy
 		if g.shouldInjectProxy(path, method) {
-			proxies := g.proxyRegistry.GetAvailableProxies(triedProxies)
-			if len(proxies) == 0 {
-				log.Printf("no healthy proxies available")
-				g.logNoHealthyProxiesSnapshot(triedProxies)
-				break
+			if preferredProxyID != "" && !triedProxies[preferredProxyID] {
+				if preferred := g.proxyRegistry.GetProxy(preferredProxyID); g.isProxyAcceptingRequests(preferred) {
+					proxy = preferred
+				} else {
+					log.Printf("[%s] preferred proxy unavailable for key-bound request; falling back to another healthy proxy", preferredProxyID)
+				}
 			}
-			proxy = g.selectProxy(proxies)
+			if proxy == nil {
+				proxies := g.proxyRegistry.GetAvailableProxies(triedProxies)
+				if len(proxies) == 0 {
+					log.Printf("no healthy proxies available")
+					g.logNoHealthyProxiesSnapshot(triedProxies)
+					break
+				}
+				proxy = g.selectProxy(proxies)
+			}
 			triedProxies[proxy.ID] = true
 		}
 

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass, asdict
 from typing import Optional
@@ -11,6 +12,7 @@ import redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DEFAULT_TTL = 300  # 5 minutes
 WORKER_ID = os.getenv("WORKER_ID", "").strip()
+PROXY_ID_RE = re.compile(r"gluetun-(\d+)")
 
 
 @dataclass
@@ -47,6 +49,25 @@ class RedisDownloadCache:
         self._ttl = ttl_seconds
         self._key_prefix = "download:"
 
+    def _key_affinity_prefix(self, proxy: Optional[str]) -> str:
+        """Prefer proxy affinity so download can stay on the same VPN egress."""
+        if proxy:
+            match = PROXY_ID_RE.search(proxy)
+            if match:
+                return f"p{match.group(1)}"
+        if WORKER_ID:
+            return WORKER_ID
+        return ""
+
+    def _raw_key_from_public_key(self, key: str) -> str:
+        """Strip optional public affinity prefix from session key."""
+        if not key or "-" not in key:
+            return key
+        prefix, raw_key = key.split("-", 1)
+        if prefix.startswith(("w", "p")):
+            return raw_key
+        return key
+
     def create_session(
         self,
         url: str,
@@ -69,7 +90,8 @@ class RedisDownloadCache:
     ) -> str:
         """Create new session and return key."""
         raw_key = str(uuid.uuid4())
-        key = f"{WORKER_ID}-{raw_key}" if WORKER_ID else raw_key
+        affinity_prefix = self._key_affinity_prefix(proxy)
+        key = f"{affinity_prefix}-{raw_key}" if affinity_prefix else raw_key
         session = DownloadSession(
             url=url,
             type=type,
@@ -97,7 +119,7 @@ class RedisDownloadCache:
 
     def get_session(self, key: str) -> Optional[DownloadSession]:
         """Get session if valid, else None."""
-        raw_key = key.split("-", 1)[1] if key.startswith("w") and "-" in key else key
+        raw_key = self._raw_key_from_public_key(key)
         redis_key = f"{self._key_prefix}{raw_key}"
         data = self._redis.get(redis_key)
 
@@ -109,7 +131,7 @@ class RedisDownloadCache:
 
     def delete_session(self, key: str):
         """Delete session manually."""
-        raw_key = key.split("-", 1)[1] if key.startswith("w") and "-" in key else key
+        raw_key = self._raw_key_from_public_key(key)
         redis_key = f"{self._key_prefix}{raw_key}"
         self._redis.delete(redis_key)
 

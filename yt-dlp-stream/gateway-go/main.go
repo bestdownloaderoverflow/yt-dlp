@@ -794,6 +794,8 @@ type proxyResult struct {
 	shouldRestart bool
 	status        int
 	wroteDirect   bool
+	lastBody      []byte
+	lastHeaders   http.Header
 }
 
 func isClientAbortError(err error) bool {
@@ -1492,6 +1494,12 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 		strings.Contains(text, "georestricted") ||
 		strings.Contains(text, "geoblocked")
 
+	isNotFound := status == http.StatusNotFound &&
+		(strings.Contains(text, "video not found") ||
+			strings.Contains(text, "not found") ||
+			strings.Contains(text, "unable to download") ||
+			strings.Contains(text, "unsupported url"))
+
 	isIPBlocked := strings.Contains(text, "ip blocked") ||
 		strings.Contains(text, "blocked by tiktok") ||
 		strings.Contains(text, "captcha") ||
@@ -1530,6 +1538,11 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 		}
 	}
 
+	if status == http.StatusNotFound && isNotFound {
+		log.Printf("[%s] received 404 video-not-found; failover to next proxy without restart", worker.ID)
+		return proxyResult{success: false, status: status, shouldRestart: false, lastBody: body, lastHeaders: resp.Header}
+	}
+
 	if status == http.StatusBadRequest {
 		copyHeader(w.Header(), resp.Header, nil)
 		if ct := resp.Header.Get("Content-Type"); ct == "" {
@@ -1561,13 +1574,14 @@ func (g *Gateway) handleResponse(w http.ResponseWriter, resp *http.Response, wor
 		return proxyResult{success: true, wroteDirect: true}
 	}
 
-	return proxyResult{success: false, status: status, shouldRestart: false}
+	return proxyResult{success: false, status: status, shouldRestart: false, lastBody: body, lastHeaders: resp.Header}
 }
 
 func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID, preferredProxyID string, strictPreferred bool) {
 	triedWorkers := map[string]bool{}
 	triedProxies := map[string]bool{}
 	queuedProxies := map[string]bool{}
+	var lastFailResult proxyResult
 	var body []byte
 	if method == http.MethodPost {
 		read, err := io.ReadAll(r.Body)
@@ -1640,6 +1654,9 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 		if result.wroteDirect {
 			return
 		}
+		if result.lastBody != nil {
+			lastFailResult = result
+		}
 
 		if result.shouldRestart {
 			if proxy != nil {
@@ -1666,6 +1683,15 @@ func (g *Gateway) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, m
 	if len(queuedProxies) > 0 {
 		log.Printf("flushing %d queued proxy restart(s) after total retry failure", len(queuedProxies))
 		g.flushQueuedProxyRestarts(queuedProxies)
+	}
+	if lastFailResult.lastBody != nil && lastFailResult.status >= 400 && lastFailResult.status < 500 {
+		copyHeader(w.Header(), lastFailResult.lastHeaders, nil)
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+		w.WriteHeader(lastFailResult.status)
+		_, _ = w.Write(lastFailResult.lastBody)
+		return
 	}
 	w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
 	writeJSON(w, http.StatusServiceUnavailable, map[string]string{

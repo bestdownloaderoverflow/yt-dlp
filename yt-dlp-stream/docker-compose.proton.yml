@@ -91,6 +91,48 @@ services:
     volumes:
       - ./gluetun/data4:/gluetun
 
+  gluetun-5:
+    <<: *gluetun-common
+    container_name: ytdlp-gluetun-5
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-5
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - SERVER_COUNTRIES=Indonesia
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - HTTPPROXY=on
+      - HTTPPROXY_LISTENING_ADDRESS=:8888
+      - HTTPPROXY_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_5}
+    volumes:
+      - ./gluetun/data5:/gluetun
+
+  gluetun-6:
+    <<: *gluetun-common
+    container_name: ytdlp-gluetun-6
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-6
+    environment:
+      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_TYPE=wireguard
+      - SERVER_COUNTRIES=Indonesia
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - HTTPPROXY=on
+      - HTTPPROXY_LISTENING_ADDRESS=:8888
+      - HTTPPROXY_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY_6}
+    volumes:
+      - ./gluetun/data6:/gluetun
+
   ytdlp-worker-1:
     &ytdlp-worker-common
     build:
@@ -147,7 +189,7 @@ services:
     environment:
       - GATEWAY_PORT=9111
       - WORKER_COUNT=1
-      - PROXY_COUNT=4
+      - PROXY_COUNT=6
       - WORKER_HOST_PREFIX=ytdlp-worker-
       - WORKER_CONTAINER_PREFIX=ytdlp-worker-
       - WORKER_API_PORT=9487
@@ -181,6 +223,8 @@ services:
       - gluetun-2
       - gluetun-3
       - gluetun-4
+      - gluetun-5
+      - gluetun-6
       - ytdlp-worker-1
       - redis
     restart: unless-stopped

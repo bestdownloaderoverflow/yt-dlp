@@ -952,10 +952,12 @@ async def _download_slideshow(
     # Only refresh if session is older than 5 minutes (URLs may have expired)
     session_age = None
     if hasattr(session, "created_at") and session.created_at:
-        from datetime import datetime
+        from datetime import datetime, timezone
         try:
             created = datetime.fromisoformat(session.created_at) if isinstance(session.created_at, str) else session.created_at
-            session_age = (datetime.now() - created).total_seconds()
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            session_age = (datetime.now(timezone.utc) - created).total_seconds()
         except Exception:
             session_age = None
 
@@ -968,13 +970,13 @@ async def _download_slideshow(
             )
             if refreshed_info:
                 formats = refreshed_info.get("formats", [])
-                image_formats = [f for f in formats if f.get("format_id", "").startswith("image-")]
-                audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
+                new_image_formats = [f for f in formats if f.get("format_id", "").startswith("image-")]
+                new_audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
 
-                if image_formats:
-                    photo_urls = [img["url"] for img in image_formats]
-                if audio_format:
-                    audio_url = audio_format.get("url")
+                if new_image_formats:
+                    photo_urls = [img["url"] for img in new_image_formats]
+                if new_audio_format:
+                    audio_url = new_audio_format.get("url")
         except Exception as e:
             logger.warning(f"Could not refresh slideshow URLs: {e}")
 

@@ -420,7 +420,13 @@ func (r *ProxyRegistry) MarkRestarted(proxyID string, success bool) {
 		p.Failures = 0
 		p.RestartFailures = 0
 		p.StartedAt = time.Now()
-		p.LastRateLimit = time.Time{}
+		// Only clear LastRateLimit if cooldown has already expired.
+		// If we clear it immediately after restart, the proxy becomes
+		// eligible right away and gets rate-limited again in a tight loop.
+		now := time.Now()
+		if p.LastRateLimit.IsZero() || now.Sub(p.LastRateLimit) >= time.Duration(r.cfg.RateLimitCooldownSeconds)*time.Second {
+			p.LastRateLimit = time.Time{}
+		}
 		p.NextRestartAt = time.Time{}
 		p.QuarantineUntil = time.Time{}
 		p.RestartEvents = nil
@@ -429,7 +435,7 @@ func (r *ProxyRegistry) MarkRestarted(proxyID string, success bool) {
 		return
 	}
 
-	now := time.Now()
+	failNow := time.Now()
 	p.Healthy = false
 	p.Failures++
 	p.RestartFailures++
@@ -448,18 +454,18 @@ func (r *ProxyRegistry) MarkRestarted(proxyID string, success bool) {
 	if r.cfg.RestartBackoffJitter > 0 {
 		delay += rand.Intn(r.cfg.RestartBackoffJitter + 1)
 	}
-	p.NextRestartAt = now.Add(time.Duration(delay) * time.Second)
+	p.NextRestartAt = failNow.Add(time.Duration(delay) * time.Second)
 
-	windowStart := now.Add(-time.Duration(r.cfg.RestartBudgetWindow) * time.Second)
+	windowStart := failNow.Add(-time.Duration(r.cfg.RestartBudgetWindow) * time.Second)
 	filtered := p.RestartEvents[:0]
 	for _, t := range p.RestartEvents {
 		if t.After(windowStart) {
 			filtered = append(filtered, t)
 		}
 	}
-	p.RestartEvents = append(filtered, now)
+	p.RestartEvents = append(filtered, failNow)
 	if len(p.RestartEvents) >= r.cfg.RestartBudgetLimit {
-		p.QuarantineUntil = now.Add(time.Duration(r.cfg.RestartQuarantineSeconds) * time.Second)
+		p.QuarantineUntil = failNow.Add(time.Duration(r.cfg.RestartQuarantineSeconds) * time.Second)
 		p.NextRestartAt = p.QuarantineUntil
 		log.Printf("[%s] proxy entering quarantine for %ds after %d restart failures", proxyID, r.cfg.RestartQuarantineSeconds, len(p.RestartEvents))
 	}
@@ -765,6 +771,23 @@ func (l *SlidingWindowRateLimiter) Check(key string) (bool, int) {
 	return true, 0
 }
 
+func (l *SlidingWindowRateLimiter) pruneStale() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cutoff := time.Now().Add(-time.Duration(l.windowSeconds) * time.Second)
+	for key, q := range l.events {
+		idx := 0
+		for idx < len(q) && (q[idx].Before(cutoff) || q[idx].Equal(cutoff)) {
+			idx++
+		}
+		if idx == len(q) {
+			delete(l.events, key)
+		} else if idx > 0 {
+			l.events[key] = q[idx:]
+		}
+	}
+}
+
 type proxyResult struct {
 	success       bool
 	isRateLimit   bool
@@ -1058,9 +1081,6 @@ func extractWorkerID(key string, workerCount int) string {
 		return ""
 	}
 	parts := strings.Split(key, "-")
-	if len(parts) == 0 {
-		return ""
-	}
 	for i := 1; i <= workerCount; i++ {
 		if parts[0] == fmt.Sprintf("w%d", i) {
 			return parts[0]
@@ -1074,9 +1094,6 @@ func extractProxyID(key string, proxyCount int) string {
 		return ""
 	}
 	parts := strings.Split(key, "-")
-	if len(parts) == 0 {
-		return ""
-	}
 	for i := 1; i <= proxyCount; i++ {
 		if parts[0] == fmt.Sprintf("p%d", i) {
 			return parts[0]
@@ -1782,6 +1799,8 @@ func (g *Gateway) restartScheduler() {
 					g.ensureProxyRestartTask(proxy.ID, false)
 				}
 			}
+			g.rlFetch.pruneStale()
+			g.rlDownload.pruneStale()
 		}
 	}
 }

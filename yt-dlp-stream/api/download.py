@@ -497,16 +497,9 @@ async def _download_photo(
     }
     safe_headers["Accept-Encoding"] = "identity"
 
-    # Extract cookies via calc_headers for session integrity
-    try:
-        calc_headers = ydl_manager.calc_headers(
-            photo_fmt, load_cookies=True, proxy=proxy, impersonate=impersonate
-        )
-        cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
-        if cookies:
-            safe_headers["Cookie"] = cookies
-    except Exception:
-        pass
+    cookies = fmt_headers.get("Cookie") or fmt_headers.get("cookie")
+    if cookies:
+        safe_headers["Cookie"] = cookies
 
     ext = photo_url.split("?")[0].split(".")[-1] if "." in photo_url else "jpg"
     filename = f"photo_{photo_index}.{ext}"

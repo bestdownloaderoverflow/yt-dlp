@@ -591,13 +591,26 @@ async def _stream_chunked_merge(
             except:
                 pass
 
-    def feed_audio():
+    # Lock + flag to prevent double-close of audio_w across feed_audio thread
+    # and the finally block (Bug #1 & #2 fix).
+    audio_w_lock = threading.Lock()
+    audio_w_closed = [False]
+
+    def _close_audio_w_once():
+        with audio_w_lock:
+            if not audio_w_closed[0]:
+                audio_w_closed[0] = True
+                try:
+                    os.close(audio_w)
+                except OSError:
+                    pass
+
+    def feed_audio_safe():
         try:
             while not cancel_event.is_set():
                 chunk = audio_queue.get()
                 if chunk is None:
                     break
-                # Check for error sentinel
                 if isinstance(chunk, tuple) and chunk[0] == "ERROR":
                     logger.error(f"Audio download failed: {chunk[1]}")
                     try:
@@ -606,7 +619,6 @@ async def _stream_chunked_merge(
                         pass
                     break
                 os.write(audio_w, chunk)
-            os.close(audio_w)
         except Exception as e:
             if not cancel_event.is_set():
                 logger.error(f"Audio feed error: {e}")
@@ -614,9 +626,11 @@ async def _stream_chunked_merge(
                 ffmpeg_proc.terminate()
             except:
                 pass
+        finally:
+            _close_audio_w_once()
 
     threading.Thread(target=feed_video, daemon=True).start()
-    threading.Thread(target=feed_audio, daemon=True).start()
+    threading.Thread(target=feed_audio_safe, daemon=True).start()
 
     # Async generator: baca dari ffmpeg stdout dengan disconnect detection
     try:
@@ -651,11 +665,8 @@ async def _stream_chunked_merge(
                 pass
         process_manager.unregister_process(ffmpeg_proc.pid)
 
-        # Cleanup audio pipe
-        try:
-            os.close(audio_w)
-        except:
-            pass
+        # Close audio pipe write-end if feed_audio_safe hasn't done it yet
+        _close_audio_w_once()
 
         # Drain queues untuk unblock threads
         try:

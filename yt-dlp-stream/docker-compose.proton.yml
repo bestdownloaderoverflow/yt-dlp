@@ -17,7 +17,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=Singapore
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTPPROXY=on
@@ -38,7 +38,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=Singapore
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTPPROXY=on
@@ -59,7 +59,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=Singapore
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTPPROXY=on
@@ -80,7 +80,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=Singapore
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTPPROXY=on
@@ -101,7 +101,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=Singapore
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTPPROXY=on
@@ -122,7 +122,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=Singapore
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - HTTPPROXY=on

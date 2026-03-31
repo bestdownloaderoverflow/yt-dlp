@@ -863,13 +863,18 @@ func extractWorkerID(key string, workerCount int) string {
 	if key == "" {
 		return ""
 	}
-	parts := strings.Split(key, "-")
-	if len(parts) == 0 {
+	// Support both old format (w1-uuid) and new format (w1::uuid)
+	var prefix string
+	if idx := strings.Index(key, "::"); idx > 0 {
+		prefix = key[:idx]
+	} else if idx := strings.Index(key, "-"); idx > 0 {
+		prefix = key[:idx]
+	} else {
 		return ""
 	}
 	for i := 1; i <= workerCount; i++ {
-		if parts[0] == fmt.Sprintf("w%d", i) {
-			return parts[0]
+		if prefix == fmt.Sprintf("w%d", i) {
+			return prefix
 		}
 	}
 	return ""

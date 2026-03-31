@@ -12,6 +12,10 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 DEFAULT_TTL = 300  # 5 minutes
 WORKER_ID = os.getenv("WORKER_ID", "").strip()
 
+# Separator between WORKER_ID and raw UUID in user-facing keys.
+# Must NOT appear in a UUID (which uses only hex + '-').
+_KEY_SEP = "::"
+
 
 @dataclass
 class DownloadSession:
@@ -43,7 +47,13 @@ class RedisDownloadCache:
     """Redis-based cache for download sessions with TTL."""
 
     def __init__(self, ttl_seconds: int = DEFAULT_TTL):
-        self._redis = redis.from_url(REDIS_URL, decode_responses=True)
+        self._redis = redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            retry_on_timeout=True,
+            socket_connect_timeout=2,
+            socket_timeout=5,
+        )
         self._ttl = ttl_seconds
         self._key_prefix = "download:"
 
@@ -69,7 +79,7 @@ class RedisDownloadCache:
     ) -> str:
         """Create new session and return key."""
         raw_key = str(uuid.uuid4())
-        key = f"{WORKER_ID}-{raw_key}" if WORKER_ID else raw_key
+        key = f"{WORKER_ID}{_KEY_SEP}{raw_key}" if WORKER_ID else raw_key
         session = DownloadSession(
             url=url,
             type=type,
@@ -95,9 +105,16 @@ class RedisDownloadCache:
         self._redis.setex(redis_key, self._ttl, json.dumps(asdict(session)))
         return key
 
+    @staticmethod
+    def _extract_raw_key(key: str) -> str:
+        """Extract the raw UUID from a user-facing session key."""
+        if _KEY_SEP in key:
+            return key.split(_KEY_SEP, 1)[1]
+        return key
+
     def get_session(self, key: str) -> Optional[DownloadSession]:
         """Get session if valid, else None."""
-        raw_key = key.split("-", 1)[1] if key.startswith("w") and "-" in key else key
+        raw_key = self._extract_raw_key(key)
         redis_key = f"{self._key_prefix}{raw_key}"
         data = self._redis.get(redis_key)
 
@@ -109,7 +126,7 @@ class RedisDownloadCache:
 
     def delete_session(self, key: str):
         """Delete session manually."""
-        raw_key = key.split("-", 1)[1] if key.startswith("w") and "-" in key else key
+        raw_key = self._extract_raw_key(key)
         redis_key = f"{self._key_prefix}{raw_key}"
         self._redis.delete(redis_key)
 

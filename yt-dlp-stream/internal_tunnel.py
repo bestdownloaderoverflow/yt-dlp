@@ -3,12 +3,16 @@ Internal tunnel system untuk two-tier streaming.
 Hanya accessible dari localhost - digunakan oleh ffmpeg dan chunked downloader.
 """
 import asyncio
+import logging
 import re
 import secrets
+import threading
 from typing import Dict, Optional, Callable, AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
 import httpx
+
+logger = logging.getLogger("ytdlp_stream")
 
 
 _CONTENT_RANGE_RE = re.compile(r"^bytes\s+(\d+)-(\d+)/(\d+|\*)$")
@@ -40,6 +44,22 @@ class InternalTunnelManager:
     def __init__(self):
         self._streams: Dict[str, InternalStreamInfo] = {}
         self._cleanup_interval = 300  # 5 minutes
+        self._cleanup_thread = threading.Thread(
+            target=self._background_cleanup,
+            daemon=True,
+            name="InternalTunnelCleanup",
+        )
+        self._cleanup_thread.start()
+
+    def _background_cleanup(self):
+        """Periodic cleanup untuk expired streams."""
+        import time
+        while True:
+            time.sleep(self._cleanup_interval)
+            try:
+                self.cleanup_expired()
+            except Exception as e:
+                logger.error(f"InternalTunnel cleanup error: {e}")
 
     def create_stream(
         self,
@@ -85,7 +105,7 @@ class InternalTunnelManager:
                 stream.last_refresh_chunk = stream.chunk_count
                 return True
         except Exception as e:
-            print(f"Failed to refresh URL: {e}")
+            logger.error(f"Failed to refresh URL for stream {stream_id}: {e}")
 
         return False
 

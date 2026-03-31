@@ -19,6 +19,7 @@ from core.error_mapping import (
     map_generic_exception,
     map_yt_dlp_exception,
 )
+from core.extraction_cache import extraction_cache
 from core.generators import slideshow_stream_generator
 from core.helpers import _enforce_rate_limit
 from core.redis_cache import download_cache
@@ -522,16 +523,14 @@ async def process_tiktok(
     url = validate_tiktok_url(url)
 
     try:
-        # Extract video info using ydl_manager for session integrity
-        # Use impersonate for TLS fingerprinting if available (helps with TikTok)
         impersonate = request.impersonate  # May be None if not provided
-        # yt-dlp extraction is blocking I/O; offload it to thread pool so
-        # concurrent TikTok fetch requests do not stall the event loop.
+        proxy = request.proxy
         info = await asyncio.to_thread(
-            ydl_manager.extract_info,
+            extraction_cache.get_or_extract,
             url,
-            request.proxy,
+            proxy,
             impersonate,
+            lambda: ydl_manager.extract_info(url, proxy, impersonate),
         )
 
         if not info:

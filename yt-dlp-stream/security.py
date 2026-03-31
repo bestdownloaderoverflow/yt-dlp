@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import logging
 import os
+import threading
 import time
 import secrets
 from typing import Optional, Dict, Tuple
@@ -119,8 +120,12 @@ def generate_stream_id() -> str:
 
 
 class RateLimiter:
-    """Simple in-memory rate limiter."""
-    
+    """
+    Distributed rate limiter menggunakan Redis fixed-window counter.
+    Fallback ke in-memory sliding window jika Redis tidak tersedia.
+    Konsisten antar multiple workers/processes.
+    """
+
     def __init__(self, max_requests: int = 100, window: int = 60):
         """
         Args:
@@ -129,46 +134,90 @@ class RateLimiter:
         """
         self.max_requests = max_requests
         self.window = window
-        self._requests: Dict[str, list] = {}
-    
+        # In-memory fallback
+        self._fallback_requests: Dict[str, list] = {}
+        self._fallback_lock = threading.Lock()
+        # Redis client (lazy init)
+        self._redis = None
+        self._redis_available = False
+        self._redis_check_lock = threading.Lock()
+        self._last_redis_check = 0.0
+        self._redis_check_interval = 30  # Re-check Redis availability every 30s
+
+    def _get_redis(self):
+        """Lazy-init Redis client, re-check availability periodically."""
+        now = time.time()
+        with self._redis_check_lock:
+            if now - self._last_redis_check < self._redis_check_interval and self._redis is not None:
+                return self._redis if self._redis_available else None
+            try:
+                import redis as _redis_lib
+                redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+                if self._redis is None:
+                    self._redis = _redis_lib.from_url(
+                        redis_url, decode_responses=True, socket_connect_timeout=1
+                    )
+                self._redis.ping()
+                self._redis_available = True
+            except Exception:
+                self._redis_available = False
+            self._last_redis_check = now
+        return self._redis if self._redis_available else None
+
     def is_allowed(self, client_id: str) -> bool:
         """Check if client is allowed to make request."""
+        r = self._get_redis()
+        if r is not None:
+            return self._is_allowed_redis(r, client_id)
+        return self._is_allowed_memory(client_id)
+
+    def _is_allowed_redis(self, r, client_id: str) -> bool:
+        """Redis fixed-window counter using atomic INCR + EXPIRE pipeline."""
+        try:
+            # Use a fixed window key per minute/window slot
+            slot = int(time.time() // self.window)
+            key = f"rl:{client_id}:{slot}"
+            pipe = r.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, self.window * 2)  # TTL double window as safety
+            results = pipe.execute()
+            count = results[0]
+            return count <= self.max_requests
+        except Exception:
+            # Redis error mid-request — fallback to in-memory
+            self._redis_available = False
+            return self._is_allowed_memory(client_id)
+
+    def _is_allowed_memory(self, client_id: str) -> bool:
+        """In-memory sliding window fallback."""
         now = time.time()
-        
-        # Cleanup old entries
-        if client_id in self._requests:
-            self._requests[client_id] = [
-                ts for ts in self._requests[client_id]
-                if now - ts < self.window
-            ]
-        
-        # Check rate
-        requests = self._requests.get(client_id, [])
-        if len(requests) >= self.max_requests:
-            return False
-        
-        # Record request
-        if client_id not in self._requests:
-            self._requests[client_id] = []
-        self._requests[client_id].append(now)
-        
+        with self._fallback_lock:
+            if client_id in self._fallback_requests:
+                self._fallback_requests[client_id] = [
+                    ts for ts in self._fallback_requests[client_id]
+                    if now - ts < self.window
+                ]
+            requests = self._fallback_requests.get(client_id, [])
+            if len(requests) >= self.max_requests:
+                return False
+            if client_id not in self._fallback_requests:
+                self._fallback_requests[client_id] = []
+            self._fallback_requests[client_id].append(now)
         return True
-    
+
     def cleanup_old_entries(self):
-        """Remove expired entries."""
+        """Remove expired in-memory fallback entries."""
         now = time.time()
-        to_remove = []
-        
-        for client_id, timestamps in self._requests.items():
-            # Filter expired
-            valid = [ts for ts in timestamps if now - ts < self.window]
-            if not valid:
-                to_remove.append(client_id)
-            else:
-                self._requests[client_id] = valid
-        
-        for client_id in to_remove:
-            del self._requests[client_id]
+        with self._fallback_lock:
+            to_remove = []
+            for client_id, timestamps in self._fallback_requests.items():
+                valid = [ts for ts in timestamps if now - ts < self.window]
+                if not valid:
+                    to_remove.append(client_id)
+                else:
+                    self._fallback_requests[client_id] = valid
+            for client_id in to_remove:
+                del self._fallback_requests[client_id]
 
 
 # Global rate limiter instance

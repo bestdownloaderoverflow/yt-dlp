@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse, RedirectResponse
 from urllib.parse import quote
 
 from core.redis_cache import download_cache
-from core.config import QUALITY_FORMATS
+from core.config import QUALITY_FORMATS, AUDIO_FORMAT, VIDEO_CHUNK_SIZE
 from core.delivery import plan_delivery
 from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import (
@@ -31,8 +31,6 @@ router = APIRouter()
 logger = logging.getLogger("ytdlp_stream")
 DIRECT_PROXY_PLATFORMS = {"twitter", "x"}
 
-AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
-VIDEO_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB
 VIDEO_MIME_BY_EXT = {
     "mp4": "video/mp4",
     "webm": "video/webm",

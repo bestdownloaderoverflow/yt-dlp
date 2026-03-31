@@ -8,6 +8,7 @@ import yt_dlp
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from core.error_mapping import map_generic_exception, map_yt_dlp_exception
+from core.extraction_cache import extraction_cache
 from core.redis_cache import download_cache
 from core.helpers import _enforce_rate_limit
 from ytdl_manager import ydl_manager
@@ -198,12 +199,12 @@ async def fetch(
     _enforce_rate_limit(request)
 
     try:
-        # Gunakan ydl_manager untuk session integrity (CookieJar persistent)
         info = await asyncio.to_thread(
-            ydl_manager.extract_info,
+            extraction_cache.get_or_extract,
             url,
             proxy,
             impersonate,
+            lambda: ydl_manager.extract_info(url, proxy, impersonate),
         )
 
         if not info:

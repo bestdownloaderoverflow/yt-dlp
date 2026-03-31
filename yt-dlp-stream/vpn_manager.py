@@ -132,10 +132,21 @@ class VPNManager:
 
 # Singleton instance
 _vpn_manager = None
+_vpn_manager_lock = asyncio.Lock()
 
 
-def get_vpn_manager() -> VPNManager:
-    """Get or create VPN manager singleton"""
+async def get_vpn_manager() -> VPNManager:
+    """Get or create VPN manager singleton (async-safe)."""
+    global _vpn_manager
+    if _vpn_manager is None:
+        async with _vpn_manager_lock:
+            if _vpn_manager is None:
+                _vpn_manager = VPNManager()
+    return _vpn_manager
+
+
+def get_vpn_manager_sync() -> VPNManager:
+    """Get or create VPN manager singleton (sync, non-concurrent contexts only)."""
     global _vpn_manager
     if _vpn_manager is None:
         _vpn_manager = VPNManager()

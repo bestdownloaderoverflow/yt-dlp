@@ -18,6 +18,17 @@ from yt_dlp.networking.impersonate import ImpersonateTarget
 logger = logging.getLogger("uvicorn.error")
 
 
+def _check_impersonate_available(target: str) -> bool:
+    """One-time check whether an impersonate target is supported by installed libraries."""
+    try:
+        t = ImpersonateTarget.from_str(target)
+        ydl = yt_dlp.YoutubeDL({"quiet": True, "impersonate": t})
+        ydl.close()
+        return True
+    except Exception:
+        return False
+
+
 class YoutubeDLManager:
     """
     Thread-safe singleton manager untuk YoutubeDL instance.
@@ -27,6 +38,9 @@ class YoutubeDLManager:
     """
     _instance = None
     _instance_lock = threading.Lock()
+    # Cache impersonate availability checks: target_str -> bool
+    _impersonate_cache: dict = {}
+    _impersonate_cache_lock = threading.Lock()
 
     def __new__(cls):
         if cls._instance is None:
@@ -42,6 +56,7 @@ class YoutubeDLManager:
         self._ydl_instances: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self._locks: Dict[str, threading.Lock] = {}
         self._global_lock = threading.Lock()
+        self._count_lock = threading.Lock()
         self._request_count = 0
         self._max_instances = 10  # LRU cache size
         self._cleanup_interval = 3600  # Cleanup every hour
@@ -58,24 +73,25 @@ class YoutubeDLManager:
         if proxy:
             opts["proxy"] = proxy
         if impersonate:
-            try:
+            target_str = impersonate if isinstance(impersonate, str) else str(impersonate)
+            with YoutubeDLManager._impersonate_cache_lock:
+                if target_str not in YoutubeDLManager._impersonate_cache:
+                    YoutubeDLManager._impersonate_cache[target_str] = _check_impersonate_available(target_str)
+                    if YoutubeDLManager._impersonate_cache[target_str]:
+                        logger.info(f"Impersonate target '{target_str}' is available")
+                    else:
+                        logger.warning(
+                            f"Impersonate target '{target_str}' not available. "
+                            f"Falling back to default. Install 'curl_cffi' for impersonate support."
+                        )
+                available = YoutubeDLManager._impersonate_cache[target_str]
+            if available:
                 impersonate_target = (
                     impersonate
                     if isinstance(impersonate, ImpersonateTarget)
-                    else ImpersonateTarget.from_str(impersonate)
+                    else ImpersonateTarget.from_str(target_str)
                 )
-                # Check if impersonate is available before setting
-                test_opts = {"quiet": True, "impersonate": impersonate_target}
-                test_ydl = yt_dlp.YoutubeDL(test_opts)
-                test_ydl.close()
                 opts["impersonate"] = impersonate_target
-                logger.info(f"Using impersonate target: {impersonate}")
-            except Exception as e:
-                logger.warning(
-                    f"Impersonate target '{impersonate}' not available: {e}. "
-                    f"Falling back to default. Install 'curl_cffi' for impersonate support."
-                )
-                # Continue without impersonate
 
         return yt_dlp.YoutubeDL(opts)
 
@@ -181,7 +197,8 @@ class YoutubeDLManager:
 
         # Lock per-instance, bukan global
         with self._locks[opts_key]:
-            self._request_count += 1
+            with self._count_lock:
+                self._request_count += 1
             try:
                 info = ydl.extract_info(url, download=False)
                 if isinstance(info, dict) and info.get("url"):

@@ -215,6 +215,7 @@ async def _chunked_video_generator(
     refresh_count = 0
     max_refreshes = 10
     max_retries_per_chunk = 3
+    last_logged_pct = -1
 
     safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
 
@@ -321,10 +322,11 @@ async def _chunked_video_generator(
 
                         chunk_success = True
 
-                        # Log progress setiap 10%
-                        progress = (read / total_size) * 100
-                        if int(progress) % 10 == 0:
-                            logger.info(f"Download progress: {progress:.1f}% ({read}/{total_size} bytes)")
+                        # Log progress setiap 10% (deduplicated)
+                        pct_bucket = (read * 10 // total_size) * 10
+                        if pct_bucket > last_logged_pct:
+                            last_logged_pct = pct_bucket
+                            logger.info(f"Download progress: {pct_bucket}% ({read}/{total_size} bytes)")
 
                 except httpx.HTTPStatusError as e:
                     chunk_retries += 1
@@ -476,14 +478,14 @@ async def _stream_chunked_merge(
             if cancel_event.is_set():
                 return
             if video_size:
-                asyncio.run(_download_chunked_to_queue(
+                _sync_download_chunked_to_queue(
                     video_url, video_headers, video_size,
                     VIDEO_CHUNK_SIZE, ydl_refresh_info_video, video_queue, cancel_event
-                ))
+                )
             else:
-                asyncio.run(_download_simple_to_queue(
+                _sync_download_simple_to_queue(
                     video_url, video_headers, video_queue, cancel_event
-                ))
+                )
         except Exception as e:
             if not cancel_event.is_set():
                 logger.error(f"Video download error: {e}")
@@ -498,14 +500,14 @@ async def _stream_chunked_merge(
             if cancel_event.is_set():
                 return
             if audio_size:
-                asyncio.run(_download_chunked_to_queue(
+                _sync_download_chunked_to_queue(
                     audio_url, audio_headers, audio_size,
                     VIDEO_CHUNK_SIZE, ydl_refresh_info_audio, audio_queue, cancel_event
-                ))
+                )
             else:
-                asyncio.run(_download_simple_to_queue(
+                _sync_download_simple_to_queue(
                     audio_url, audio_headers, audio_queue, cancel_event
-                ))
+                )
         except Exception as e:
             if not cancel_event.is_set():
                 logger.error(f"Audio download error: {e}")
@@ -618,7 +620,7 @@ async def _stream_chunked_merge(
 
     # Async generator: baca dari ffmpeg stdout dengan disconnect detection
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while True:
             # Check for client disconnect
             if await request.is_disconnected():
@@ -712,15 +714,15 @@ async def _stream_mp3_chunked(
                 return
             if audio_size:
                 # Use chunked download
-                asyncio.run(_download_chunked_to_queue(
+                _sync_download_chunked_to_queue(
                     audio_url, audio_headers, audio_size,
                     CHUNK_SIZE, ydl_refresh_info, download_queue, cancel_event
-                ))
+                )
             else:
                 # Simple download
-                asyncio.run(_download_simple_to_queue(
+                _sync_download_simple_to_queue(
                     audio_url, audio_headers, download_queue, cancel_event
-                ))
+                )
         except Exception as e:
             if not cancel_event.is_set():
                 download_error[0] = e
@@ -772,7 +774,7 @@ async def _stream_mp3_chunked(
 
     # Async generator: baca dari ffmpeg stdout dan yield ke client dengan disconnect detection
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         while True:
             # Check for client disconnect
             if await request.is_disconnected():
@@ -909,6 +911,60 @@ async def _download_simple_to_queue(url, headers, q, cancel_event=None):
             async for data in resp.aiter_bytes():
                 if cancel_event and cancel_event.is_set():
                     break
+                q.put(data)
+
+
+def _sync_download_chunked_to_queue(url, headers, size, chunk_size, refresh_info, q, cancel_event=None):
+    """
+    Sync version untuk dipakai dari daemon threads.
+    Menggunakan httpx.Client (sync) — tidak ada asyncio.run() cross-contamination.
+    Tidak support URL transplant (refresh) karena yt-dlp extract_info butuh async context;
+    untuk expired URL, chunk akan gagal dan error akan dipropagasi ke queue.
+    """
+    safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
+    safe_headers.setdefault("Accept-Encoding", "identity")
+    read = 0
+    max_retries = 3
+    with httpx.Client(follow_redirects=True, timeout=30) as client:
+        while read < size:
+            if cancel_event and cancel_event.is_set():
+                break
+            end = min(read + chunk_size - 1, size - 1)
+            range_headers = {**safe_headers, "Range": f"bytes={read}-{end}"}
+            retries = 0
+            while retries < max_retries:
+                if cancel_event and cancel_event.is_set():
+                    return
+                try:
+                    with client.stream("GET", url, headers=range_headers) as resp:
+                        if resp.status_code == 416:
+                            if read >= size:
+                                return
+                            raise RuntimeError(f"Range not satisfiable at {read}/{size}")
+                        resp.raise_for_status()
+                        for data in resp.iter_bytes():
+                            if cancel_event and cancel_event.is_set():
+                                return
+                            q.put(data)
+                            read += len(data)
+                    break
+                except (httpx.TimeoutException, httpx.NetworkError) as e:
+                    retries += 1
+                    if retries >= max_retries:
+                        raise
+                    import time as _time
+                    _time.sleep(min(2 ** retries, 10))
+
+
+def _sync_download_simple_to_queue(url, headers, q, cancel_event=None):
+    """Sync version of _download_simple_to_queue untuk daemon threads."""
+    safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
+    with httpx.Client(follow_redirects=True, timeout=60) as client:
+        with client.stream("GET", url, headers=safe_headers) as resp:
+            resp.raise_for_status()
+            for data in resp.iter_bytes():
+                if cancel_event and cancel_event.is_set():
+                    return
                 q.put(data)
 
 
@@ -1058,8 +1114,7 @@ async def slideshow_stream_generator(
 
     output_path = None
     try:
-        # Run slideshow generator in thread
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         output_path, _ = await loop.run_in_executor(
             None,
             slideshow_generator,

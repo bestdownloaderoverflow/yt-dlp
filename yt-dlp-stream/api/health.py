@@ -167,5 +167,5 @@ async def admin_cleanup(
 
     return {
         "status": "cleanup completed",
-        "remaining_processes": len(process_manager._processes),
+        "remaining_processes": process_manager.stats["total_processes"],
     }

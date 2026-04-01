@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,29 +21,37 @@ import (
 )
 
 const uptimeRestartInterval = 24 * time.Hour
+const (
+	videoChunkSizeBytes = 10 * 1024 * 1024
+	audioChunkSizeBytes = 8 * 1024 * 1024
+)
 
 type Config struct {
-	GatewayPort              int
-	WorkerCount              int
-	GluetunPassword          string
-	MaxRetries               int
-	HealthCheckTimeoutMs     int
-	HealthMonitorIntervalMs  int
-	HealthFailureThreshold   int
-	RateLimitCooldownSeconds int
-	RestartBackoffBase       int
-	RestartBackoffMax        int
-	RestartBudgetLimit       int
-	RestartBudgetWindow      int
-	RestartQuarantineSeconds int
-	RestartBackoffJitter     int
-	DegradedRetryAfter       int
-	GatewayRLWindowSeconds   int
-	GatewayRLFetchLimit      int
-	GatewayRLDownloadLimit   int
-	DrainTimeoutSeconds      int
-	DrainPollIntervalMs      int
-	RestartStabilizeSeconds  int
+	GatewayPort               int
+	WorkerCount               int
+	ExtractorIPCEnabled       bool
+	ExtractorPythonBin        string
+	ExtractorWorkerPath       string
+	ExtractorTimeoutMs        int
+	GluetunPassword           string
+	MaxRetries                int
+	HealthCheckTimeoutMs      int
+	HealthMonitorIntervalMs   int
+	HealthFailureThreshold    int
+	RateLimitCooldownSeconds  int
+	RestartBackoffBase        int
+	RestartBackoffMax         int
+	RestartBudgetLimit        int
+	RestartBudgetWindow       int
+	RestartQuarantineSeconds  int
+	RestartBackoffJitter      int
+	DegradedRetryAfter        int
+	GatewayRLWindowSeconds    int
+	GatewayRLFetchLimit       int
+	GatewayRLDownloadLimit    int
+	DrainTimeoutSeconds       int
+	DrainPollIntervalMs       int
+	RestartStabilizeSeconds   int
 	UnhealthyRestartThreshold int
 }
 
@@ -570,18 +579,18 @@ func (v *VPNRotator) healthCheck(workerID string) bool {
 		}
 	}
 
-	healthURL := fmt.Sprintf("%s/health", worker.APIURL())
-	resp, err := v.healthCl.Get(healthURL)
+	addr := fmt.Sprintf("%s:%d", worker.Host, worker.APIPort)
+	timeout := v.healthCl.Timeout
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	conn, err := net.DialTimeout("tcp", addr, timeout)
 	if err != nil {
-		log.Printf("[%s] API health check error: %v", workerID, err)
+		log.Printf("[%s] worker TCP health check error: %v", workerID, err)
 		return false
 	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode == http.StatusOK {
-		return true
-	}
-	return false
+	_ = conn.Close()
+	return true
 }
 
 type SlidingWindowRateLimiter struct {
@@ -653,6 +662,7 @@ type Gateway struct {
 	registry       *WorkerRegistry
 	rotator        *VPNRotator
 	client         *http.Client
+	extractor      *ExtractorPool
 	rlFetch        *SlidingWindowRateLimiter
 	rlDownload     *SlidingWindowRateLimiter
 	restartTasksMu sync.Mutex
@@ -670,7 +680,7 @@ func NewGateway(cfg Config) *Gateway {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	registry := NewWorkerRegistry(cfg)
-	return &Gateway{
+	gw := &Gateway{
 		cfg:          cfg,
 		registry:     registry,
 		rotator:      NewVPNRotator(registry, cfg),
@@ -680,6 +690,24 @@ func NewGateway(cfg Config) *Gateway {
 		restartTasks: map[string]context.CancelFunc{},
 		ctx:          ctx,
 		cancel:       cancel,
+	}
+	if cfg.ExtractorIPCEnabled {
+		workerPath := resolveWorkerScriptPath(cfg.ExtractorWorkerPath)
+		timeout := time.Duration(cfg.ExtractorTimeoutMs) * time.Millisecond
+		pool, err := NewExtractorPool(cfg.WorkerCount, cfg.ExtractorPythonBin, workerPath, timeout)
+		if err != nil {
+			log.Fatalf("failed to initialize extractor IPC pool: %v", err)
+		}
+		gw.extractor = pool
+		log.Printf("extractor IPC enabled: python=%s script=%s workers=%d", cfg.ExtractorPythonBin, workerPath, cfg.WorkerCount)
+	}
+	return gw
+}
+
+func (g *Gateway) Shutdown() {
+	g.cancel()
+	if g.extractor != nil {
+		g.extractor.Close()
 	}
 }
 
@@ -777,22 +805,696 @@ func (g *Gateway) handleFetch(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlFetch, "fetch") {
 		return
 	}
+	if g.extractor != nil {
+		g.handleFetchViaExtractorIPC(w, r)
+		return
+	}
 	g.proxyWithRetry(w, r, "/fetch", http.MethodGet, "", false)
+}
+
+func (g *Gateway) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
+	url := strings.TrimSpace(r.URL.Query().Get("url"))
+	if url == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Missing url query parameter"})
+		return
+	}
+	proxy := strings.TrimSpace(r.URL.Query().Get("proxy"))
+	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
+
+	preferred := extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount)
+	workerID := g.selectExtractorWorker(preferred, true)
+	if workerID == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+		return
+	}
+
+	result, rpcErr, err := g.extractor.Fetch(workerID, url, proxy, impersonate)
+	if err != nil {
+		log.Printf("[extractor:%s] fetch ipc error: %v", workerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
+		return
+	}
+	if rpcErr != nil {
+		status := rpcErr.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{
+			"error":  rpcErr.Code,
+			"detail": rpcErr.Message,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (g *Gateway) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlDownload, "download") {
 		return
 	}
-	g.proxyWithRetry(w, r, "/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), false)
+	if g.extractor != nil {
+		g.handleDownloadViaExtractorIPC(w, r)
+		return
+	}
+	// Download keys are worker-affine (`wX::...`), so keep routing strict to owner.
+	g.proxyWithRetry(w, r, "/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), true)
 }
 
 func (g *Gateway) handleInfo(w http.ResponseWriter, r *http.Request) {
+	if g.extractor != nil {
+		g.handleInfoViaExtractorIPC(w, r)
+		return
+	}
 	g.proxyWithRetry(w, r, "/info", http.MethodGet, "", false)
 }
 
+func (g *Gateway) handleInfoViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
+	url := strings.TrimSpace(r.URL.Query().Get("url"))
+	if url == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Missing url query parameter"})
+		return
+	}
+	proxy := strings.TrimSpace(r.URL.Query().Get("proxy"))
+	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
+
+	preferred := extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount)
+	workerID := g.selectExtractorWorker(preferred, false)
+	if workerID == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+		return
+	}
+
+	result, rpcErr, err := g.extractor.ExtractInfo(workerID, url, proxy, impersonate)
+	if err != nil {
+		log.Printf("[extractor:%s] ipc error: %v", workerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
+		return
+	}
+	if rpcErr != nil {
+		status := rpcErr.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{
+			"error":  rpcErr.Code,
+			"detail": rpcErr.Message,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (g *Gateway) selectExtractorWorker(preferred string, requireHealthy bool) string {
+	if g.extractor == nil {
+		return ""
+	}
+	if preferred != "" && g.extractor.HasWorker(preferred) {
+		if !requireHealthy {
+			return preferred
+		}
+		if pw := g.registry.GetWorker(preferred); g.isWorkerAcceptingRequests(pw) {
+			return preferred
+		}
+	}
+	if requireHealthy {
+		healthy := g.registry.GetHealthyWorkers(nil)
+		candidates := make([]string, 0, len(healthy))
+		for _, worker := range healthy {
+			if g.extractor.HasWorker(worker.ID) {
+				candidates = append(candidates, worker.ID)
+			}
+		}
+		if len(candidates) > 0 {
+			return candidates[rand.Intn(len(candidates))]
+		}
+	}
+	return g.extractor.PickWorker("")
+}
+
 func (g *Gateway) handleStream(w http.ResponseWriter, r *http.Request) {
+	if g.extractor != nil {
+		g.handleStreamViaExtractorIPC(w, r)
+		return
+	}
 	g.proxyWithRotation(w, r, r.URL.Path)
+}
+
+func extractKeyFromDownloadLink(link string) string {
+	s := strings.TrimSpace(link)
+	if s == "" {
+		return ""
+	}
+	const prefix = "/download?key="
+	if strings.HasPrefix(s, prefix) {
+		return strings.TrimSpace(strings.TrimPrefix(s, prefix))
+	}
+	if i := strings.Index(s, "key="); i >= 0 {
+		return strings.TrimSpace(s[i+4:])
+	}
+	return s
+}
+
+func qualityLabel(raw string) string {
+	q := strings.TrimSpace(strings.ToLower(raw))
+	if q == "" {
+		return "1080p"
+	}
+	if strings.HasSuffix(q, "p") {
+		return q
+	}
+	if _, err := strconv.Atoi(q); err == nil {
+		return q + "p"
+	}
+	return q
+}
+
+func pickStreamDownloadKey(fetchResult map[string]any, path, quality string) string {
+	links, _ := fetchResult["download_links"].(map[string]any)
+	if len(links) == 0 {
+		return ""
+	}
+	if path == "/stream/mp3" || path == "/stream/mp3-chunked" || path == "/stream/m4a" {
+		if mp3, _ := links["mp3"].(string); mp3 != "" {
+			return extractKeyFromDownloadLink(mp3)
+		}
+		return ""
+	}
+
+	videoAny, _ := links["video"].(map[string]any)
+	if len(videoAny) == 0 {
+		return ""
+	}
+	target := qualityLabel(quality)
+	if linkAny, ok := videoAny[target]; ok {
+		if link, _ := linkAny.(string); link != "" {
+			return extractKeyFromDownloadLink(link)
+		}
+	}
+	// Fallback to commonly available qualities.
+	for _, q := range []string{"1080p", "720p", "480p", "360p", "best"} {
+		if linkAny, ok := videoAny[q]; ok {
+			if link, _ := linkAny.(string); link != "" {
+				return extractKeyFromDownloadLink(link)
+			}
+		}
+	}
+	for _, v := range videoAny {
+		if link, _ := v.(string); link != "" {
+			return extractKeyFromDownloadLink(link)
+		}
+	}
+	return ""
+}
+
+func ffmpegHeaderString(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for k, v := range headers {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		b.WriteString(k)
+		b.WriteString(": ")
+		b.WriteString(v)
+		b.WriteString("\r\n")
+	}
+	return b.String()
+}
+
+func (g *Gateway) streamWithFFmpegFromPlan(w http.ResponseWriter, r *http.Request, plan map[string]any) bool {
+	directURL, _ := plan["direct_url"].(string)
+	if strings.TrimSpace(directURL) == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
+		return false
+	}
+	requestHeaders := anyMapToStringMap(plan["request_headers"])
+	audioURL, _ := plan["ffmpeg_audio_url"].(string)
+	audioHeaders := anyMapToStringMap(plan["ffmpeg_audio_headers"])
+	responseHeaders := anyMapToStringMap(plan["response_headers"])
+	mediaType, _ := plan["media_type"].(string)
+	audioOnly, _ := plan["ffmpeg_audio_only"].(bool)
+	mergeAV, _ := plan["ffmpeg_merge"].(bool)
+
+	ffmpegArgs := []string{"-hide_banner", "-loglevel", "error"}
+	if hdr := ffmpegHeaderString(requestHeaders); hdr != "" {
+		ffmpegArgs = append(ffmpegArgs, "-headers", hdr)
+	}
+	ffmpegArgs = append(ffmpegArgs, "-i", directURL)
+	if mergeAV && strings.TrimSpace(audioURL) != "" {
+		if hdr := ffmpegHeaderString(audioHeaders); hdr != "" {
+			ffmpegArgs = append(ffmpegArgs, "-headers", hdr)
+		}
+		ffmpegArgs = append(ffmpegArgs, "-i", audioURL)
+	}
+	if audioOnly {
+		ffmpegArgs = append(ffmpegArgs, "-vn", "-acodec", "libmp3lame", "-b:a", "192k", "-f", "mp3", "pipe:1")
+		if mediaType == "" {
+			mediaType = "audio/mpeg"
+		}
+	} else if mergeAV && strings.TrimSpace(audioURL) != "" {
+		ffmpegArgs = append(
+			ffmpegArgs,
+			"-map", "0:v:0",
+			"-map", "1:a:0",
+			"-c:v", "copy",
+			"-c:a", "aac",
+			"-movflags", "frag_keyframe+empty_moov+faststart",
+			"-f", "mp4",
+			"pipe:1",
+		)
+		if mediaType == "" {
+			mediaType = "video/mp4"
+		}
+	} else {
+		ffmpegArgs = append(ffmpegArgs, "-c", "copy", "-movflags", "frag_keyframe+empty_moov+faststart", "-f", "mp4", "pipe:1")
+		if mediaType == "" {
+			mediaType = "video/mp4"
+		}
+	}
+
+	cmd := exec.CommandContext(r.Context(), "ffmpeg", ffmpegArgs...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to create ffmpeg pipe", "detail": err.Error()})
+		return false
+	}
+	var ffmpegErr bytes.Buffer
+	cmd.Stderr = &ffmpegErr
+
+	if err := cmd.Start(); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to start ffmpeg", "detail": err.Error()})
+		return false
+	}
+
+	for k, v := range responseHeaders {
+		w.Header().Set(k, v)
+	}
+	if w.Header().Get("Content-Type") == "" && mediaType != "" {
+		w.Header().Set("Content-Type", mediaType)
+	}
+	w.WriteHeader(http.StatusOK)
+	_, copyErr := io.Copy(w, stdout)
+	waitErr := cmd.Wait()
+
+	if copyErr != nil && !isClientAbortError(copyErr) {
+		log.Printf("ffmpeg stream copy error: %v", copyErr)
+	}
+	if waitErr != nil && r.Context().Err() == nil && !isClientAbortError(waitErr) {
+		log.Printf("ffmpeg stream error: %v, out=%s", waitErr, strings.TrimSpace(ffmpegErr.String()))
+	}
+	return true
+}
+
+func (g *Gateway) streamDirectPlanWithRefresh(
+	w http.ResponseWriter,
+	r *http.Request,
+	plan map[string]any,
+	onRefresh func() (map[string]any, *ipcError, error),
+) bool {
+	directURL, _ := plan["direct_url"].(string)
+	if directURL == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
+		return false
+	}
+	requestHeaders := anyMapToStringMap(plan["request_headers"])
+	responseHeaders := anyMapToStringMap(plan["response_headers"])
+	mediaType, _ := plan["media_type"].(string)
+	canRefresh, _ := plan["can_refresh"].(bool)
+
+	maxAttempts := 1
+	if canRefresh && onRefresh != nil {
+		maxAttempts = 2
+	}
+
+	currentURL := directURL
+	currentReqHeaders := requestHeaders
+	currentRespHeaders := responseHeaders
+	currentMediaType := mediaType
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to create upstream request", "detail": err.Error()})
+			return false
+		}
+		for k, v := range currentReqHeaders {
+			req.Header.Set(k, v)
+		}
+		// Preserve range semantics for direct media.
+		if req.Header.Get("Range") == "" {
+			if v := r.Header.Get("Range"); v != "" {
+				req.Header.Set("Range", v)
+			}
+		}
+		if req.Header.Get("If-Range") == "" {
+			if v := r.Header.Get("If-Range"); v != "" {
+				req.Header.Set("If-Range", v)
+			}
+		}
+
+		resp, err := g.client.Do(req)
+		if err != nil {
+			if r.Context().Err() != nil || isClientAbortError(err) {
+				return true
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Upstream request failed", "detail": err.Error()})
+			return false
+		}
+
+		if resp.StatusCode == http.StatusForbidden && attempt == 0 && canRefresh && onRefresh != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+
+			refreshedPlan, rpcErr, err := onRefresh()
+			if err != nil || rpcErr != nil {
+				break
+			}
+			if newURL, _ := refreshedPlan["direct_url"].(string); newURL != "" {
+				currentURL = newURL
+			}
+			currentReqHeaders = anyMapToStringMap(refreshedPlan["request_headers"])
+			currentRespHeaders = anyMapToStringMap(refreshedPlan["response_headers"])
+			if mt, _ := refreshedPlan["media_type"].(string); mt != "" {
+				currentMediaType = mt
+			}
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			copyHeader(w.Header(), resp.Header, map[string]bool{"transfer-encoding": true})
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			_ = resp.Body.Close()
+			return false
+		}
+
+		for k, v := range currentRespHeaders {
+			w.Header().Set(k, v)
+		}
+		if w.Header().Get("Content-Type") == "" {
+			if currentMediaType != "" {
+				w.Header().Set("Content-Type", currentMediaType)
+			} else if ct := resp.Header.Get("Content-Type"); ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
+		}
+		if cr := resp.Header.Get("Content-Range"); cr != "" {
+			w.Header().Set("Content-Range", cr)
+		}
+		if ar := resp.Header.Get("Accept-Ranges"); ar != "" {
+			w.Header().Set("Accept-Ranges", ar)
+		}
+		if cl := resp.Header.Get("Content-Length"); cl != "" && w.Header().Get("Content-Length") == "" {
+			w.Header().Set("Content-Length", cl)
+		}
+
+		w.WriteHeader(resp.StatusCode)
+		_, copyErr := io.Copy(w, resp.Body)
+		_ = resp.Body.Close()
+		if copyErr != nil && !isClientAbortError(copyErr) {
+			log.Printf("download stream copy error: %v", copyErr)
+		}
+		return true
+	}
+
+	w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"error":  "Service Unavailable",
+		"detail": "Download failed",
+	})
+	return false
+}
+
+func parsePositiveInt64(v string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+func (g *Gateway) streamChunkedRangeWithRefresh(
+	w http.ResponseWriter,
+	r *http.Request,
+	plan map[string]any,
+	onRefresh func() (map[string]any, *ipcError, error),
+	chunkSize int64,
+) bool {
+	directURL, _ := plan["direct_url"].(string)
+	if strings.TrimSpace(directURL) == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
+		return false
+	}
+	requestHeaders := anyMapToStringMap(plan["request_headers"])
+	responseHeaders := anyMapToStringMap(plan["response_headers"])
+	mediaType, _ := plan["media_type"].(string)
+	canRefresh, _ := plan["can_refresh"].(bool)
+	if chunkSize <= 0 {
+		chunkSize = videoChunkSizeBytes
+	}
+
+	totalSize := parsePositiveInt64(responseHeaders["Content-Length"])
+	if totalSize <= 0 {
+		// Without exact size, keep compatibility by falling back to direct stream.
+		return g.streamDirectPlanWithRefresh(w, r, plan, onRefresh)
+	}
+
+	for k, v := range responseHeaders {
+		kl := strings.ToLower(k)
+		if kl == "content-length" || kl == "content-range" {
+			continue
+		}
+		w.Header().Set(k, v)
+	}
+	if w.Header().Get("Content-Type") == "" && mediaType != "" {
+		w.Header().Set("Content-Type", mediaType)
+	}
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
+	w.WriteHeader(http.StatusOK)
+
+	currentURL := directURL
+	currentReqHeaders := requestHeaders
+	read := int64(0)
+
+	for read < totalSize {
+		end := read + chunkSize - 1
+		if end >= totalSize {
+			end = totalSize - 1
+		}
+
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
+		if err != nil {
+			return false
+		}
+		for k, v := range currentReqHeaders {
+			req.Header.Set(k, v)
+		}
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
+
+		resp, err := g.client.Do(req)
+		if err != nil {
+			if r.Context().Err() != nil || isClientAbortError(err) {
+				return true
+			}
+			return false
+		}
+
+		if resp.StatusCode == http.StatusForbidden && canRefresh && onRefresh != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			refreshedPlan, rpcErr, refreshErr := onRefresh()
+			if refreshErr != nil || rpcErr != nil {
+				return false
+			}
+			if newURL, _ := refreshedPlan["direct_url"].(string); strings.TrimSpace(newURL) != "" {
+				currentURL = newURL
+			}
+			currentReqHeaders = anyMapToStringMap(refreshedPlan["request_headers"])
+			continue
+		}
+
+		if resp.StatusCode != http.StatusPartialContent && !(resp.StatusCode == http.StatusOK && read == 0) {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			return false
+		}
+
+		n, copyErr := io.Copy(w, resp.Body)
+		_ = resp.Body.Close()
+		if copyErr != nil {
+			if isClientAbortError(copyErr) || r.Context().Err() != nil {
+				return true
+			}
+			return false
+		}
+		read += n
+
+		// Some servers ignore range and stream whole body on first request.
+		if resp.StatusCode == http.StatusOK {
+			return true
+		}
+		if n <= 0 {
+			break
+		}
+	}
+	return true
+}
+
+func (g *Gateway) handleDownloadViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Missing key query parameter"})
+		return
+	}
+	download := parseBoolQuery(r.URL.Query().Get("download"), true)
+	preferred := extractWorkerID(key, g.cfg.WorkerCount)
+	workerID := g.selectExtractorWorker(preferred, false)
+	if workerID == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+		return
+	}
+
+	plan, rpcErr, err := g.extractor.DownloadPrepare(workerID, key, download)
+	if err != nil {
+		log.Printf("[extractor:%s] download prepare ipc error: %v", workerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
+		return
+	}
+	if rpcErr != nil {
+		status := rpcErr.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{"error": rpcErr.Code, "detail": rpcErr.Message})
+		return
+	}
+
+	if needsFFmpeg, _ := plan["needs_ffmpeg"].(bool); needsFFmpeg {
+		_ = g.streamWithFFmpegFromPlan(w, r, plan)
+		return
+	}
+	_ = g.streamDirectPlanWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
+		return g.extractor.DownloadRefresh(workerID, key, download)
+	})
+}
+
+func (g *Gateway) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
+	url := strings.TrimSpace(r.URL.Query().Get("url"))
+	if url == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Missing url query parameter"})
+		return
+	}
+	proxy := strings.TrimSpace(r.URL.Query().Get("proxy"))
+	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
+	download := parseBoolQuery(r.URL.Query().Get("download"), false)
+
+	workerID := g.selectExtractorWorker("", true)
+	if workerID == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+		return
+	}
+
+	// m4a has special parity path: resolve bestaudio m4a directly (no mp3 transcode).
+	if r.URL.Path == "/stream/m4a" {
+		resolved, rpcErr, err := g.extractor.ResolveFormats(workerID, url, "bestaudio[ext=m4a]/bestaudio", proxy, impersonate)
+		if err != nil {
+			log.Printf("[extractor:%s] stream m4a resolve ipc error: %v", workerID, err)
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
+			return
+		}
+		if rpcErr != nil {
+			status := rpcErr.Status
+			if status < 400 || status > 599 {
+				status = http.StatusBadRequest
+			}
+			writeJSON(w, status, map[string]string{"error": rpcErr.Code, "detail": rpcErr.Message})
+			return
+		}
+		formatsAny, _ := resolved["formats"].([]any)
+		if len(formatsAny) == 0 {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "No resolved audio formats"})
+			return
+		}
+		fmt0, _ := formatsAny[0].(map[string]any)
+		directURL, _ := fmt0["url"].(string)
+		if strings.TrimSpace(directURL) == "" {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid resolved audio URL"})
+			return
+		}
+		reqHeaders := anyMapToStringMap(fmt0["http_headers"])
+		plan := map[string]any{
+			"direct_url":       directURL,
+			"request_headers":  reqHeaders,
+			"response_headers": map[string]any{"X-Accel-Buffering": "no"},
+			"media_type":       "audio/mp4",
+			"can_refresh":      false,
+		}
+		if download {
+			plan["response_headers"] = map[string]any{
+				"Content-Disposition": "attachment; filename=\"audio.m4a\"",
+				"X-Accel-Buffering":   "no",
+			}
+		}
+		_ = g.streamDirectPlanWithRefresh(w, r, plan, nil)
+		return
+	}
+
+	fetchResult, rpcErr, err := g.extractor.Fetch(workerID, url, proxy, impersonate)
+	if err != nil {
+		log.Printf("[extractor:%s] stream fetch ipc error: %v", workerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
+		return
+	}
+	if rpcErr != nil {
+		status := rpcErr.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{"error": rpcErr.Code, "detail": rpcErr.Message})
+		return
+	}
+
+	key := pickStreamDownloadKey(fetchResult, r.URL.Path, r.URL.Query().Get("quality"))
+	if key == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Unable to resolve stream key from fetch result"})
+		return
+	}
+
+	plan, rpcErr, err := g.extractor.DownloadPrepare(workerID, key, download)
+	if err != nil {
+		log.Printf("[extractor:%s] stream download prepare ipc error: %v", workerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
+		return
+	}
+	if rpcErr != nil {
+		status := rpcErr.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{"error": rpcErr.Code, "detail": rpcErr.Message})
+		return
+	}
+
+	if needsFFmpeg, _ := plan["needs_ffmpeg"].(bool); needsFFmpeg {
+		_ = g.streamWithFFmpegFromPlan(w, r, plan)
+		return
+	}
+	if r.URL.Path == "/stream/video-chunked" || r.URL.Path == "/stream/mp3-chunked" {
+		chunkSize := int64(videoChunkSizeBytes)
+		if r.URL.Path == "/stream/mp3-chunked" {
+			chunkSize = audioChunkSizeBytes
+		}
+		_ = g.streamChunkedRangeWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
+			return g.extractor.DownloadRefresh(workerID, key, download)
+		}, chunkSize)
+		return
+	}
+	_ = g.streamDirectPlanWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
+		return g.extractor.DownloadRefresh(workerID, key, download)
+	})
 }
 
 func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
@@ -800,11 +1502,434 @@ func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
 		return
 	}
+	if g.extractor != nil {
+		g.handleTikTokViaExtractorIPC(w, r)
+		return
+	}
 	g.proxyWithRetry(w, r, "/tiktok", http.MethodPost, "", false)
 }
 
+type tiktokIPCRequest struct {
+	URL         string `json:"url"`
+	Proxy       string `json:"proxy"`
+	Impersonate string `json:"impersonate"`
+}
+
+func (g *Gateway) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
+	var payload tiktokIPCRequest
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON body"})
+		return
+	}
+	payload.URL = strings.TrimSpace(payload.URL)
+	payload.Proxy = strings.TrimSpace(payload.Proxy)
+	payload.Impersonate = strings.TrimSpace(payload.Impersonate)
+	if payload.URL == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "URL is required"})
+		return
+	}
+
+	workerID := g.selectExtractorWorker("", true)
+	if workerID == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+		return
+	}
+
+	result, rpcErr, err := g.extractor.TikTok(workerID, payload.URL, payload.Proxy, payload.Impersonate)
+	if err != nil {
+		log.Printf("[extractor:%s] tiktok ipc error: %v", workerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
+		return
+	}
+	if rpcErr != nil {
+		status := rpcErr.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{
+			"error":  rpcErr.Code,
+			"detail": rpcErr.Message,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (g *Gateway) handleTikTokDownload(w http.ResponseWriter, r *http.Request) {
-	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), false)
+	if g.extractor != nil {
+		g.handleTikTokDownloadViaExtractorIPC(w, r)
+		return
+	}
+	// Download keys are worker-affine (`wX::...`), so keep routing strict to owner.
+	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), true)
+}
+
+func parseBoolQuery(raw string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(raw))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func anyMapToStringMap(v any) map[string]string {
+	out := map[string]string{}
+	obj, ok := v.(map[string]any)
+	if !ok {
+		return out
+	}
+	for k, val := range obj {
+		if s, ok := val.(string); ok {
+			out[k] = s
+		}
+	}
+	return out
+}
+
+func anyToStringSlice(v any) []string {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func anyToInt(v any, fallback int) int {
+	switch t := v.(type) {
+	case float64:
+		return int(t)
+	case int:
+		return t
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(t))
+		if err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
+	key := strings.TrimSpace(r.URL.Query().Get("key"))
+	if key == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Missing key query parameter"})
+		return
+	}
+	download := parseBoolQuery(r.URL.Query().Get("download"), true)
+	preferred := extractWorkerID(key, g.cfg.WorkerCount)
+	workerID := g.selectExtractorWorker(preferred, false)
+	if workerID == "" {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+		return
+	}
+
+	plan, rpcErr, err := g.extractor.TikTokDownloadPrepare(workerID, key, download)
+	if err != nil {
+		log.Printf("[extractor:%s] tiktok download prepare ipc error: %v", workerID, err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
+		return
+	}
+	if rpcErr != nil {
+		status := rpcErr.Status
+		if status < 400 || status > 599 {
+			status = http.StatusBadRequest
+		}
+		writeJSON(w, status, map[string]string{
+			"error":  rpcErr.Code,
+			"detail": rpcErr.Message,
+		})
+		return
+	}
+
+	if fallback, _ := plan["fallback_proxy"].(bool); fallback {
+		// Keep slideshow generation on existing Python HTTP path for now.
+		g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, preferred, true)
+		return
+	}
+	if contentType, _ := plan["content_type"].(string); contentType == "slideshow" {
+		g.streamTikTokSlideshowFromPlan(w, r, plan)
+		return
+	}
+
+	directURL, _ := plan["direct_url"].(string)
+	if directURL == "" {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
+		return
+	}
+	requestHeaders := anyMapToStringMap(plan["request_headers"])
+	responseHeaders := anyMapToStringMap(plan["response_headers"])
+	mediaType, _ := plan["media_type"].(string)
+	canRefresh, _ := plan["can_refresh"].(bool)
+
+	maxAttempts := 1
+	if canRefresh {
+		maxAttempts = 2
+	}
+
+	currentURL := directURL
+	currentReqHeaders := requestHeaders
+	currentRespHeaders := responseHeaders
+	currentMediaType := mediaType
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
+		if err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to create upstream request", "detail": err.Error()})
+			return
+		}
+		for k, v := range currentReqHeaders {
+			req.Header.Set(k, v)
+		}
+
+		resp, err := g.client.Do(req)
+		if err != nil {
+			if r.Context().Err() != nil || isClientAbortError(err) {
+				return
+			}
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Upstream request failed", "detail": err.Error()})
+			return
+		}
+
+		if resp.StatusCode == http.StatusForbidden && attempt == 0 && canRefresh {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+
+			refreshedPlan, rpcErr, err := g.extractor.TikTokDownloadRefresh(workerID, key, download)
+			if err != nil {
+				log.Printf("[extractor:%s] tiktok download refresh ipc error: %v", workerID, err)
+				break
+			}
+			if rpcErr != nil {
+				break
+			}
+			if fallback, _ := refreshedPlan["fallback_proxy"].(bool); fallback {
+				g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, preferred, true)
+				return
+			}
+			if newURL, _ := refreshedPlan["direct_url"].(string); newURL != "" {
+				currentURL = newURL
+			}
+			currentReqHeaders = anyMapToStringMap(refreshedPlan["request_headers"])
+			currentRespHeaders = anyMapToStringMap(refreshedPlan["response_headers"])
+			if mt, _ := refreshedPlan["media_type"].(string); mt != "" {
+				currentMediaType = mt
+			}
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			copyHeader(w.Header(), resp.Header, map[string]bool{"transfer-encoding": true})
+			w.WriteHeader(resp.StatusCode)
+			_, _ = io.Copy(w, resp.Body)
+			_ = resp.Body.Close()
+			return
+		}
+
+		for k, v := range currentRespHeaders {
+			w.Header().Set(k, v)
+		}
+		if w.Header().Get("Content-Type") == "" {
+			if currentMediaType != "" {
+				w.Header().Set("Content-Type", currentMediaType)
+			} else if ct := resp.Header.Get("Content-Type"); ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
+		}
+		// Preserve range semantics when upstream supports it.
+		if cr := resp.Header.Get("Content-Range"); cr != "" {
+			w.Header().Set("Content-Range", cr)
+		}
+		if ar := resp.Header.Get("Accept-Ranges"); ar != "" {
+			w.Header().Set("Accept-Ranges", ar)
+		}
+		if cl := resp.Header.Get("Content-Length"); cl != "" && w.Header().Get("Content-Length") == "" {
+			w.Header().Set("Content-Length", cl)
+		}
+
+		w.WriteHeader(resp.StatusCode)
+		_, copyErr := io.Copy(w, resp.Body)
+		_ = resp.Body.Close()
+		if copyErr != nil && !isClientAbortError(copyErr) {
+			log.Printf("[extractor:%s] tiktok download stream copy error: %v", workerID, copyErr)
+		}
+		return
+	}
+
+	w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"error":  "Service Unavailable",
+		"detail": "TikTok download failed",
+	})
+}
+
+func (g *Gateway) downloadToFile(ctx context.Context, srcURL string, headers map[string]string, dstPath string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srcURL, nil)
+	if err != nil {
+		return err
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upstream %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	f, err := os.Create(dstPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = io.Copy(f, resp.Body)
+	return err
+}
+
+func (g *Gateway) streamTikTokSlideshowFromPlan(w http.ResponseWriter, r *http.Request, plan map[string]any) {
+	photoURLs := anyToStringSlice(plan["photo_urls"])
+	audioURL, _ := plan["audio_url"].(string)
+	if len(photoURLs) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No photos available for slideshow"})
+		return
+	}
+	durationPerImage := anyToInt(plan["duration_per_image"], 4)
+	if durationPerImage < 1 {
+		durationPerImage = 4
+	}
+	responseHeaders := anyMapToStringMap(plan["response_headers"])
+	mediaType, _ := plan["media_type"].(string)
+	if mediaType == "" {
+		mediaType = "video/mp4"
+	}
+
+	tempDir, err := os.MkdirTemp("", "tiktok_slideshow_")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create temp dir", "detail": err.Error()})
+		return
+	}
+	defer os.RemoveAll(tempDir)
+
+	imagePaths := make([]string, 0, len(photoURLs))
+	for i, u := range photoURLs {
+		dst := filepath.Join(tempDir, fmt.Sprintf("image_%d.jpg", i))
+		if err := g.downloadToFile(r.Context(), u, map[string]string{}, dst); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to download slideshow image", "detail": err.Error()})
+			return
+		}
+		imagePaths = append(imagePaths, dst)
+	}
+
+	audioPath := ""
+	if strings.TrimSpace(audioURL) != "" {
+		audioPath = filepath.Join(tempDir, "audio.mp3")
+		if err := g.downloadToFile(r.Context(), audioURL, map[string]string{}, audioPath); err != nil {
+			log.Printf("slideshow audio download failed, continuing without audio: %v", err)
+			audioPath = ""
+		}
+	}
+
+	outputPath := filepath.Join(tempDir, "slideshow.mp4")
+	listPath := filepath.Join(tempDir, "slideshow_images.txt")
+	listFile, err := os.Create(listPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create slideshow list file", "detail": err.Error()})
+		return
+	}
+	for _, img := range imagePaths {
+		_, _ = fmt.Fprintf(listFile, "file '%s'\n", img)
+		_, _ = fmt.Fprintf(listFile, "duration %d\n", durationPerImage)
+	}
+	_, _ = fmt.Fprintf(listFile, "file '%s'\n", imagePaths[len(imagePaths)-1])
+	_ = listFile.Close()
+
+	ffmpegArgs := []string{
+		"-y", "-hide_banner", "-loglevel", "error",
+		"-f", "concat", "-safe", "0", "-i", listPath,
+	}
+	if audioPath != "" {
+		ffmpegArgs = append(ffmpegArgs, "-stream_loop", "-1", "-i", audioPath)
+	}
+
+	filterParts := []string{
+		"[0:v]scale=w=720:h=1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=24[vout]",
+	}
+
+	if audioPath != "" {
+		videoDuration := len(imagePaths) * durationPerImage
+		filterParts = append(filterParts, fmt.Sprintf("[1:a]atrim=0:%d,asetpts=PTS-STARTPTS[aout]", videoDuration))
+		ffmpegArgs = append(ffmpegArgs,
+			"-filter_complex", strings.Join(filterParts, ";"),
+			"-map", "[vout]",
+			"-map", "[aout]",
+			"-pix_fmt", "yuv420p",
+			"-fps_mode", "cfr",
+			"-c:v", "libx264",
+			"-preset", "veryfast",
+			"-crf", "28",
+			"-threads", "1",
+			"-c:a", "aac",
+			"-b:a", "128k",
+			outputPath,
+		)
+	} else {
+		ffmpegArgs = append(ffmpegArgs,
+			"-filter_complex", strings.Join(filterParts, ";"),
+			"-map", "[vout]",
+			"-pix_fmt", "yuv420p",
+			"-fps_mode", "cfr",
+			"-c:v", "libx264",
+			"-preset", "veryfast",
+			"-crf", "28",
+			"-threads", "1",
+			outputPath,
+		)
+	}
+
+	cmd := exec.CommandContext(r.Context(), "ffmpeg", ffmpegArgs...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error":  "Failed to render slideshow",
+			"detail": strings.TrimSpace(string(out)),
+		})
+		log.Printf("slideshow ffmpeg error: %v, out=%s", err, strings.TrimSpace(string(out)))
+		return
+	}
+
+	for k, v := range responseHeaders {
+		w.Header().Set(k, v)
+	}
+	w.Header().Set("Content-Type", mediaType)
+
+	f, err := os.Open(outputPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to open slideshow output", "detail": err.Error()})
+		return
+	}
+	defer f.Close()
+	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+	}
+	w.WriteHeader(http.StatusOK)
+	_, copyErr := io.Copy(w, f)
+	if copyErr != nil && !isClientAbortError(copyErr) {
+		log.Printf("slideshow stream copy error: %v", copyErr)
+	}
 }
 
 func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -1448,29 +2573,48 @@ func envInt(key string, fallback int) int {
 	return n
 }
 
+func envBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return fallback
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
 func loadConfig() Config {
 	return Config{
-		GatewayPort:              envInt("GATEWAY_PORT", 9111),
-		WorkerCount:              envInt("WORKER_COUNT", 3),
-		GluetunPassword:          getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
-		MaxRetries:               envInt("MAX_RETRIES", 3),
-		HealthCheckTimeoutMs:     envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
-		HealthMonitorIntervalMs:  envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
-		HealthFailureThreshold:   envInt("HEALTH_FAILURE_THRESHOLD", 3),
-		RateLimitCooldownSeconds: envInt("RATE_LIMIT_COOLDOWN", 300),
-		RestartBackoffBase:       envInt("RESTART_BACKOFF_BASE", 30),
-		RestartBackoffMax:        envInt("RESTART_BACKOFF_MAX", 300),
-		RestartBudgetLimit:       envInt("RESTART_BUDGET_LIMIT", 3),
-		RestartBudgetWindow:      envInt("RESTART_BUDGET_WINDOW", 600),
-		RestartQuarantineSeconds: envInt("RESTART_QUARANTINE_SECONDS", 600),
-		RestartBackoffJitter:     envInt("RESTART_BACKOFF_JITTER", 5),
-		DegradedRetryAfter:       envInt("DEGRADED_RETRY_AFTER", 5),
-		GatewayRLWindowSeconds:   envInt("GATEWAY_RL_WINDOW_SECONDS", 60),
-		GatewayRLFetchLimit:      envInt("GATEWAY_RL_FETCH_LIMIT", 45),
-		GatewayRLDownloadLimit:   envInt("GATEWAY_RL_DOWNLOAD_LIMIT", 45),
-		DrainTimeoutSeconds:      envInt("DRAIN_TIMEOUT_SECONDS", 90),
-		DrainPollIntervalMs:      envInt("DRAIN_POLL_INTERVAL_MS", 500),
-		RestartStabilizeSeconds:  envInt("RESTART_STABILIZE_SECONDS", 2),
+		GatewayPort:               envInt("GATEWAY_PORT", 9111),
+		WorkerCount:               envInt("WORKER_COUNT", 3),
+		ExtractorIPCEnabled:       envBool("EXTRACTOR_IPC_ENABLED", false),
+		ExtractorPythonBin:        getenvDefault("EXTRACTOR_PYTHON_BIN", "python3"),
+		ExtractorWorkerPath:       getenvDefault("EXTRACTOR_WORKER_PATH", "../extractor/worker_daemon.py"),
+		ExtractorTimeoutMs:        envInt("EXTRACTOR_TIMEOUT_MS", 45000),
+		GluetunPassword:           getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
+		MaxRetries:                envInt("MAX_RETRIES", 3),
+		HealthCheckTimeoutMs:      envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
+		HealthMonitorIntervalMs:   envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
+		HealthFailureThreshold:    envInt("HEALTH_FAILURE_THRESHOLD", 3),
+		RateLimitCooldownSeconds:  envInt("RATE_LIMIT_COOLDOWN", 300),
+		RestartBackoffBase:        envInt("RESTART_BACKOFF_BASE", 30),
+		RestartBackoffMax:         envInt("RESTART_BACKOFF_MAX", 300),
+		RestartBudgetLimit:        envInt("RESTART_BUDGET_LIMIT", 3),
+		RestartBudgetWindow:       envInt("RESTART_BUDGET_WINDOW", 600),
+		RestartQuarantineSeconds:  envInt("RESTART_QUARANTINE_SECONDS", 600),
+		RestartBackoffJitter:      envInt("RESTART_BACKOFF_JITTER", 5),
+		DegradedRetryAfter:        envInt("DEGRADED_RETRY_AFTER", 5),
+		GatewayRLWindowSeconds:    envInt("GATEWAY_RL_WINDOW_SECONDS", 60),
+		GatewayRLFetchLimit:       envInt("GATEWAY_RL_FETCH_LIMIT", 45),
+		GatewayRLDownloadLimit:    envInt("GATEWAY_RL_DOWNLOAD_LIMIT", 45),
+		DrainTimeoutSeconds:       envInt("DRAIN_TIMEOUT_SECONDS", 90),
+		DrainPollIntervalMs:       envInt("DRAIN_POLL_INTERVAL_MS", 500),
+		RestartStabilizeSeconds:   envInt("RESTART_STABILIZE_SECONDS", 2),
 		UnhealthyRestartThreshold: envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
 	}
 }
@@ -1486,6 +2630,7 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 	cfg := loadConfig()
 	gateway := NewGateway(cfg)
+	defer gateway.Shutdown()
 	go gateway.restartScheduler()
 	go gateway.uptimeChecker()
 	go gateway.healthMonitor()

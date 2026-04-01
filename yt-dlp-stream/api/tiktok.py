@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Optional
@@ -20,7 +21,7 @@ from core.error_mapping import (
     map_yt_dlp_exception,
 )
 from core.extraction_cache import extraction_cache
-from core.generators import slideshow_stream_generator
+from core.generators import slideshow_generator
 from core.helpers import _enforce_rate_limit
 from core.redis_cache import download_cache
 from core.config import estimate_video_size, estimate_mp3_size
@@ -1139,20 +1140,53 @@ async def _download_slideshow(
     # Create temp directory
     temp_dir = tempfile.mkdtemp(prefix="tiktok_slideshow_")
 
-    # Stream slideshow
+    # Generate slideshow first so failures can be returned as proper HTTP errors
+    # before response headers are sent.
+    try:
+        loop = asyncio.get_running_loop()
+        output_path, _ = await loop.run_in_executor(
+            None,
+            slideshow_generator,
+            photo_urls,
+            audio_url,
+            temp_dir,
+        )
+    except Exception as exc:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise map_tiktok_exception(exc, default_status=502) from exc
+
+    # Stream slideshow file with deterministic cleanup.
     response_headers = _build_disposition_header(filename, download)
-    duration = getattr(session, "duration", None) or (len(photo_urls) * 4)
-    estimated_size = estimate_video_size(None, duration)
-    if estimated_size > 0:
-        response_headers["Estimated-Content-Length"] = str(estimated_size)
+    try:
+        actual_size = Path(output_path).stat().st_size
+        if actual_size > 0:
+            response_headers["Content-Length"] = str(actual_size)
+    except Exception:
+        duration = getattr(session, "duration", None) or (len(photo_urls) * 4)
+        estimated_size = estimate_video_size(None, duration)
+        if estimated_size > 0:
+            response_headers["Estimated-Content-Length"] = str(estimated_size)
+
+    async def _stream_generated_slideshow():
+        try:
+            with open(output_path, "rb") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    if await request.is_disconnected():
+                        logger.info("Client disconnected from generated slideshow stream")
+                        break
+                    yield chunk
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                logger.info(f"Cleaned up slideshow temp dir: {temp_dir}")
+            except Exception as cleanup_err:
+                logger.warning(f"Failed to cleanup slideshow temp dir: {cleanup_err}")
 
     return StreamingResponse(
-        slideshow_stream_generator(
-            image_urls=photo_urls,
-            audio_url=audio_url,
-            temp_dir=temp_dir,
-            filename=filename,
-        ),
+        _stream_generated_slideshow(),
         media_type="video/mp4",
         headers=response_headers,
     )

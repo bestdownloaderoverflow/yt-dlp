@@ -14,6 +14,7 @@ Rewrite Go untuk `yt-dlp-stream/gateway/gateway.py`.
 - Scheduler restart worker dengan backoff, budget, dan quarantine
 - Restart container worker via Docker CLI (`docker restart`)
 - Circuit breaker + drain before restart (untuk mengurangi request putus saat restart)
+- IPC extractor mode penuh (Go HTTP + Python extractor daemon), tanpa FastAPI/Granian worker HTTP
 
 ## Menjalankan lokal
 
@@ -28,6 +29,10 @@ Gateway listen di port `9111` (default).
 
 - `GATEWAY_PORT` (default `9111`)
 - `WORKER_COUNT` (default `3`)
+- `EXTRACTOR_IPC_ENABLED` (default `false`)
+- `EXTRACTOR_PYTHON_BIN` (default `python3`)
+- `EXTRACTOR_WORKER_PATH` (default `../extractor/worker_daemon.py`)
+- `EXTRACTOR_TIMEOUT_MS` (default `45000`)
 - `GLUETUN_PASSWORD` (default `secretpassword`)
 - `MAX_RETRIES` (default `3`)
 - `HEALTH_CHECK_TIMEOUT_MS` (default `8000`)
@@ -81,10 +86,51 @@ gateway-go:
   environment:
     - GATEWAY_PORT=9111
     - WORKER_COUNT=3
+    - EXTRACTOR_IPC_ENABLED=false
     - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
     - MAX_RETRIES=3
     - RATE_LIMIT_COOLDOWN=300
   restart: unless-stopped
   networks:
     - ytdlp-network
+```
+
+## IPC Extractor Mode (Current)
+
+Mode ini menyalakan Python extractor daemon per worker (TCP JSON-RPC) dan dipakai penuh oleh endpoint gateway:
+- `GET /info`
+- `GET /fetch`
+- `GET /download`
+- `GET /stream/video`
+- `GET /stream/video-chunked`
+- `GET /stream/mp3`
+- `GET /stream/mp3-chunked`
+- `GET /stream/m4a`
+- `POST /tiktok`
+- `GET /tiktok/download` (video/photo/mp3/slideshow)
+
+```bash
+cd yt-dlp-stream/gateway-go
+EXTRACTOR_IPC_ENABLED=true \
+EXTRACTOR_PYTHON_BIN=python3 \
+EXTRACTOR_WORKER_PATH=../extractor/worker_daemon.py \
+WORKER_COUNT=3 \
+go run .
+```
+
+Catatan:
+- Worker Python tidak lagi expose HTTP API FastAPI/Granian untuk jalur publik.
+- Go gateway meng-handle HTTP, failover, retry, ffmpeg merge/transcode, dan streaming response.
+- Python worker fokus pada extraction/resolution + session/cookie context per worker.
+
+## Integration Test (Live Stack)
+
+Test live gateway tersedia di:
+- `yt-dlp-stream/tests/test_gateway_integration.py`
+
+Jalankan saat compose stack sudah aktif:
+
+```bash
+cd yt-dlp-stream
+RUN_GATEWAY_INTEGRATION=1 python3 -m unittest tests.test_gateway_integration
 ```

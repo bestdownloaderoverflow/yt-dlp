@@ -6,8 +6,8 @@ Arsitektur 3-instance dengan VPN rotation otomatis untuk menghindari rate limit 
 
 ```
                     ┌─────────────────┐
-                    │  Python Gateway │  ← Entry point (port 9111)
-                    │  (load balancer)│
+                    │    Go Gateway   │  ← Entry point (port 9111)
+                    │ (LB + failover) │
                     └────────┬────────┘
                              │
             ┌────────────────┼────────────────┐
@@ -18,8 +18,8 @@ Arsitektur 3-instance dengan VPN rotation otomatis untuk menghindari rate limit 
      └──────┬──────┘  └──────┬──────┘  └──────┬──────┘
             │                │                │
      ┌──────▼──────┐  ┌──────▼──────┐  ┌──────▼──────┐
-     │ ytdlp-1     │  │ ytdlp-2     │  │ ytdlp-3     │  ← yt-dlp instances
-     │ (port 9487) │  │ (port 9488) │  │ (port 9489) │
+     │ ytdlp-1     │  │ ytdlp-2     │  │ ytdlp-3     │  ← Python extractor worker daemon
+     │ (TCP 9487)  │  │ (TCP 9488)  │  │ (TCP 9489)  │
      └─────────────┘  └─────────────┘  └─────────────┘
 ```
 

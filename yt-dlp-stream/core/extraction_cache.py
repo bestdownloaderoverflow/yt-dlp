@@ -23,12 +23,17 @@ logger = logging.getLogger("ytdlp_stream")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
+_TIKTOK_TTL = int(os.getenv("TIKTOK_EXTRACT_CACHE_TTL_SECONDS", "90"))
+_DOUYIN_TTL = int(os.getenv("DOUYIN_EXTRACT_CACHE_TTL_SECONDS", str(_TIKTOK_TTL)))
+_YOUTUBE_TTL = int(os.getenv("YOUTUBE_EXTRACT_CACHE_TTL_SECONDS", "180"))
+_TWITTER_TTL = int(os.getenv("TWITTER_EXTRACT_CACHE_TTL_SECONDS", "120"))
+
 _PLATFORM_TTL: dict[str, int] = {
-    "tiktok": 90,
-    "douyin": 90,
-    "youtube": 180,
-    "twitter": 120,
-    "x": 120,
+    "tiktok": _TIKTOK_TTL,
+    "douyin": _DOUYIN_TTL,
+    "youtube": _YOUTUBE_TTL,
+    "twitter": _TWITTER_TTL,
+    "x": _TWITTER_TTL,
 }
 _DEFAULT_TTL = 60
 

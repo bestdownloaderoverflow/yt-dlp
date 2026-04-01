@@ -1010,12 +1010,17 @@ def slideshow_generator(
 
     output_path = work_dir / "slideshow.mp4"
 
-    # Build FFmpeg command
+    # Build FFmpeg command using concat demuxer for much lower memory usage.
     cmd = ["ffmpeg", "-y", "-hide_banner", "-loglevel", "error"]
-
-    # Add each image as input with duration
-    for img_path in image_paths:
-        cmd.extend(["-loop", "1", "-t", str(duration_per_image), "-i", img_path])
+    list_path = work_dir / "slideshow_images.txt"
+    with open(list_path, "w", encoding="utf-8") as list_file:
+        for img_path in image_paths:
+            # ffmpeg concat demuxer needs a duration line per file, and the
+            # last file repeated once to apply the last duration correctly.
+            list_file.write(f"file '{img_path}'\n")
+            list_file.write(f"duration {duration_per_image}\n")
+        list_file.write(f"file '{image_paths[-1]}'\n")
+    cmd.extend(["-f", "concat", "-safe", "0", "-i", str(list_path)])
 
     audio_path = None
     if audio_url:
@@ -1031,23 +1036,15 @@ def slideshow_generator(
         cmd.extend(["-stream_loop", "-1", "-i", str(audio_path)])
 
     # Build filter complex
-    filter_parts = []
-
-    # Scale and pad each image to 1080x1920 (portrait)
-    for i in range(len(image_paths)):
-        filter_parts.append(
-            f"[{i}:v]scale=w=1080:h=1920:force_original_aspect_ratio=decrease,"
-            f"pad=1080:1920:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=30[v{i}]"
-        )
-
-    # Concatenate all video streams
-    concat_inputs = "".join(f"[v{i}]" for i in range(len(image_paths)))
-    filter_parts.append(f"{concat_inputs}concat=n={len(image_paths)}:v=1:a=0[vout]")
+    filter_parts = [
+        "[0:v]scale=w=720:h=1280:force_original_aspect_ratio=decrease,"
+        "pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=24[vout]"
+    ]
 
     if audio_url and audio_path:
         # Calculate total video duration and trim audio
         video_duration = len(image_paths) * duration_per_image
-        filter_parts.append(f"[{len(image_paths)}:a]atrim=0:{video_duration},asetpts=PTS-STARTPTS[aout]")
+        filter_parts.append(f"[1:a]atrim=0:{video_duration},asetpts=PTS-STARTPTS[aout]")
 
         # Add filter complex and map both video and audio
         filter_complex = ";".join(filter_parts)
@@ -1058,10 +1055,11 @@ def slideshow_generator(
             "-pix_fmt", "yuv420p",
             "-fps_mode", "cfr",
             "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "23",
+            "-preset", "veryfast",
+            "-crf", "28",
+            "-threads", "1",
             "-c:a", "aac",
-            "-b:a", "192k",
+            "-b:a", "128k",
             str(output_path)
         ])
     else:
@@ -1073,24 +1071,32 @@ def slideshow_generator(
             "-pix_fmt", "yuv420p",
             "-fps_mode", "cfr",
             "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "23",
+            "-preset", "veryfast",
+            "-crf", "28",
+            "-threads", "1",
             str(output_path)
         ])
 
     logger.info(f"Creating slideshow with {len(image_paths)} images")
 
     # Run FFmpeg
-    result = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        timeout=300  # 5 minutes timeout
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minutes timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        logger.error("FFmpeg timed out after %ss for slideshow generation", exc.timeout)
+        raise Exception(f"FFmpeg timed out after {int(exc.timeout)} seconds") from exc
 
     if result.returncode != 0:
-        logger.error(f"FFmpeg error: {result.stderr}")
-        raise Exception(f"FFmpeg failed: {result.stderr}")
+        stderr = (result.stderr or "").strip()
+        stdout = (result.stdout or "").strip()
+        ffmpeg_detail = stderr or stdout or f"exit code {result.returncode} with empty output"
+        logger.error("FFmpeg error (code %s): %s", result.returncode, ffmpeg_detail)
+        raise Exception(f"FFmpeg failed: {ffmpeg_detail}")
 
     if not output_path.exists():
         raise Exception("Output file was not created")

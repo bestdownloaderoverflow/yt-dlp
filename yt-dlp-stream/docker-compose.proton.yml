@@ -39,16 +39,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w1
-      - API_PORT=9487
-      - GRANIAN_WORKERS=1
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-2:
@@ -91,16 +91,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w2
-      - API_PORT=9487
-      - GRANIAN_WORKERS=1
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-3:
@@ -143,16 +143,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w3
-      - API_PORT=9487
-      - GRANIAN_WORKERS=1
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-4:
@@ -195,16 +195,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w4
-      - API_PORT=9487
-      - GRANIAN_WORKERS=1
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-5:
@@ -247,16 +247,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w5
-      - API_PORT=9487
-      - GRANIAN_WORKERS=1
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-6:
@@ -299,15 +299,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w6
-      - API_PORT=9487
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-7:
@@ -350,15 +351,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w7
-      - API_PORT=9487
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-8:
@@ -401,15 +403,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w8
-      - API_PORT=9487
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-9:
@@ -452,15 +455,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w9
-      - API_PORT=9487
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   gluetun-10:
@@ -503,15 +507,16 @@ services:
       - redis
     environment:
       - WORKER_ID=w10
-      - API_PORT=9487
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
   redis:
@@ -537,6 +542,7 @@ services:
     environment:
       - GATEWAY_PORT=9111
       - WORKER_COUNT=10
+      - EXTRACTOR_IPC_ENABLED=true
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
       - MAX_RETRIES=3
       - HEALTH_CHECK_TIMEOUT_MS=15000

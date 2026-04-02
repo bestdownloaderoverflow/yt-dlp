@@ -752,16 +752,29 @@ func (g *Gateway) mediaHTTPClient(workerID string) *http.Client {
 }
 
 func shouldBypassWorkerProxy(plan map[string]any) bool {
-	sessionType, _ := plan["session_type"].(string)
-	switch sessionType {
-	case "photo", "slideshow", "mp3":
+	platform := strings.ToLower(strings.TrimSpace(anyString(plan["platform"])))
+	if platform == "tiktok" || platform == "douyin" {
 		return true
 	}
-	mediaType, _ := plan["media_type"].(string)
-	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mediaType)), "image/") {
+	if isTikTokMediaURL(anyString(plan["direct_url"])) || isTikTokMediaURL(anyString(plan["ffmpeg_audio_url"])) {
 		return true
 	}
-	return len(anyToStringSlice(plan["photo_urls"])) > 0
+	for _, u := range anyToStringSlice(plan["photo_urls"]) {
+		if isTikTokMediaURL(u) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTikTokMediaURL(raw string) bool {
+	u := strings.ToLower(strings.TrimSpace(raw))
+	if u == "" {
+		return false
+	}
+	return strings.Contains(u, "tiktokcdn.com") ||
+		strings.Contains(u, "muscdn.com") ||
+		strings.Contains(u, "byteoversea.com")
 }
 
 func (g *Gateway) mediaHTTPClientForPlan(workerID string, plan map[string]any) *http.Client {

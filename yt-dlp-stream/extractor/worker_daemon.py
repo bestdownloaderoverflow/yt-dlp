@@ -702,6 +702,7 @@ def _build_stream_plan_from_session(session: Any, download: bool) -> Dict[str, A
     from core.config import estimate_video_size, estimate_mp3_size
 
     content_type = session.type
+    platform = (getattr(session, "platform", None) or "").strip().lower()
     if content_type == "slideshow":
         from core.config import estimate_video_size
 
@@ -723,6 +724,7 @@ def _build_stream_plan_from_session(session: Any, download: bool) -> Dict[str, A
         return {
             "fallback_proxy": False,
             "content_type": "slideshow",
+            "platform": platform,
             "media_type": "video/mp4",
             "photo_urls": getattr(session, "photo_urls", None) or [],
             "audio_url": getattr(session, "audio_url", None),
@@ -786,6 +788,7 @@ def _build_stream_plan_from_session(session: Any, download: bool) -> Dict[str, A
     return {
         "fallback_proxy": False,
         "content_type": content_type,
+        "platform": platform,
         "direct_url": direct_url,
         "request_headers": safe_headers,
         "response_headers": response_headers,

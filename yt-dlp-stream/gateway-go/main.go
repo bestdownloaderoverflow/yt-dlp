@@ -1674,7 +1674,7 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 		return
 	}
 	if contentType, _ := plan["content_type"].(string); contentType == "slideshow" {
-		g.streamTikTokSlideshowFromPlan(w, r, plan)
+		g.streamTikTokSlideshowFromPlan(w, r, workerID, key, download, preferred, plan)
 		return
 	}
 
@@ -1815,12 +1815,75 @@ func (g *Gateway) downloadToFile(ctx context.Context, srcURL string, headers map
 	return err
 }
 
-func (g *Gateway) streamTikTokSlideshowFromPlan(w http.ResponseWriter, r *http.Request, plan map[string]any) {
+func (g *Gateway) streamTikTokSlideshowFromPlan(
+	w http.ResponseWriter,
+	r *http.Request,
+	workerID, key string,
+	download bool,
+	preferred string,
+	plan map[string]any,
+) {
+	currentPlan := plan
+	for attempt := 0; attempt < 2; attempt++ {
+		outputPath, mediaType, responseHeaders, tempDir, statusCode, err := g.renderTikTokSlideshowFromPlan(r.Context(), currentPlan)
+		if err == nil {
+			defer os.RemoveAll(tempDir)
+			for k, v := range responseHeaders {
+				w.Header().Set(k, v)
+			}
+			w.Header().Set("Content-Type", mediaType)
+
+			f, openErr := os.Open(outputPath)
+			if openErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to open slideshow output", "detail": openErr.Error()})
+				return
+			}
+			defer f.Close()
+			if fi, statErr := f.Stat(); statErr == nil && fi.Size() > 0 {
+				w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
+			}
+			w.WriteHeader(http.StatusOK)
+			_, copyErr := io.Copy(w, f)
+			if copyErr != nil && !isClientAbortError(copyErr) {
+				log.Printf("slideshow stream copy error: %v", copyErr)
+			}
+			return
+		}
+
+		if tempDir != "" {
+			_ = os.RemoveAll(tempDir)
+		}
+
+		// Slideshow URLs can expire quickly. Retry once with a fresh extraction.
+		if attempt == 0 && strings.TrimSpace(workerID) != "" && strings.TrimSpace(key) != "" && g.extractor != nil {
+			refreshedPlan, rpcErr, refreshErr := g.extractor.TikTokDownloadRefresh(workerID, key, download)
+			if refreshErr == nil && rpcErr == nil {
+				if fallback, _ := refreshedPlan["fallback_proxy"].(bool); fallback {
+					g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, preferred, true)
+					return
+				}
+				currentPlan = refreshedPlan
+				continue
+			}
+		}
+
+		if statusCode < 400 || statusCode > 599 {
+			statusCode = http.StatusBadGateway
+		}
+		writeJSON(w, statusCode, map[string]string{
+			"error":  "Failed to render slideshow",
+			"detail": err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to render slideshow", "detail": "Unknown slideshow rendering failure"})
+}
+
+func (g *Gateway) renderTikTokSlideshowFromPlan(ctx context.Context, plan map[string]any) (string, string, map[string]string, string, int, error) {
 	photoURLs := anyToStringSlice(plan["photo_urls"])
 	audioURL, _ := plan["audio_url"].(string)
 	if len(photoURLs) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "No photos available for slideshow"})
-		return
+		return "", "", nil, "", http.StatusBadRequest, fmt.Errorf("no photos available for slideshow")
 	}
 	durationPerImage := anyToInt(plan["duration_per_image"], 4)
 	if durationPerImage < 1 {
@@ -1834,17 +1897,14 @@ func (g *Gateway) streamTikTokSlideshowFromPlan(w http.ResponseWriter, r *http.R
 
 	tempDir, err := os.MkdirTemp("", "tiktok_slideshow_")
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create temp dir", "detail": err.Error()})
-		return
+		return "", "", nil, "", http.StatusInternalServerError, fmt.Errorf("failed to create temp dir: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
 
 	imagePaths := make([]string, 0, len(photoURLs))
 	for i, u := range photoURLs {
 		dst := filepath.Join(tempDir, fmt.Sprintf("image_%d.jpg", i))
-		if err := g.downloadToFile(r.Context(), u, map[string]string{}, dst); err != nil {
-			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to download slideshow image", "detail": err.Error()})
-			return
+		if err := g.downloadToFile(ctx, u, map[string]string{}, dst); err != nil {
+			return "", "", nil, tempDir, http.StatusBadGateway, fmt.Errorf("failed to download slideshow image: %w", err)
 		}
 		imagePaths = append(imagePaths, dst)
 	}
@@ -1852,41 +1912,40 @@ func (g *Gateway) streamTikTokSlideshowFromPlan(w http.ResponseWriter, r *http.R
 	audioPath := ""
 	if strings.TrimSpace(audioURL) != "" {
 		audioPath = filepath.Join(tempDir, "audio.mp3")
-		if err := g.downloadToFile(r.Context(), audioURL, map[string]string{}, audioPath); err != nil {
-			log.Printf("slideshow audio download failed, continuing without audio: %v", err)
-			audioPath = ""
+		if err := g.downloadToFile(ctx, audioURL, map[string]string{}, audioPath); err != nil {
+			return "", "", nil, tempDir, http.StatusBadGateway, fmt.Errorf("failed to download slideshow audio: %w", err)
 		}
 	}
 
 	outputPath := filepath.Join(tempDir, "slideshow.mp4")
-	listPath := filepath.Join(tempDir, "slideshow_images.txt")
-	listFile, err := os.Create(listPath)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create slideshow list file", "detail": err.Error()})
-		return
-	}
+	ffmpegArgs := []string{"-y", "-hide_banner", "-loglevel", "error"}
 	for _, img := range imagePaths {
-		_, _ = fmt.Fprintf(listFile, "file '%s'\n", img)
-		_, _ = fmt.Fprintf(listFile, "duration %d\n", durationPerImage)
+		ffmpegArgs = append(ffmpegArgs, "-loop", "1", "-t", strconv.Itoa(durationPerImage), "-i", img)
 	}
-	_, _ = fmt.Fprintf(listFile, "file '%s'\n", imagePaths[len(imagePaths)-1])
-	_ = listFile.Close()
-
-	ffmpegArgs := []string{
-		"-y", "-hide_banner", "-loglevel", "error",
-		"-f", "concat", "-safe", "0", "-i", listPath,
-	}
+	audioInputIndex := -1
 	if audioPath != "" {
+		audioInputIndex = len(imagePaths)
 		ffmpegArgs = append(ffmpegArgs, "-stream_loop", "-1", "-i", audioPath)
 	}
 
-	filterParts := []string{
-		"[0:v]scale=w=720:h=1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=24[vout]",
+	filterParts := make([]string, 0, len(imagePaths)+2)
+	concatInputs := make([]string, 0, len(imagePaths))
+	for i := range imagePaths {
+		filterParts = append(filterParts,
+			fmt.Sprintf(
+				"[%d:v]scale=w=720:h=1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=24,trim=duration=%d,setpts=PTS-STARTPTS[v%d]",
+				i,
+				durationPerImage,
+				i,
+			),
+		)
+		concatInputs = append(concatInputs, fmt.Sprintf("[v%d]", i))
 	}
+	filterParts = append(filterParts, fmt.Sprintf("%sconcat=n=%d:v=1:a=0[vout]", strings.Join(concatInputs, ""), len(imagePaths)))
 
 	if audioPath != "" {
 		videoDuration := len(imagePaths) * durationPerImage
-		filterParts = append(filterParts, fmt.Sprintf("[1:a]atrim=0:%d,asetpts=PTS-STARTPTS[aout]", videoDuration))
+		filterParts = append(filterParts, fmt.Sprintf("[%d:a]atrim=0:%d,asetpts=PTS-STARTPTS[aout]", audioInputIndex, videoDuration))
 		ffmpegArgs = append(ffmpegArgs,
 			"-filter_complex", strings.Join(filterParts, ";"),
 			"-map", "[vout]",
@@ -1894,8 +1953,11 @@ func (g *Gateway) streamTikTokSlideshowFromPlan(w http.ResponseWriter, r *http.R
 			"-pix_fmt", "yuv420p",
 			"-fps_mode", "cfr",
 			"-c:v", "libx264",
-			"-preset", "veryfast",
-			"-crf", "28",
+			"-preset", "medium",
+			"-crf", "23",
+			"-b:v", "320k",
+			"-maxrate", "360k",
+			"-bufsize", "720k",
 			"-threads", "1",
 			"-c:a", "aac",
 			"-b:a", "128k",
@@ -1908,42 +1970,23 @@ func (g *Gateway) streamTikTokSlideshowFromPlan(w http.ResponseWriter, r *http.R
 			"-pix_fmt", "yuv420p",
 			"-fps_mode", "cfr",
 			"-c:v", "libx264",
-			"-preset", "veryfast",
-			"-crf", "28",
+			"-preset", "medium",
+			"-crf", "23",
+			"-b:v", "320k",
+			"-maxrate", "360k",
+			"-bufsize", "720k",
 			"-threads", "1",
 			outputPath,
 		)
 	}
 
-	cmd := exec.CommandContext(r.Context(), "ffmpeg", ffmpegArgs...)
+	cmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{
-			"error":  "Failed to render slideshow",
-			"detail": strings.TrimSpace(string(out)),
-		})
-		log.Printf("slideshow ffmpeg error: %v, out=%s", err, strings.TrimSpace(string(out)))
-		return
+		detail := strings.TrimSpace(string(out))
+		log.Printf("slideshow ffmpeg error: %v, out=%s", err, detail)
+		return "", "", nil, tempDir, http.StatusBadGateway, fmt.Errorf("ffmpeg failed: %s", detail)
 	}
-
-	for k, v := range responseHeaders {
-		w.Header().Set(k, v)
-	}
-	w.Header().Set("Content-Type", mediaType)
-
-	f, err := os.Open(outputPath)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to open slideshow output", "detail": err.Error()})
-		return
-	}
-	defer f.Close()
-	if fi, err := f.Stat(); err == nil && fi.Size() > 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
-	}
-	w.WriteHeader(http.StatusOK)
-	_, copyErr := io.Copy(w, f)
-	if copyErr != nil && !isClientAbortError(copyErr) {
-		log.Printf("slideshow stream copy error: %v", copyErr)
-	}
+	return outputPath, mediaType, responseHeaders, tempDir, http.StatusOK, nil
 }
 
 func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {

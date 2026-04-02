@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -59,6 +60,7 @@ type Worker struct {
 	ID               string
 	Host             string
 	APIPort          int
+	ProxyPort        int
 	ControlPort      int
 	Healthy          bool
 	Restarting       bool
@@ -83,6 +85,10 @@ func (w *Worker) ControlURL(password string) string {
 	return fmt.Sprintf("http://admin:%s@%s:%d", password, w.Host, w.ControlPort)
 }
 
+func (w *Worker) HTTPProxyURL() string {
+	return fmt.Sprintf("http://%s:%d", w.Host, w.ProxyPort)
+}
+
 type WorkerRegistry struct {
 	mu      sync.Mutex
 	workers []*Worker
@@ -97,6 +103,7 @@ func NewWorkerRegistry(cfg Config) *WorkerRegistry {
 			ID:          fmt.Sprintf("w%d", i),
 			Host:        fmt.Sprintf("gluetun-%d", i),
 			APIPort:     9487,
+			ProxyPort:   8888,
 			ControlPort: 8000,
 			Healthy:     false,
 			StartedAt:   now,
@@ -704,6 +711,30 @@ func NewGateway(cfg Config) *Gateway {
 	return gw
 }
 
+func (g *Gateway) mediaHTTPClient(workerID string) *http.Client {
+	if workerID == "" {
+		return g.client
+	}
+	worker := g.registry.GetWorker(workerID)
+	if worker == nil || worker.Host == "" || worker.ProxyPort <= 0 {
+		return g.client
+	}
+	baseTransport, ok := g.client.Transport.(*http.Transport)
+	if !ok || baseTransport == nil {
+		return g.client
+	}
+	proxyURL, err := url.Parse(worker.HTTPProxyURL())
+	if err != nil {
+		log.Printf("[%s] invalid worker proxy URL: %v", workerID, err)
+		return g.client
+	}
+	tr := baseTransport.Clone()
+	tr.Proxy = http.ProxyURL(proxyURL)
+	return &http.Client{
+		Transport: tr,
+	}
+}
+
 func (g *Gateway) Shutdown() {
 	g.cancel()
 	if g.extractor != nil {
@@ -1218,6 +1249,7 @@ func (g *Gateway) downloadPlanSourceToFile(
 func (g *Gateway) downloadPlanSourceToWriter(
 	ctx context.Context,
 	dst io.WriteCloser,
+	workerID string,
 	plan map[string]any,
 	selector planSourceSelector,
 	chunkSize int64,
@@ -1240,6 +1272,7 @@ func (g *Gateway) downloadPlanSourceToWriter(
 	if strings.TrimSpace(currentURL) == "" {
 		return fmt.Errorf("missing source URL in plan")
 	}
+	mediaClient := g.mediaHTTPClient(workerID)
 
 	var read int64
 	var total int64
@@ -1264,7 +1297,7 @@ func (g *Gateway) downloadPlanSourceToWriter(
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 		}
 
-		resp, err := g.client.Do(req)
+		resp, err := mediaClient.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -1346,6 +1379,7 @@ func (g *Gateway) downloadPlanSourceToWriter(
 func (g *Gateway) streamWithFFmpegFromPlan(
 	w http.ResponseWriter,
 	r *http.Request,
+	workerID string,
 	plan map[string]any,
 	onRefresh func() (map[string]any, *ipcError, error),
 ) bool {
@@ -1379,6 +1413,7 @@ func (g *Gateway) streamWithFFmpegFromPlan(
 				err := g.downloadPlanSourceToWriter(
 					r.Context(),
 					pipeW,
+					workerID,
 					plan,
 					selectPrimarySource,
 					audioChunkSizeBytes,
@@ -1405,6 +1440,7 @@ func (g *Gateway) streamWithFFmpegFromPlan(
 				err := g.downloadPlanSourceToWriter(
 					r.Context(),
 					videoW,
+					workerID,
 					plan,
 					selectPrimarySource,
 					videoChunkSizeBytes,
@@ -1418,6 +1454,7 @@ func (g *Gateway) streamWithFFmpegFromPlan(
 				err := g.downloadPlanSourceToWriter(
 					r.Context(),
 					audioW,
+					workerID,
 					plan,
 					selectFFmpegAudioSource,
 					audioChunkSizeBytes,
@@ -1515,6 +1552,7 @@ func (g *Gateway) streamWithFFmpegFromPlan(
 func (g *Gateway) streamDirectPlanWithRefresh(
 	w http.ResponseWriter,
 	r *http.Request,
+	workerID string,
 	plan map[string]any,
 	onRefresh func() (map[string]any, *ipcError, error),
 ) bool {
@@ -1537,6 +1575,7 @@ func (g *Gateway) streamDirectPlanWithRefresh(
 	currentReqHeaders := requestHeaders
 	currentRespHeaders := responseHeaders
 	currentMediaType := mediaType
+	mediaClient := g.mediaHTTPClient(workerID)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
@@ -1559,7 +1598,7 @@ func (g *Gateway) streamDirectPlanWithRefresh(
 			}
 		}
 
-		resp, err := g.client.Do(req)
+			resp, err := mediaClient.Do(req)
 		if err != nil {
 			if r.Context().Err() != nil || isClientAbortError(err) {
 				return true
@@ -1643,6 +1682,7 @@ func parsePositiveInt64(v string) int64 {
 func (g *Gateway) streamChunkedRangeWithRefresh(
 	w http.ResponseWriter,
 	r *http.Request,
+	workerID string,
 	plan map[string]any,
 	onRefresh func() (map[string]any, *ipcError, error),
 	chunkSize int64,
@@ -1663,7 +1703,7 @@ func (g *Gateway) streamChunkedRangeWithRefresh(
 	totalSize := parsePositiveInt64(responseHeaders["Content-Length"])
 	if totalSize <= 0 {
 		// Without exact size, keep compatibility by falling back to direct stream.
-		return g.streamDirectPlanWithRefresh(w, r, plan, onRefresh)
+		return g.streamDirectPlanWithRefresh(w, r, workerID, plan, onRefresh)
 	}
 
 	for k, v := range responseHeaders {
@@ -1683,6 +1723,7 @@ func (g *Gateway) streamChunkedRangeWithRefresh(
 	currentURL := directURL
 	currentReqHeaders := requestHeaders
 	read := int64(0)
+	mediaClient := g.mediaHTTPClient(workerID)
 
 	for read < totalSize {
 		end := read + chunkSize - 1
@@ -1699,7 +1740,7 @@ func (g *Gateway) streamChunkedRangeWithRefresh(
 		}
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 
-		resp, err := g.client.Do(req)
+			resp, err := mediaClient.Do(req)
 		if err != nil {
 			if r.Context().Err() != nil || isClientAbortError(err) {
 				return true
@@ -1782,18 +1823,18 @@ func (g *Gateway) handleDownloadViaExtractorIPCWithDefault(w http.ResponseWriter
 	}
 
 	if needsFFmpeg, _ := plan["needs_ffmpeg"].(bool); needsFFmpeg {
-		_ = g.streamWithFFmpegFromPlan(w, r, plan, func() (map[string]any, *ipcError, error) {
+		_ = g.streamWithFFmpegFromPlan(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
 			return g.extractor.DownloadRefresh(workerID, key, download)
 		})
 		return
 	}
 	if anyString(plan["session_type"]) == "video" && anyString(plan["delivery_mode"]) == "single_progressive" {
-		_ = g.streamChunkedRangeWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
+		_ = g.streamChunkedRangeWithRefresh(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
 			return g.extractor.DownloadRefresh(workerID, key, download)
 		}, int64(videoChunkSizeBytes))
 		return
 	}
-	_ = g.streamDirectPlanWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
+	_ = g.streamDirectPlanWithRefresh(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
 		return g.extractor.DownloadRefresh(workerID, key, download)
 	})
 }
@@ -1855,7 +1896,7 @@ func (g *Gateway) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Req
 				"X-Accel-Buffering":   "no",
 			}
 		}
-		_ = g.streamDirectPlanWithRefresh(w, r, plan, nil)
+		_ = g.streamDirectPlanWithRefresh(w, r, workerID, plan, nil)
 		return
 	}
 
@@ -1896,7 +1937,7 @@ func (g *Gateway) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Req
 	}
 
 	if needsFFmpeg, _ := plan["needs_ffmpeg"].(bool); needsFFmpeg {
-		_ = g.streamWithFFmpegFromPlan(w, r, plan, func() (map[string]any, *ipcError, error) {
+		_ = g.streamWithFFmpegFromPlan(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
 			return g.extractor.DownloadRefresh(workerID, key, download)
 		})
 		return
@@ -1906,12 +1947,12 @@ func (g *Gateway) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Req
 		if r.URL.Path == "/stream/mp3-chunked" {
 			chunkSize = audioChunkSizeBytes
 		}
-		_ = g.streamChunkedRangeWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
+		_ = g.streamChunkedRangeWithRefresh(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
 			return g.extractor.DownloadRefresh(workerID, key, download)
 		}, chunkSize)
 		return
 	}
-	_ = g.streamDirectPlanWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
+	_ = g.streamDirectPlanWithRefresh(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
 		return g.extractor.DownloadRefresh(workerID, key, download)
 	})
 }

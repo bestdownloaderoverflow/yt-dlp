@@ -926,7 +926,10 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
                     audio_fmt = fmt
             if video_fmt and audio_fmt:
                 video_headers, video_cookies = _extract_format_headers(video_fmt, info, original_url, proxy, impersonate)
-                audio_headers, _ = _extract_format_headers(audio_fmt, info, original_url, proxy, impersonate)
+                audio_headers, audio_cookies = _extract_format_headers(audio_fmt, info, original_url, proxy, impersonate)
+                if audio_cookies:
+                    audio_headers = dict(audio_headers)
+                    audio_headers["Cookie"] = audio_cookies
                 session.direct_url = video_fmt.get("url")
                 session.http_headers = video_headers
                 session.cookies = video_cookies

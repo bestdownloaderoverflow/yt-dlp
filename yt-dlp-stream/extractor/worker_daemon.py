@@ -139,7 +139,7 @@ def _get_photo_url(formats: list) -> Optional[str]:
         if fmt.get("format_id") == "orig":
             return fmt.get("url")
     for fmt in formats:
-        if fmt.get("format_id", "").startswith("image-"):
+        if fmt.get("format_id", "").startswith("image-") and fmt.get("url"):
             return fmt.get("url")
     if formats:
         for fmt in formats:
@@ -862,14 +862,14 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
                 formats = entry.get("formats", []) or []
                 fmt = next((f for f in formats if f.get("format_id") == "orig"), None)
                 if not fmt:
-                    fmt = next((f for f in formats if f.get("format_id", "").startswith("image-")), None)
+                    fmt = next((f for f in formats if f.get("format_id", "").startswith("image-") and f.get("url")), None)
                 if not fmt and formats:
                     fmt = next((f for f in formats if f.get("url")), formats[-1])
         else:
             formats = info.get("formats", []) or []
             fmt = next((f for f in formats if f.get("format_id") == "orig"), None)
             if not fmt:
-                fmt = next((f for f in formats if f.get("format_id", "").startswith("image-")), None)
+                fmt = next((f for f in formats if f.get("format_id", "").startswith("image-") and f.get("url")), None)
             if not fmt and formats:
                 fmt = next((f for f in formats if f.get("url")), formats[-1])
 

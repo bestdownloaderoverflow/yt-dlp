@@ -139,7 +139,7 @@ def get_photo_url(formats: list) -> str:
         if f.get("format_id") == "orig":
             return f.get("url")
     for f in formats:
-        if f.get("format_id", "").startswith("image-"):
+        if f.get("format_id", "").startswith("image-") and f.get("url"):
             return f.get("url")
     if formats:
         for f in formats:

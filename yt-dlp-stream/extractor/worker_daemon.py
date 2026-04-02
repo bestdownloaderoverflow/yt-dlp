@@ -811,6 +811,7 @@ def _select_progressive_video_format(resolved: list[Dict[str, Any]]) -> Optional
 
 def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
     from core.config import AUDIO_FORMAT, QUALITY_FORMATS
+    from core.delivery import plan_delivery
 
     content_type = getattr(session, "type", "")
     original_url = getattr(session, "url", None)
@@ -869,7 +870,12 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
         session.http_headers = headers
         session.cookies = cookies
         session.filesize = fmt.get("filesize") or fmt.get("filesize_approx")
-        return {"protocol": fmt.get("protocol"), "needs_ffmpeg": False, "ffmpeg_audio_only": False}
+        return {
+            "protocol": fmt.get("protocol"),
+            "delivery_mode": "single_progressive",
+            "needs_ffmpeg": False,
+            "ffmpeg_audio_only": False,
+        }
 
     if content_type == "mp3":
         resolved = ydl_manager.resolve_formats(info, AUDIO_FORMAT, proxy=proxy, impersonate=impersonate)
@@ -886,8 +892,14 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
         session.cookies = cookies
         session.filesize = fmt.get("filesize") or fmt.get("filesize_approx")
         protocol = fmt.get("protocol")
+        delivery = plan_delivery(resolved)
         # Keep old behavior: mp3 is transcoded output.
-        return {"protocol": protocol, "needs_ffmpeg": True, "ffmpeg_audio_only": True}
+        return {
+            "protocol": protocol,
+            "delivery_mode": delivery.mode,
+            "needs_ffmpeg": True,
+            "ffmpeg_audio_only": True,
+        }
 
     if content_type == "video":
         quality = str(getattr(session, "quality", "") or "")
@@ -900,8 +912,9 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
                 "code": "format_resolution_failed",
                 "message": "Unable to resolve video format",
             }))
+        delivery = plan_delivery(resolved)
         # Split progressive tracks (video-only + audio-only): ask Go layer to merge via ffmpeg.
-        if len(resolved) >= 2:
+        if delivery.mode == "multi_progressive":
             video_fmt = None
             audio_fmt = None
             for fmt in resolved:
@@ -922,6 +935,7 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
                 )
                 return {
                     "protocol": video_fmt.get("protocol"),
+                    "delivery_mode": "multi_progressive",
                     "needs_ffmpeg": True,
                     "ffmpeg_audio_only": False,
                     "ffmpeg_merge": True,
@@ -942,8 +956,19 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
         session.cookies = cookies
         session.filesize = fmt.get("filesize") or fmt.get("filesize_approx")
         protocol = fmt.get("protocol")
-        needs_ffmpeg = not _is_progressive_protocol(protocol)
-        return {"protocol": protocol, "needs_ffmpeg": needs_ffmpeg, "ffmpeg_audio_only": False}
+        if delivery.mode == "single_progressive":
+            return {
+                "protocol": protocol,
+                "delivery_mode": "single_progressive",
+                "needs_ffmpeg": False,
+                "ffmpeg_audio_only": False,
+            }
+        return {
+            "protocol": protocol,
+            "delivery_mode": "ffmpeg",
+            "needs_ffmpeg": True,
+            "ffmpeg_audio_only": False,
+        }
 
     raise RuntimeError(json.dumps({
         "status": 400,
@@ -970,6 +995,8 @@ def _download_prepare(params: Dict[str, Any]) -> Dict[str, Any]:
     plan = _build_stream_plan_from_session(session, download)
     plan["session_type"] = session.type
     plan["protocol"] = meta.get("protocol")
+    if meta.get("delivery_mode"):
+        plan["delivery_mode"] = meta.get("delivery_mode")
     plan["needs_ffmpeg"] = bool(meta.get("needs_ffmpeg"))
     plan["ffmpeg_audio_only"] = bool(meta.get("ffmpeg_audio_only"))
     plan["ffmpeg_merge"] = bool(meta.get("ffmpeg_merge"))

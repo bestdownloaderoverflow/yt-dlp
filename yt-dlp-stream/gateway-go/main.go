@@ -1025,7 +1025,330 @@ func ffmpegHeaderString(headers map[string]string) string {
 	return b.String()
 }
 
-func (g *Gateway) streamWithFFmpegFromPlan(w http.ResponseWriter, r *http.Request, plan map[string]any) bool {
+type planSourceSelector func(map[string]any) (string, map[string]string)
+
+func selectPrimarySource(plan map[string]any) (string, map[string]string) {
+	return strings.TrimSpace(anyString(plan["direct_url"])), anyMapToStringMap(plan["request_headers"])
+}
+
+func selectFFmpegAudioSource(plan map[string]any) (string, map[string]string) {
+	return strings.TrimSpace(anyString(plan["ffmpeg_audio_url"])), anyMapToStringMap(plan["ffmpeg_audio_headers"])
+}
+
+func anyString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+func parseContentRangeTotal(v string) int64 {
+	s := strings.TrimSpace(v)
+	if s == "" {
+		return 0
+	}
+	i := strings.LastIndex(s, "/")
+	if i < 0 || i+1 >= len(s) {
+		return 0
+	}
+	total := strings.TrimSpace(s[i+1:])
+	if total == "" || total == "*" {
+		return 0
+	}
+	return parsePositiveInt64(total)
+}
+
+func sanitizeRequestHeaders(headers map[string]string) map[string]string {
+	out := make(map[string]string, len(headers)+1)
+	for k, v := range headers {
+		kl := strings.ToLower(strings.TrimSpace(k))
+		if kl == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		if kl == "accept-encoding" {
+			continue
+		}
+		out[k] = v
+	}
+	out["Accept-Encoding"] = "identity"
+	return out
+}
+
+func (g *Gateway) downloadPlanSourceToFile(
+	ctx context.Context,
+	dstPath string,
+	plan map[string]any,
+	selector planSourceSelector,
+	chunkSize int64,
+	canRefresh bool,
+	onRefresh func() (map[string]any, *ipcError, error),
+) (map[string]any, error) {
+	if selector == nil {
+		return plan, fmt.Errorf("missing source selector")
+	}
+	if chunkSize <= 0 {
+		chunkSize = videoChunkSizeBytes
+	}
+
+	currentPlan := plan
+	currentURL, currentHeaders := selector(currentPlan)
+	currentHeaders = sanitizeRequestHeaders(currentHeaders)
+	if strings.TrimSpace(currentURL) == "" {
+		return currentPlan, fmt.Errorf("missing source URL in plan")
+	}
+
+	f, err := os.Create(dstPath)
+	if err != nil {
+		return currentPlan, err
+	}
+	defer f.Close()
+
+	var read int64
+	var total int64
+	refreshAttempts := 0
+	const maxRefreshAttempts = 3
+
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
+		if err != nil {
+			return currentPlan, err
+		}
+		for k, v := range currentHeaders {
+			req.Header.Set(k, v)
+		}
+
+		useRange := read > 0 || total > 0
+		if useRange {
+			end := read + chunkSize - 1
+			if total > 0 && end >= total {
+				end = total - 1
+			}
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
+		}
+
+		resp, err := g.client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return currentPlan, ctx.Err()
+			}
+			return currentPlan, err
+		}
+
+		if resp.StatusCode == http.StatusForbidden && canRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			refreshedPlan, rpcErr, refreshErr := onRefresh()
+			if refreshErr != nil {
+				return currentPlan, refreshErr
+			}
+			if rpcErr != nil {
+				return currentPlan, fmt.Errorf("%s: %s", rpcErr.Code, rpcErr.Message)
+			}
+			currentPlan = refreshedPlan
+			currentURL, currentHeaders = selector(currentPlan)
+			currentHeaders = sanitizeRequestHeaders(currentHeaders)
+			if strings.TrimSpace(currentURL) == "" {
+				return currentPlan, fmt.Errorf("missing refreshed source URL in plan")
+			}
+			refreshAttempts++
+			continue
+		}
+
+		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if total > 0 && read >= total {
+				return currentPlan, nil
+			}
+			return currentPlan, fmt.Errorf("range not satisfiable at %d/%d", read, total)
+		}
+
+		if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+			bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			_ = resp.Body.Close()
+			return currentPlan, fmt.Errorf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
+		}
+
+		if resp.StatusCode == http.StatusPartialContent {
+			if total <= 0 {
+				if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
+					total = t
+				} else if cl := parsePositiveInt64(resp.Header.Get("Content-Length")); cl > 0 {
+					total = read + cl
+				}
+			}
+		} else if read > 0 {
+			// Upstream ignored a resume range. Restart from zero to avoid duplicated bytes.
+			if _, err := f.Seek(0, io.SeekStart); err != nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				return currentPlan, err
+			}
+			if err := f.Truncate(0); err != nil {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				return currentPlan, err
+			}
+			read = 0
+			total = parsePositiveInt64(resp.Header.Get("Content-Length"))
+		}
+
+		n, copyErr := io.Copy(f, resp.Body)
+		_ = resp.Body.Close()
+		if copyErr != nil {
+			if ctx.Err() != nil {
+				return currentPlan, ctx.Err()
+			}
+			return currentPlan, copyErr
+		}
+		read += n
+
+		if resp.StatusCode == http.StatusOK {
+			return currentPlan, nil
+		}
+		if total > 0 && read >= total {
+			return currentPlan, nil
+		}
+		if n <= 0 {
+			return currentPlan, nil
+		}
+	}
+}
+
+func (g *Gateway) downloadPlanSourceToWriter(
+	ctx context.Context,
+	dst io.WriteCloser,
+	plan map[string]any,
+	selector planSourceSelector,
+	chunkSize int64,
+	canRefresh bool,
+	onRefresh func() (map[string]any, *ipcError, error),
+) error {
+	if dst == nil {
+		return fmt.Errorf("missing destination writer")
+	}
+	if selector == nil {
+		return fmt.Errorf("missing source selector")
+	}
+	if chunkSize <= 0 {
+		chunkSize = videoChunkSizeBytes
+	}
+
+	currentPlan := plan
+	currentURL, currentHeaders := selector(currentPlan)
+	currentHeaders = sanitizeRequestHeaders(currentHeaders)
+	if strings.TrimSpace(currentURL) == "" {
+		return fmt.Errorf("missing source URL in plan")
+	}
+
+	var read int64
+	var total int64
+	refreshAttempts := 0
+	const maxRefreshAttempts = 3
+
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
+		if err != nil {
+			return err
+		}
+		for k, v := range currentHeaders {
+			req.Header.Set(k, v)
+		}
+
+		useRange := read > 0 || total > 0
+		if useRange {
+			end := read + chunkSize - 1
+			if total > 0 && end >= total {
+				end = total - 1
+			}
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
+		}
+
+		resp, err := g.client.Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return err
+		}
+
+		if resp.StatusCode == http.StatusForbidden && canRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			refreshedPlan, rpcErr, refreshErr := onRefresh()
+			if refreshErr != nil {
+				return refreshErr
+			}
+			if rpcErr != nil {
+				return fmt.Errorf("%s: %s", rpcErr.Code, rpcErr.Message)
+			}
+			currentPlan = refreshedPlan
+			currentURL, currentHeaders = selector(currentPlan)
+			currentHeaders = sanitizeRequestHeaders(currentHeaders)
+			if strings.TrimSpace(currentURL) == "" {
+				return fmt.Errorf("missing refreshed source URL in plan")
+			}
+			refreshAttempts++
+			continue
+		}
+
+		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			if total > 0 && read >= total {
+				return nil
+			}
+			return fmt.Errorf("range not satisfiable at %d/%d", read, total)
+		}
+
+		if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+			bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
+		}
+
+		if resp.StatusCode == http.StatusPartialContent {
+			if total <= 0 {
+				if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
+					total = t
+				} else if cl := parsePositiveInt64(resp.Header.Get("Content-Length")); cl > 0 {
+					total = read + cl
+				}
+			}
+		} else if read > 0 {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+			return fmt.Errorf("upstream ignored resume range at offset %d", read)
+		}
+
+		n, copyErr := io.Copy(dst, resp.Body)
+		_ = resp.Body.Close()
+		if copyErr != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return copyErr
+		}
+		read += n
+
+		if resp.StatusCode == http.StatusOK {
+			return nil
+		}
+		if total > 0 && read >= total {
+			return nil
+		}
+		if n <= 0 {
+			return nil
+		}
+	}
+}
+
+func (g *Gateway) streamWithFFmpegFromPlan(
+	w http.ResponseWriter,
+	r *http.Request,
+	plan map[string]any,
+	onRefresh func() (map[string]any, *ipcError, error),
+) bool {
 	directURL, _ := plan["direct_url"].(string)
 	if strings.TrimSpace(directURL) == "" {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
@@ -1038,17 +1361,85 @@ func (g *Gateway) streamWithFFmpegFromPlan(w http.ResponseWriter, r *http.Reques
 	mediaType, _ := plan["media_type"].(string)
 	audioOnly, _ := plan["ffmpeg_audio_only"].(bool)
 	mergeAV, _ := plan["ffmpeg_merge"].(bool)
+	canRefresh, _ := plan["can_refresh"].(bool)
 
 	ffmpegArgs := []string{"-hide_banner", "-loglevel", "error"}
-	if hdr := ffmpegHeaderString(requestHeaders); hdr != "" {
-		ffmpegArgs = append(ffmpegArgs, "-headers", hdr)
-	}
-	ffmpegArgs = append(ffmpegArgs, "-i", directURL)
-	if mergeAV && strings.TrimSpace(audioURL) != "" {
-		if hdr := ffmpegHeaderString(audioHeaders); hdr != "" {
+	var stdinSource io.Reader
+	var extraFiles []*os.File
+	feedWorkers := 0
+	feedErrCh := make(chan error, 2)
+	startFeeds := func() {}
+	if audioOnly {
+		pipeR, pipeW := io.Pipe()
+		stdinSource = pipeR
+		ffmpegArgs = append(ffmpegArgs, "-i", "pipe:0")
+		feedWorkers = 1
+		startFeeds = func() {
+			go func() {
+				err := g.downloadPlanSourceToWriter(
+					r.Context(),
+					pipeW,
+					plan,
+					selectPrimarySource,
+					audioChunkSizeBytes,
+					canRefresh,
+					onRefresh,
+				)
+				_ = pipeW.CloseWithError(err)
+				feedErrCh <- err
+			}()
+		}
+	} else if mergeAV {
+		videoR, videoW := io.Pipe()
+		audioR, audioW, err := os.Pipe()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create ffmpeg audio pipe", "detail": err.Error()})
+			return false
+		}
+		stdinSource = videoR
+		extraFiles = []*os.File{audioR}
+		ffmpegArgs = append(ffmpegArgs, "-i", "pipe:0", "-i", "pipe:3")
+		feedWorkers = 2
+		startFeeds = func() {
+			go func() {
+				err := g.downloadPlanSourceToWriter(
+					r.Context(),
+					videoW,
+					plan,
+					selectPrimarySource,
+					videoChunkSizeBytes,
+					canRefresh,
+					onRefresh,
+				)
+				_ = videoW.CloseWithError(err)
+				feedErrCh <- err
+			}()
+			go func() {
+				err := g.downloadPlanSourceToWriter(
+					r.Context(),
+					audioW,
+					plan,
+					selectFFmpegAudioSource,
+					audioChunkSizeBytes,
+					canRefresh,
+					onRefresh,
+				)
+				_ = audioW.Close()
+				feedErrCh <- err
+			}()
+		}
+		defer audioR.Close()
+	} else {
+		if hdr := ffmpegHeaderString(requestHeaders); hdr != "" {
 			ffmpegArgs = append(ffmpegArgs, "-headers", hdr)
 		}
-		ffmpegArgs = append(ffmpegArgs, "-i", audioURL)
+		ffmpegArgs = append(ffmpegArgs, "-i", directURL)
+		if mergeAV && strings.TrimSpace(audioURL) != "" {
+			if hdr := ffmpegHeaderString(audioHeaders); hdr != "" {
+				ffmpegArgs = append(ffmpegArgs, "-headers", hdr)
+			}
+			ffmpegArgs = append(ffmpegArgs, "-i", audioURL)
+		}
 	}
 	if audioOnly {
 		ffmpegArgs = append(ffmpegArgs, "-vn", "-acodec", "libmp3lame", "-b:a", "192k", "-f", "mp3", "pipe:1")
@@ -1077,6 +1468,12 @@ func (g *Gateway) streamWithFFmpegFromPlan(w http.ResponseWriter, r *http.Reques
 	}
 
 	cmd := exec.CommandContext(r.Context(), "ffmpeg", ffmpegArgs...)
+	if stdinSource != nil {
+		cmd.Stdin = stdinSource
+	}
+	if len(extraFiles) > 0 {
+		cmd.ExtraFiles = extraFiles
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to create ffmpeg pipe", "detail": err.Error()})
@@ -1089,6 +1486,7 @@ func (g *Gateway) streamWithFFmpegFromPlan(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to start ffmpeg", "detail": err.Error()})
 		return false
 	}
+	startFeeds()
 
 	for k, v := range responseHeaders {
 		w.Header().Set(k, v)
@@ -1099,6 +1497,11 @@ func (g *Gateway) streamWithFFmpegFromPlan(w http.ResponseWriter, r *http.Reques
 	w.WriteHeader(http.StatusOK)
 	_, copyErr := io.Copy(w, stdout)
 	waitErr := cmd.Wait()
+	for i := 0; i < feedWorkers; i++ {
+		if feedErr := <-feedErrCh; feedErr != nil && r.Context().Err() == nil && !isClientAbortError(feedErr) {
+			log.Printf("ffmpeg input feed error: %v", feedErr)
+		}
+	}
 
 	if copyErr != nil && !isClientAbortError(copyErr) {
 		log.Printf("ffmpeg stream copy error: %v", copyErr)
@@ -1379,7 +1782,15 @@ func (g *Gateway) handleDownloadViaExtractorIPCWithDefault(w http.ResponseWriter
 	}
 
 	if needsFFmpeg, _ := plan["needs_ffmpeg"].(bool); needsFFmpeg {
-		_ = g.streamWithFFmpegFromPlan(w, r, plan)
+		_ = g.streamWithFFmpegFromPlan(w, r, plan, func() (map[string]any, *ipcError, error) {
+			return g.extractor.DownloadRefresh(workerID, key, download)
+		})
+		return
+	}
+	if anyString(plan["session_type"]) == "video" && anyString(plan["delivery_mode"]) == "single_progressive" {
+		_ = g.streamChunkedRangeWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
+			return g.extractor.DownloadRefresh(workerID, key, download)
+		}, int64(videoChunkSizeBytes))
 		return
 	}
 	_ = g.streamDirectPlanWithRefresh(w, r, plan, func() (map[string]any, *ipcError, error) {
@@ -1485,7 +1896,9 @@ func (g *Gateway) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Req
 	}
 
 	if needsFFmpeg, _ := plan["needs_ffmpeg"].(bool); needsFFmpeg {
-		_ = g.streamWithFFmpegFromPlan(w, r, plan)
+		_ = g.streamWithFFmpegFromPlan(w, r, plan, func() (map[string]any, *ipcError, error) {
+			return g.extractor.DownloadRefresh(workerID, key, download)
+		})
 		return
 	}
 	if r.URL.Path == "/stream/video-chunked" || r.URL.Path == "/stream/mp3-chunked" {

@@ -754,7 +754,7 @@ func (g *Gateway) mediaHTTPClient(workerID string) *http.Client {
 func shouldBypassWorkerProxy(plan map[string]any) bool {
 	sessionType, _ := plan["session_type"].(string)
 	switch sessionType {
-	case "photo", "slideshow":
+	case "photo", "slideshow", "mp3":
 		return true
 	}
 	mediaType, _ := plan["media_type"].(string)
@@ -1321,7 +1321,6 @@ func (g *Gateway) downloadPlanSourceToWriter(
 	if strings.TrimSpace(currentURL) == "" {
 		return fmt.Errorf("missing source URL in plan")
 	}
-	mediaClient := g.mediaHTTPClient(workerID)
 
 	var read int64
 	var total int64
@@ -1329,6 +1328,7 @@ func (g *Gateway) downloadPlanSourceToWriter(
 	const maxRefreshAttempts = 3
 
 	for {
+		mediaClient := g.mediaHTTPClientForPlan(workerID, currentPlan)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
 		if err != nil {
 			return err

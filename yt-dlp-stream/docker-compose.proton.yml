@@ -17,6 +17,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data1:/gluetun
     restart: unless-stopped
@@ -69,6 +71,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data2:/gluetun
     restart: unless-stopped
@@ -121,6 +125,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data3:/gluetun
     restart: unless-stopped
@@ -173,6 +179,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data4:/gluetun
     restart: unless-stopped
@@ -225,6 +233,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data5:/gluetun
     restart: unless-stopped
@@ -277,6 +287,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data6:/gluetun
     restart: unless-stopped
@@ -329,6 +341,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data7:/gluetun
     restart: unless-stopped
@@ -381,6 +395,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data8:/gluetun
     restart: unless-stopped
@@ -433,6 +449,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data9:/gluetun
     restart: unless-stopped
@@ -485,6 +503,8 @@ services:
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
     volumes:
       - ./gluetun/data10:/gluetun
     restart: unless-stopped

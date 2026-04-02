@@ -504,16 +504,16 @@ def _generate_tiktok_photo_links(
     audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
     duration_seconds = int(info.get("duration", 0) or 0)
 
-    photos = [{"type": "photo", "url": img.get("url")} for img in image_formats]
-
+    photos = []
     photo_keys = []
     for i, img in enumerate(image_formats):
+        img_url = img.get("url")
         http_headers, cookies = _extract_format_headers(img, info, request_url, proxy, impersonate)
         key = _get_download_cache().create_session(
-            url=img.get("url"),
+            url=img_url,
             type="photo",
             photo_index=i + 1,
-            direct_url=img.get("url"),
+            direct_url=img_url,
             http_headers=http_headers,
             cookies=cookies,
             author=author["nickname"],
@@ -523,7 +523,13 @@ def _generate_tiktok_photo_links(
             filesize=img.get("filesize") or img.get("filesize_approx"),
             duration=duration_seconds,
         )
-        photo_keys.append(f"/tiktok/download?key={key}")
+        download_link = f"/tiktok/download?key={key}"
+        photo_keys.append(download_link)
+        photos.append({
+            "type": "photo",
+            "url": img_url,
+            "download_link": download_link,
+        })
 
     links: Dict[str, Any] = {"no_watermark": photo_keys}
 
@@ -971,6 +977,13 @@ def _download_prepare(params: Dict[str, Any]) -> Dict[str, Any]:
         plan["ffmpeg_audio_url"] = meta.get("ffmpeg_audio_url")
     if meta.get("ffmpeg_audio_headers"):
         plan["ffmpeg_audio_headers"] = meta.get("ffmpeg_audio_headers")
+    # FFmpeg output size is not deterministic from source filesize, so avoid
+    # advertising a potentially wrong Content-Length that causes truncated
+    # downloads on clients.
+    if plan["needs_ffmpeg"]:
+        response_headers = plan.get("response_headers")
+        if isinstance(response_headers, dict):
+            response_headers.pop("Content-Length", None)
     return plan
 
 
@@ -993,6 +1006,25 @@ def _tiktok_download_prepare(params: Dict[str, Any]) -> Dict[str, Any]:
             "message": "Download link expired or invalid",
         }))
 
+    if session.type == "slideshow":
+        original_url = session.url
+        proxy = session.proxy
+        impersonate = session.impersonate
+        if original_url:
+            try:
+                info = ydl_manager.extract_info(original_url, proxy=proxy, impersonate=impersonate)
+                if info:
+                    formats = info.get("formats", [])
+                    image_formats = [f for f in formats if f.get("format_id", "").startswith("image-")]
+                    audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
+                    if image_formats:
+                        session.photo_urls = [img.get("url") for img in image_formats if img.get("url")]
+                    if audio_format and audio_format.get("url"):
+                        session.audio_url = audio_format.get("url")
+                    session.duration = info.get("duration") or session.duration
+            except Exception as exc:
+                logger.warning("Could not refresh slideshow URLs during prepare: %s", exc)
+
     plan = _build_stream_plan_from_session(session, download)
     plan["session_type"] = session.type
     return plan
@@ -1013,13 +1045,6 @@ def _tiktok_download_refresh(params: Dict[str, Any]) -> Dict[str, Any]:
         }))
 
     content_type = session.type
-    if content_type not in {"video", "photo", "mp3"}:
-        raise RuntimeError(json.dumps({
-            "status": 400,
-            "code": "unsupported_refresh",
-            "message": f"Refresh not supported for content type: {content_type}",
-        }))
-
     original_url = session.url
     proxy = session.proxy
     impersonate = session.impersonate
@@ -1028,6 +1053,31 @@ def _tiktok_download_refresh(params: Dict[str, Any]) -> Dict[str, Any]:
             "status": 400,
             "code": "missing_original_url",
             "message": "Cannot refresh URL without original session URL",
+        }))
+
+    if content_type == "slideshow":
+        info = ydl_manager.extract_info(original_url, proxy=proxy, impersonate=impersonate)
+        if not info:
+            raise RuntimeError(json.dumps({
+                "status": 503,
+                "code": "refresh_failed",
+                "message": "Failed to refresh TikTok slideshow URLs",
+            }))
+        formats = info.get("formats", [])
+        image_formats = [f for f in formats if f.get("format_id", "").startswith("image-")]
+        audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
+        if image_formats:
+            session.photo_urls = [img.get("url") for img in image_formats if img.get("url")]
+        if audio_format and audio_format.get("url"):
+            session.audio_url = audio_format.get("url")
+        session.duration = info.get("duration") or session.duration
+        return _build_stream_plan_from_session(session, download)
+
+    if content_type not in {"video", "photo", "mp3"}:
+        raise RuntimeError(json.dumps({
+            "status": 400,
+            "code": "unsupported_refresh",
+            "message": f"Refresh not supported for content type: {content_type}",
         }))
 
     info = ydl_manager.extract_info(original_url, proxy=proxy, impersonate=impersonate)

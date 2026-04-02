@@ -432,21 +432,20 @@ def generate_photo_download_links(
     audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
     duration_seconds = int(info.get("duration", 0) or 0)
 
-    # Create photo picker list
-    photos = [{"type": "photo", "url": img["url"]} for img in image_formats]
-
-    # Generate individual photo download links
+    # Create photo picker list + individual encrypted download links
+    photos = []
     photo_keys = []
     for i, img in enumerate(image_formats):
+        img_url = img.get("url")
         http_headers, cookies = extract_format_headers(
             img, info, request_url, proxy=proxy, impersonate=impersonate
         )
 
         key = download_cache.create_session(
-            url=img["url"],
+            url=img_url,
             type="photo",
             photo_index=i + 1,
-            direct_url=img.get("url"),
+            direct_url=img_url,
             http_headers=http_headers,
             cookies=cookies,
             author=author.nickname,
@@ -456,7 +455,13 @@ def generate_photo_download_links(
             filesize=img.get("filesize") or img.get("filesize_approx"),
             duration=duration_seconds,
         )
-        photo_keys.append(f"/tiktok/download?key={key}")
+        download_link = f"/tiktok/download?key={key}"
+        photo_keys.append(download_link)
+        photos.append({
+            "type": "photo",
+            "url": img_url,
+            "download_link": download_link,
+        })
 
     links = {"no_watermark": photo_keys}
 

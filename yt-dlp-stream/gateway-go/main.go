@@ -711,6 +711,21 @@ func NewGateway(cfg Config) *Gateway {
 	return gw
 }
 
+func (g *Gateway) ipcReady() bool {
+	return g.cfg.ExtractorIPCEnabled && g.extractor != nil
+}
+
+func (g *Gateway) requireIPCReady(w http.ResponseWriter) bool {
+	if g.ipcReady() {
+		return true
+	}
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"error":  "Extractor IPC unavailable",
+		"detail": "EXTRACTOR_IPC_ENABLED=true but extractor workers are not ready",
+	})
+	return false
+}
+
 func (g *Gateway) mediaHTTPClient(workerID string) *http.Client {
 	if workerID == "" {
 		return g.client
@@ -732,6 +747,7 @@ func (g *Gateway) mediaHTTPClient(workerID string) *http.Client {
 	tr.Proxy = http.ProxyURL(proxyURL)
 	return &http.Client{
 		Transport: tr,
+		Timeout:   g.client.Timeout,
 	}
 }
 
@@ -829,7 +845,8 @@ func (g *Gateway) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service":               "yt-dlp gateway",
 		"transport":             "go-http + python-ipc",
-		"extractor_ipc_enabled": g.extractor != nil,
+		"extractor_ipc_enabled": g.cfg.ExtractorIPCEnabled,
+		"extractor_ipc_ready":   g.ipcReady(),
 		"status":                "ok",
 	})
 }
@@ -838,7 +855,10 @@ func (g *Gateway) handleFetch(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlFetch, "fetch") {
 		return
 	}
-	if g.extractor != nil {
+	if g.cfg.ExtractorIPCEnabled {
+		if !g.requireIPCReady(w) {
+			return
+		}
 		g.handleFetchViaExtractorIPC(w, r)
 		return
 	}
@@ -885,7 +905,10 @@ func (g *Gateway) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlDownload, "download") {
 		return
 	}
-	if g.extractor != nil {
+	if g.cfg.ExtractorIPCEnabled {
+		if !g.requireIPCReady(w) {
+			return
+		}
 		g.handleDownloadViaExtractorIPC(w, r)
 		return
 	}
@@ -894,7 +917,10 @@ func (g *Gateway) handleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) handleInfo(w http.ResponseWriter, r *http.Request) {
-	if g.extractor != nil {
+	if g.cfg.ExtractorIPCEnabled {
+		if !g.requireIPCReady(w) {
+			return
+		}
 		g.handleInfoViaExtractorIPC(w, r)
 		return
 	}
@@ -965,7 +991,10 @@ func (g *Gateway) selectExtractorWorker(preferred string, requireHealthy bool) s
 }
 
 func (g *Gateway) handleStream(w http.ResponseWriter, r *http.Request) {
-	if g.extractor != nil {
+	if g.cfg.ExtractorIPCEnabled {
+		if !g.requireIPCReady(w) {
+			return
+		}
 		g.handleStreamViaExtractorIPC(w, r)
 		return
 	}
@@ -1598,7 +1627,7 @@ func (g *Gateway) streamDirectPlanWithRefresh(
 			}
 		}
 
-			resp, err := mediaClient.Do(req)
+		resp, err := mediaClient.Do(req)
 		if err != nil {
 			if r.Context().Err() != nil || isClientAbortError(err) {
 				return true
@@ -1740,7 +1769,7 @@ func (g *Gateway) streamChunkedRangeWithRefresh(
 		}
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 
-			resp, err := mediaClient.Do(req)
+		resp, err := mediaClient.Do(req)
 		if err != nil {
 			if r.Context().Err() != nil || isClientAbortError(err) {
 				return true
@@ -1828,7 +1857,9 @@ func (g *Gateway) handleDownloadViaExtractorIPCWithDefault(w http.ResponseWriter
 		})
 		return
 	}
-	if anyString(plan["session_type"]) == "video" && anyString(plan["delivery_mode"]) == "single_progressive" {
+	sessionType := anyString(plan["session_type"])
+	deliveryMode := anyString(plan["delivery_mode"])
+	if deliveryMode == "single_progressive" && sessionType == "video" {
 		_ = g.streamChunkedRangeWithRefresh(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
 			return g.extractor.DownloadRefresh(workerID, key, download)
 		}, int64(videoChunkSizeBytes))
@@ -1942,6 +1973,25 @@ func (g *Gateway) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Req
 		})
 		return
 	}
+
+	deliveryMode := anyString(plan["delivery_mode"])
+	if deliveryMode == "single_progressive" {
+		if r.URL.Path == "/stream/video-chunked" || r.URL.Path == "/stream/mp3-chunked" {
+			chunkSize := int64(videoChunkSizeBytes)
+			if r.URL.Path == "/stream/mp3-chunked" {
+				chunkSize = audioChunkSizeBytes
+			}
+			_ = g.streamChunkedRangeWithRefresh(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
+				return g.extractor.DownloadRefresh(workerID, key, download)
+			}, chunkSize)
+			return
+		}
+		_ = g.streamDirectPlanWithRefresh(w, r, workerID, plan, func() (map[string]any, *ipcError, error) {
+			return g.extractor.DownloadRefresh(workerID, key, download)
+		})
+		return
+	}
+
 	if r.URL.Path == "/stream/video-chunked" || r.URL.Path == "/stream/mp3-chunked" {
 		chunkSize := int64(videoChunkSizeBytes)
 		if r.URL.Path == "/stream/mp3-chunked" {
@@ -1962,7 +2012,10 @@ func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
 		return
 	}
-	if g.extractor != nil {
+	if g.cfg.ExtractorIPCEnabled {
+		if !g.requireIPCReady(w) {
+			return
+		}
 		g.handleTikTokViaExtractorIPC(w, r)
 		return
 	}
@@ -2016,7 +2069,10 @@ func (g *Gateway) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Req
 }
 
 func (g *Gateway) handleTikTokDownload(w http.ResponseWriter, r *http.Request) {
-	if g.extractor != nil {
+	if g.cfg.ExtractorIPCEnabled {
+		if !g.requireIPCReady(w) {
+			return
+		}
 		g.handleTikTokDownloadViaExtractorIPC(w, r)
 		return
 	}
@@ -2091,6 +2147,33 @@ func anyToInt(v any, fallback int) int {
 	return fallback
 }
 
+func shouldRefreshTikTokForbidden(body []byte) bool {
+	text := strings.ToLower(string(body))
+	if strings.TrimSpace(text) == "" {
+		return true
+	}
+	permanentPatterns := []string{
+		"geo_restricted",
+		"geo restricted",
+		"region",
+		"country",
+		"blocked",
+		"permission",
+		"do not have permission",
+		"login",
+		"log in",
+		"captcha",
+		"verify you are human",
+		"access denied",
+	}
+	for _, p := range permanentPatterns {
+		if strings.Contains(text, p) {
+			return false
+		}
+	}
+	return true
+}
+
 func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
 	key := strings.TrimSpace(r.URL.Query().Get("key"))
 	if key == "" {
@@ -2124,7 +2207,10 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 	}
 
 	if fallback, _ := plan["fallback_proxy"].(bool); fallback {
-		g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, preferred, true)
+		writeJSON(w, http.StatusBadGateway, map[string]string{
+			"error":  "fallback_proxy_not_allowed",
+			"detail": "EXTRACTOR_IPC_ENABLED=true requires full IPC mode",
+		})
 		return
 	}
 	if contentType, _ := plan["content_type"].(string); contentType == "slideshow" {
@@ -2151,6 +2237,7 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 	currentReqHeaders := requestHeaders
 	currentRespHeaders := responseHeaders
 	currentMediaType := mediaType
+	mediaClient := g.mediaHTTPClient(workerID)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
@@ -2162,7 +2249,7 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 			req.Header.Set(k, v)
 		}
 
-		resp, err := g.client.Do(req)
+		resp, err := mediaClient.Do(req)
 		if err != nil {
 			if r.Context().Err() != nil || isClientAbortError(err) {
 				return
@@ -2172,8 +2259,16 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 		}
 
 		if resp.StatusCode == http.StatusForbidden && attempt == 0 && canRefresh {
-			_, _ = io.Copy(io.Discard, resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			_ = resp.Body.Close()
+			if !shouldRefreshTikTokForbidden(body) {
+				copyHeader(w.Header(), resp.Header, map[string]bool{"transfer-encoding": true})
+				w.WriteHeader(resp.StatusCode)
+				if len(body) > 0 {
+					_, _ = w.Write(body)
+				}
+				return
+			}
 
 			refreshedPlan, rpcErr, err := g.extractor.TikTokDownloadRefresh(workerID, key, download)
 			if err != nil {
@@ -2184,7 +2279,10 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 				break
 			}
 			if fallback, _ := refreshedPlan["fallback_proxy"].(bool); fallback {
-				g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, preferred, true)
+				writeJSON(w, http.StatusBadGateway, map[string]string{
+					"error":  "fallback_proxy_not_allowed",
+					"detail": "EXTRACTOR_IPC_ENABLED=true requires full IPC mode",
+				})
 				return
 			}
 			if newURL, _ := refreshedPlan["direct_url"].(string); newURL != "" {
@@ -2244,6 +2342,13 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 }
 
 func (g *Gateway) downloadToFile(ctx context.Context, srcURL string, headers map[string]string, dstPath string) error {
+	return g.downloadToFileWithClient(ctx, g.client, srcURL, headers, dstPath)
+}
+
+func (g *Gateway) downloadToFileWithClient(ctx context.Context, client *http.Client, srcURL string, headers map[string]string, dstPath string) error {
+	if client == nil {
+		client = g.client
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srcURL, nil)
 	if err != nil {
 		return err
@@ -2251,7 +2356,7 @@ func (g *Gateway) downloadToFile(ctx context.Context, srcURL string, headers map
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	resp, err := g.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -2277,9 +2382,10 @@ func (g *Gateway) streamTikTokSlideshowFromPlan(
 	preferred string,
 	plan map[string]any,
 ) {
+	mediaClient := g.mediaHTTPClient(workerID)
 	currentPlan := plan
 	for attempt := 0; attempt < 2; attempt++ {
-		outputPath, mediaType, responseHeaders, tempDir, statusCode, err := g.renderTikTokSlideshowFromPlan(r.Context(), currentPlan)
+		outputPath, mediaType, responseHeaders, tempDir, statusCode, err := g.renderTikTokSlideshowFromPlan(r.Context(), mediaClient, currentPlan)
 		if err == nil {
 			defer os.RemoveAll(tempDir)
 			for k, v := range responseHeaders {
@@ -2313,7 +2419,10 @@ func (g *Gateway) streamTikTokSlideshowFromPlan(
 			refreshedPlan, rpcErr, refreshErr := g.extractor.TikTokDownloadRefresh(workerID, key, download)
 			if refreshErr == nil && rpcErr == nil {
 				if fallback, _ := refreshedPlan["fallback_proxy"].(bool); fallback {
-					g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, preferred, true)
+					writeJSON(w, http.StatusBadGateway, map[string]string{
+						"error":  "fallback_proxy_not_allowed",
+						"detail": "EXTRACTOR_IPC_ENABLED=true requires full IPC mode",
+					})
 					return
 				}
 				currentPlan = refreshedPlan
@@ -2333,7 +2442,7 @@ func (g *Gateway) streamTikTokSlideshowFromPlan(
 	writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to render slideshow", "detail": "Unknown slideshow rendering failure"})
 }
 
-func (g *Gateway) renderTikTokSlideshowFromPlan(ctx context.Context, plan map[string]any) (string, string, map[string]string, string, int, error) {
+func (g *Gateway) renderTikTokSlideshowFromPlan(ctx context.Context, mediaClient *http.Client, plan map[string]any) (string, string, map[string]string, string, int, error) {
 	photoURLs := anyToStringSlice(plan["photo_urls"])
 	audioURL, _ := plan["audio_url"].(string)
 	if len(photoURLs) == 0 {
@@ -2357,7 +2466,7 @@ func (g *Gateway) renderTikTokSlideshowFromPlan(ctx context.Context, plan map[st
 	imagePaths := make([]string, 0, len(photoURLs))
 	for i, u := range photoURLs {
 		dst := filepath.Join(tempDir, fmt.Sprintf("image_%d.jpg", i))
-		if err := g.downloadToFile(ctx, u, map[string]string{}, dst); err != nil {
+		if err := g.downloadToFileWithClient(ctx, mediaClient, u, map[string]string{}, dst); err != nil {
 			return "", "", nil, tempDir, http.StatusBadGateway, fmt.Errorf("failed to download slideshow image: %w", err)
 		}
 		imagePaths = append(imagePaths, dst)
@@ -2366,7 +2475,7 @@ func (g *Gateway) renderTikTokSlideshowFromPlan(ctx context.Context, plan map[st
 	audioPath := ""
 	if strings.TrimSpace(audioURL) != "" {
 		audioPath = filepath.Join(tempDir, "audio.mp3")
-		if err := g.downloadToFile(ctx, audioURL, map[string]string{}, audioPath); err != nil {
+		if err := g.downloadToFileWithClient(ctx, mediaClient, audioURL, map[string]string{}, audioPath); err != nil {
 			return "", "", nil, tempDir, http.StatusBadGateway, fmt.Errorf("failed to download slideshow audio: %w", err)
 		}
 	}

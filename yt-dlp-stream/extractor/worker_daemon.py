@@ -104,12 +104,17 @@ def _detect_content_type(info: Dict[str, Any]) -> str:
     if info.get("_type") == "playlist":
         entries = info.get("entries", [])
         if entries and entries[0].get("formats"):
-            first_fmt = entries[0]["formats"][0]
+            first_formats = entries[0]["formats"]
+            if any(fmt.get("format_id", "").startswith("image-") for fmt in first_formats):
+                return "photos"
+            first_fmt = first_formats[0]
             if first_fmt.get("video_ext") == "jpg":
                 return "photos"
         return "playlist"
     formats = info.get("formats", [])
     if formats:
+        if any(fmt.get("format_id", "").startswith("image-") for fmt in formats):
+            return "photos"
         first_fmt = formats[0]
         if first_fmt.get("video_ext") == "jpg":
             return "photos"
@@ -133,7 +138,13 @@ def _get_photo_url(formats: list) -> Optional[str]:
     for fmt in formats:
         if fmt.get("format_id") == "orig":
             return fmt.get("url")
+    for fmt in formats:
+        if fmt.get("format_id", "").startswith("image-"):
+            return fmt.get("url")
     if formats:
+        for fmt in formats:
+            if fmt.get("url"):
+                return fmt.get("url")
         return formats[-1].get("url")
     return None
 
@@ -850,13 +861,17 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
                 entry = entries[photo_index - 1] or {}
                 formats = entry.get("formats", []) or []
                 fmt = next((f for f in formats if f.get("format_id") == "orig"), None)
+                if not fmt:
+                    fmt = next((f for f in formats if f.get("format_id", "").startswith("image-")), None)
                 if not fmt and formats:
-                    fmt = formats[-1]
+                    fmt = next((f for f in formats if f.get("url")), formats[-1])
         else:
             formats = info.get("formats", []) or []
             fmt = next((f for f in formats if f.get("format_id") == "orig"), None)
+            if not fmt:
+                fmt = next((f for f in formats if f.get("format_id", "").startswith("image-")), None)
             if not fmt and formats:
-                fmt = formats[-1]
+                fmt = next((f for f in formats if f.get("url")), formats[-1])
 
         if not fmt or not fmt.get("url"):
             raise RuntimeError(json.dumps({

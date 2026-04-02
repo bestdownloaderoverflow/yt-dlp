@@ -24,13 +24,18 @@ def detect_content_type(info: dict) -> str:
     if info.get("_type") == "playlist":
         entries = info.get("entries", [])
         if entries and entries[0].get("formats"):
-            first_fmt = entries[0]["formats"][0]
+            first_formats = entries[0]["formats"]
+            if any(f.get("format_id", "").startswith("image-") for f in first_formats):
+                return "photos"
+            first_fmt = first_formats[0]
             if first_fmt.get("video_ext") == "jpg":
                 return "photos"
         return "playlist"
 
     formats = info.get("formats", [])
     if formats:
+        if any(f.get("format_id", "").startswith("image-") for f in formats):
+            return "photos"
         first_fmt = formats[0]
         if first_fmt.get("video_ext") == "jpg":
             return "photos"
@@ -133,8 +138,13 @@ def get_photo_url(formats: list) -> str:
     for f in formats:
         if f.get("format_id") == "orig":
             return f.get("url")
-    # Fallback to last format (usually highest quality)
+    for f in formats:
+        if f.get("format_id", "").startswith("image-"):
+            return f.get("url")
     if formats:
+        for f in formats:
+            if f.get("url"):
+                return f.get("url")
         return formats[-1].get("url")
     return None
 

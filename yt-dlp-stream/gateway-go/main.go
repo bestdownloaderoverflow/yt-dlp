@@ -751,6 +751,26 @@ func (g *Gateway) mediaHTTPClient(workerID string) *http.Client {
 	}
 }
 
+func shouldBypassWorkerProxy(plan map[string]any) bool {
+	sessionType, _ := plan["session_type"].(string)
+	switch sessionType {
+	case "photo", "slideshow":
+		return true
+	}
+	mediaType, _ := plan["media_type"].(string)
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(mediaType)), "image/") {
+		return true
+	}
+	return len(anyToStringSlice(plan["photo_urls"])) > 0
+}
+
+func (g *Gateway) mediaHTTPClientForPlan(workerID string, plan map[string]any) *http.Client {
+	if shouldBypassWorkerProxy(plan) {
+		return g.client
+	}
+	return g.mediaHTTPClient(workerID)
+}
+
 func (g *Gateway) Shutdown() {
 	g.cancel()
 	if g.extractor != nil {
@@ -1601,12 +1621,13 @@ func (g *Gateway) streamDirectPlanWithRefresh(
 	}
 
 	currentURL := directURL
+	currentPlan := plan
 	currentReqHeaders := requestHeaders
 	currentRespHeaders := responseHeaders
 	currentMediaType := mediaType
-	mediaClient := g.mediaHTTPClient(workerID)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		mediaClient := g.mediaHTTPClientForPlan(workerID, currentPlan)
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to create upstream request", "detail": err.Error()})
@@ -1647,6 +1668,7 @@ func (g *Gateway) streamDirectPlanWithRefresh(
 			if newURL, _ := refreshedPlan["direct_url"].(string); newURL != "" {
 				currentURL = newURL
 			}
+			currentPlan = refreshedPlan
 			currentReqHeaders = anyMapToStringMap(refreshedPlan["request_headers"])
 			currentRespHeaders = anyMapToStringMap(refreshedPlan["response_headers"])
 			if mt, _ := refreshedPlan["media_type"].(string); mt != "" {
@@ -2234,12 +2256,13 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 	}
 
 	currentURL := directURL
+	currentPlan := plan
 	currentReqHeaders := requestHeaders
 	currentRespHeaders := responseHeaders
 	currentMediaType := mediaType
-	mediaClient := g.mediaHTTPClient(workerID)
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
+		mediaClient := g.mediaHTTPClientForPlan(workerID, currentPlan)
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to create upstream request", "detail": err.Error()})
@@ -2288,6 +2311,7 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 			if newURL, _ := refreshedPlan["direct_url"].(string); newURL != "" {
 				currentURL = newURL
 			}
+			currentPlan = refreshedPlan
 			currentReqHeaders = anyMapToStringMap(refreshedPlan["request_headers"])
 			currentRespHeaders = anyMapToStringMap(refreshedPlan["response_headers"])
 			if mt, _ := refreshedPlan["media_type"].(string); mt != "" {
@@ -2382,9 +2406,9 @@ func (g *Gateway) streamTikTokSlideshowFromPlan(
 	preferred string,
 	plan map[string]any,
 ) {
-	mediaClient := g.mediaHTTPClient(workerID)
 	currentPlan := plan
 	for attempt := 0; attempt < 2; attempt++ {
+		mediaClient := g.mediaHTTPClientForPlan(workerID, currentPlan)
 		outputPath, mediaType, responseHeaders, tempDir, statusCode, err := g.renderTikTokSlideshowFromPlan(r.Context(), mediaClient, currentPlan)
 		if err == nil {
 			defer os.RemoveAll(tempDir)

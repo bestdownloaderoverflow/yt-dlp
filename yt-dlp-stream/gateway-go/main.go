@@ -803,26 +803,15 @@ func (g *Gateway) handleRoot(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (g *Gateway) requireExtractorIPC(w http.ResponseWriter, path string) bool {
-	if g.extractor != nil {
-		return true
-	}
-	w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
-	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-		"error":  "Extractor IPC disabled",
-		"detail": fmt.Sprintf("%s requires IPC mode (set EXTRACTOR_IPC_ENABLED=true)", path),
-	})
-	return false
-}
-
 func (g *Gateway) handleFetch(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlFetch, "fetch") {
 		return
 	}
-	if !g.requireExtractorIPC(w, "/fetch") {
+	if g.extractor != nil {
+		g.handleFetchViaExtractorIPC(w, r)
 		return
 	}
-	g.handleFetchViaExtractorIPC(w, r)
+	g.proxyWithRetry(w, r, "/fetch", http.MethodGet, "", false)
 }
 
 func (g *Gateway) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
@@ -865,17 +854,20 @@ func (g *Gateway) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if !g.checkRateLimit(w, r, g.rlDownload, "download") {
 		return
 	}
-	if !g.requireExtractorIPC(w, "/download") {
+	if g.extractor != nil {
+		g.handleDownloadViaExtractorIPC(w, r)
 		return
 	}
-	g.handleDownloadViaExtractorIPCWithDefault(w, r, true)
+	// Download keys are worker-affine (`wX::...`), so keep routing strict to owner.
+	g.proxyWithRetry(w, r, "/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), true)
 }
 
 func (g *Gateway) handleInfo(w http.ResponseWriter, r *http.Request) {
-	if !g.requireExtractorIPC(w, "/info") {
+	if g.extractor != nil {
+		g.handleInfoViaExtractorIPC(w, r)
 		return
 	}
-	g.handleInfoViaExtractorIPC(w, r)
+	g.proxyWithRetry(w, r, "/info", http.MethodGet, "", false)
 }
 
 func (g *Gateway) handleInfoViaExtractorIPC(w http.ResponseWriter, r *http.Request) {
@@ -942,10 +934,11 @@ func (g *Gateway) selectExtractorWorker(preferred string, requireHealthy bool) s
 }
 
 func (g *Gateway) handleStream(w http.ResponseWriter, r *http.Request) {
-	if !g.requireExtractorIPC(w, r.URL.Path) {
+	if g.extractor != nil {
+		g.handleStreamViaExtractorIPC(w, r)
 		return
 	}
-	g.handleStreamViaExtractorIPC(w, r)
+	g.proxyWithRotation(w, r, r.URL.Path)
 }
 
 func extractKeyFromDownloadLink(link string) string {
@@ -1515,10 +1508,11 @@ func (g *Gateway) handleTikTok(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
 		return
 	}
-	if !g.requireExtractorIPC(w, "/tiktok") {
+	if g.extractor != nil {
+		g.handleTikTokViaExtractorIPC(w, r)
 		return
 	}
-	g.handleTikTokViaExtractorIPC(w, r)
+	g.proxyWithRetry(w, r, "/tiktok", http.MethodPost, "", false)
 }
 
 type tiktokIPCRequest struct {
@@ -1568,10 +1562,12 @@ func (g *Gateway) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Req
 }
 
 func (g *Gateway) handleTikTokDownload(w http.ResponseWriter, r *http.Request) {
-	if !g.requireExtractorIPC(w, "/tiktok/download") {
+	if g.extractor != nil {
+		g.handleTikTokDownloadViaExtractorIPC(w, r)
 		return
 	}
-	g.handleTikTokDownloadViaExtractorIPC(w, r)
+	// Download keys are worker-affine (`wX::...`), so keep routing strict to owner.
+	g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount), true)
 }
 
 func parseBoolQuery(raw string, fallback bool) bool {
@@ -1674,10 +1670,7 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 	}
 
 	if fallback, _ := plan["fallback_proxy"].(bool); fallback {
-		writeJSON(w, http.StatusBadGateway, map[string]string{
-			"error":  "Unsupported stream plan",
-			"detail": "fallback_proxy is not allowed in IPC-only mode",
-		})
+		g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, preferred, true)
 		return
 	}
 	if contentType, _ := plan["content_type"].(string); contentType == "slideshow" {
@@ -1737,10 +1730,7 @@ func (g *Gateway) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r *
 				break
 			}
 			if fallback, _ := refreshedPlan["fallback_proxy"].(bool); fallback {
-				writeJSON(w, http.StatusBadGateway, map[string]string{
-					"error":  "Unsupported refreshed plan",
-					"detail": "fallback_proxy is not allowed in IPC-only mode",
-				})
+				g.proxyWithRetry(w, r, "/tiktok/download", http.MethodGet, preferred, true)
 				return
 			}
 			if newURL, _ := refreshedPlan["direct_url"].(string); newURL != "" {
@@ -1983,16 +1973,22 @@ func (g *Gateway) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (g *Gateway) handleTunnel(w http.ResponseWriter, r *http.Request) {
-	if !g.requireExtractorIPC(w, "/tunnel") {
+	workerID := extractWorkerID(r.URL.Query().Get("key"), g.cfg.WorkerCount)
+	if workerID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid key"})
 		return
 	}
-	if r.Method != http.MethodGet {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+
+	worker := g.getPreferredOrHealthyWorker(workerID)
+	if worker == nil {
+		w.Header().Set("Retry-After", strconv.Itoa(g.cfg.DegradedRetryAfter))
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Worker not available"})
 		return
 	}
-	// Keep /tunnel compatibility while serving through IPC download planner.
-	// Tunnel defaults to inline response unless explicitly requested otherwise.
-	g.handleDownloadViaExtractorIPCWithDefault(w, r, false)
+	result := g.streamFromWorker(w, r, worker, "/tunnel")
+	if !result.success && !result.wroteDirect {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Stream failed"})
+	}
 }
 
 func positiveSeconds(d time.Duration) int {

@@ -611,6 +611,11 @@ func (h *Handlers) streamWorkerMP3WithFailover(
 		if err == nil {
 			return true
 		}
+		if delivery.IsResponseCommittedError(err) {
+			log.Printf("[mp3:%s] worker stream failed after response commit: %v", workerID, err)
+			h.scheduleWorkerRestart(workerID, false)
+			return true
+		}
 		log.Printf("[mp3:%s] worker stream attempt %d/%d failed: %v", workerID, idx+1, len(candidates), err)
 		if idx+1 < len(candidates) {
 			h.scheduleWorkerRestart(workerID, false)

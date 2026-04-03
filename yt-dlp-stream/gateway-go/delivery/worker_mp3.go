@@ -5,12 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // StreamWorkerMP3 delegates MP3 generation to the Python worker container via docker exec.
@@ -56,9 +57,10 @@ func (d *Delivery) StreamWorkerMP3(
 
 	// Commit point: probe one byte to detect immediate script errors
 	// (e.g. no direct_url, invalid session) before writing headers.
-	probe := make([]byte, 1)
-	n, probeErr := stdout.Read(probe)
+	probeTimeout := workerMP3ProbeTimeout()
+	n, probe, probeErr := readProbeByteWithTimeout(r.Context(), stdout, probeTimeout)
 	if probeErr != nil {
+		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 		return fmt.Errorf("mp3 stream probe failed (%s): %w", container, stderrToDetail(probeErr, stderr.String()))
 	}
@@ -79,12 +81,36 @@ func (d *Delivery) StreamWorkerMP3(
 	_, copyErr := copyBuffer(w, stdout)
 	waitErr := cmd.Wait()
 	if copyErr != nil && !isClientAbortError(copyErr) {
-		log.Printf("worker mp3 copy error: %v", copyErr)
+		return responseCommittedError(fmt.Errorf("worker mp3 copy error (%s): %w", container, copyErr))
 	}
 	if waitErr != nil && r.Context().Err() == nil && !isClientAbortError(waitErr) {
-		log.Printf("worker mp3 error: %v, out=%s", waitErr, strings.TrimSpace(stderr.String()))
+		return responseCommittedError(fmt.Errorf("worker mp3 error (%s): %w", container, stderrToDetail(waitErr, stderr.String())))
 	}
 	return nil
+}
+
+type responseCommittedErr struct {
+	cause error
+}
+
+func (e *responseCommittedErr) Error() string {
+	return e.cause.Error()
+}
+
+func (e *responseCommittedErr) Unwrap() error {
+	return e.cause
+}
+
+func responseCommittedError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &responseCommittedErr{cause: err}
+}
+
+func IsResponseCommittedError(err error) bool {
+	var committed *responseCommittedErr
+	return errors.As(err, &committed)
 }
 
 func stderrToDetail(err error, stderr string) error {
@@ -92,6 +118,45 @@ func stderrToDetail(err error, stderr string) error {
 		return fmt.Errorf("stderr: %s", strings.TrimSpace(stderr))
 	}
 	return fmt.Errorf("mp3 script error: %w", err)
+}
+
+func readProbeByteWithTimeout(ctx context.Context, r io.Reader, timeout time.Duration) (int, []byte, error) {
+	type probeResult struct {
+		n   int
+		err error
+	}
+	buf := make([]byte, 1)
+	done := make(chan probeResult, 1)
+	go func() {
+		n, err := r.Read(buf)
+		done <- probeResult{n: n, err: err}
+	}()
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return 0, nil, ctx.Err()
+	case <-timer.C:
+		return 0, nil, fmt.Errorf("timeout waiting for first MP3 byte after %s", timeout)
+	case res := <-done:
+		return res.n, buf, res.err
+	}
+}
+
+func workerMP3ProbeTimeout() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("WORKER_MP3_PROBE_TIMEOUT_MS"))
+	if raw == "" {
+		return 5 * time.Second
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		return 5 * time.Second
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 func resolveWorkerContainer(ctx context.Context, workerID string) (string, error) {

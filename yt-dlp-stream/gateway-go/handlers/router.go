@@ -671,19 +671,22 @@ func (h *Handlers) UptimeChecker() {
 		case <-ticker.C:
 			needing := h.Registry.GetWorkersNeedingRestart()
 			for _, workerID := range needing {
-				waited := 0
-				for !h.Registry.IsWorkerIdle(workerID) && waited < 300 {
-					select {
-					case <-h.ctx.Done():
-						return
-					case <-time.After(5 * time.Second):
-						waited += 5
+				wid := workerID
+				go func() {
+					waited := 0
+					for !h.Registry.IsWorkerIdle(wid) && waited < 300 {
+						select {
+						case <-h.ctx.Done():
+							return
+						case <-time.After(5 * time.Second):
+							waited += 5
+						}
 					}
-				}
-				if h.Registry.IsWorkerIdle(workerID) {
-					log.Printf("[uptime] restarting %s after 24h", workerID)
-					_ = h.Registry.ScheduleRestart(workerID)
-				}
+					if h.Registry.IsWorkerIdle(wid) {
+						log.Printf("[uptime] restarting %s after 24h", wid)
+						_ = h.Registry.ScheduleRestart(wid)
+					}
+				}()
 			}
 		}
 	}

@@ -14,6 +14,10 @@ import (
 
 const ipcPoolSize = 4
 
+var ipcBufReaderPool = sync.Pool{
+	New: func() any { return bufio.NewReaderSize(nil, 4096) },
+}
+
 type ipcRequest struct {
 	ID     string         `json:"id"`
 	Method string         `json:"method"`
@@ -143,7 +147,10 @@ func (p *ExtractorPool) callWithTimeout(workerID, method string, params map[stri
 		return nil, nil, err
 	}
 
-	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	br := ipcBufReaderPool.Get().(*bufio.Reader)
+	br.Reset(conn)
+	line, err := br.ReadBytes('\n')
+	ipcBufReaderPool.Put(br)
 	if err != nil {
 		conn.Close()
 		return nil, nil, err

@@ -48,8 +48,11 @@ func (v *VPNRotator) HealthCheck(workerID string) bool {
 	if req, err := http.NewRequest(http.MethodGet, ipURL, nil); err == nil {
 		resp, err := v.healthCl.Do(req)
 		if err == nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
 			_ = resp.Body.Close()
+			if ip := strings.TrimSpace(string(body)); ip != "" {
+				log.Printf("[%s] VPN public IP: %s", workerID, ip)
+			}
 		}
 	}
 

@@ -185,7 +185,7 @@ func (d *Delivery) StreamFFmpeg(
 // DownloadToFileSimple downloads a file directly (no Range requests) for simple cases like slideshow images.
 func DownloadToFileSimple(ctx context.Context, client *http.Client, srcURL string, headers map[string]string, dstPath string) error {
 	if client == nil {
-		return nil // sentinel, caller should provide client
+		return fmt.Errorf("nil HTTP client")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srcURL, nil)
 	if err != nil {

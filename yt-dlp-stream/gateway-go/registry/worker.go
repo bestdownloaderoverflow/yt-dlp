@@ -236,7 +236,7 @@ func (r *WorkerRegistry) MarkRestarted(workerID string, success bool) {
 	w.NextRestartAt = now.Add(time.Duration(delay) * time.Second)
 
 	windowStart := now.Add(-time.Duration(r.cfg.RestartBudgetWindow) * time.Second)
-	filtered := w.RestartEvents[:0]
+	filtered := make([]time.Time, 0, len(w.RestartEvents))
 	for _, t := range w.RestartEvents {
 		if t.After(windowStart) {
 			filtered = append(filtered, t)

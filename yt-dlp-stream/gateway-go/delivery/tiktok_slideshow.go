@@ -216,13 +216,7 @@ func ShouldRefreshTikTokForbidden(body []byte) bool {
 	permanentPatterns := []string{
 		"geo_restricted",
 		"geo restricted",
-		"region",
-		"country",
-		"blocked",
-		"permission",
 		"do not have permission",
-		"login",
-		"log in",
 		"captcha",
 		"verify you are human",
 		"access denied",

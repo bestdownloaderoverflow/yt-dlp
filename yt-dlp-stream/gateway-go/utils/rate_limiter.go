@@ -35,6 +35,10 @@ func (l *SlidingWindowRateLimiter) Check(key string) (bool, int) {
 	if idx > 0 {
 		q = q[idx:]
 	}
+	if len(q) == 0 {
+		delete(l.events, key)
+		return true, 0
+	}
 	if len(q) >= l.limit {
 		retryAfter := int(q[0].Add(time.Duration(l.windowSeconds) * time.Second).Sub(now).Seconds())
 		if retryAfter < 1 {

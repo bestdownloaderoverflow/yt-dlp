@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -140,14 +141,16 @@ func (h *Handlers) requireIPCReady(w http.ResponseWriter) bool {
 
 func (h *Handlers) buildForwardHeaders(r *http.Request, method string) http.Header {
 	hdr := make(http.Header)
-	for _, key := range []string{"Accept", "Accept-Language", "User-Agent", "Range", "If-Range"} {
+	for _, key := range []string{"Accept", "Accept-Language", "User-Agent", "Range", "If-Range", "Cookie"} {
 		if v := r.Header.Get(key); v != "" {
 			hdr.Set(key, v)
 		}
 	}
 	incomingXFF := r.Header.Get("X-Forwarded-For")
 	remoteIP := r.RemoteAddr
-	if i := strings.LastIndex(remoteIP, ":"); i != -1 {
+	if host, _, err := net.SplitHostPort(remoteIP); err == nil {
+		remoteIP = host
+	} else if i := strings.LastIndex(remoteIP, ":"); i != -1 {
 		remoteIP = remoteIP[:i]
 	}
 	if incomingXFF != "" && remoteIP != "" {

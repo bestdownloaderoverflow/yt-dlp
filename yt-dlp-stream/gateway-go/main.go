@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"gateway-go/delivery"
@@ -73,8 +76,22 @@ func main() {
 	addr := fmt.Sprintf(":%d", cfg.GatewayPort)
 	server := &http.Server{Addr: addr, Handler: h}
 	log.Printf("starting Go gateway on port %d", cfg.GatewayPort)
-	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("gateway failed: %v", err)
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("gateway failed: %v", err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Println("shutting down gateway...")
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		log.Printf("shutdown error: %v", err)
 	}
 }
 

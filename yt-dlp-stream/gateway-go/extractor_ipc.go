@@ -61,12 +61,18 @@ func NewExtractorPool(workerCount int, timeout time.Duration) (*ExtractorPool, e
 func (p *ExtractorPool) Close() {}
 
 func (p *ExtractorPool) call(workerID, method string, params map[string]any) (map[string]any, *ipcError, error) {
+	return p.callWithTimeout(workerID, method, params, 0)
+}
+
+func (p *ExtractorPool) callWithTimeout(workerID, method string, params map[string]any, timeout time.Duration) (map[string]any, *ipcError, error) {
 	addr, ok := p.addrs[workerID]
 	if !ok {
 		return nil, nil, fmt.Errorf("unknown worker: %s", workerID)
 	}
 
-	timeout := p.timeout
+	if timeout <= 0 {
+		timeout = p.timeout
+	}
 	if timeout <= 0 {
 		timeout = 45 * time.Second
 	}
@@ -187,7 +193,7 @@ func (p *ExtractorPool) ResolveFormats(workerID, url, formatStr, proxy, imperson
 }
 
 func (p *ExtractorPool) Health(workerID string) error {
-	_, rpcErr, err := p.call(workerID, "health", nil)
+	_, rpcErr, err := p.callWithTimeout(workerID, "health", nil, 10*time.Second)
 	if err != nil {
 		return err
 	}

@@ -801,6 +801,26 @@ def _is_progressive_protocol(protocol: Optional[str]) -> bool:
     return (protocol or "") in {"http", "https", ""}
 
 
+def _codec_prefix(codec: Optional[str]) -> str:
+    if not codec:
+        return ""
+    return str(codec).split(".", 1)[0].lower()
+
+
+def _is_ios_compatible_video_codec(fmt: Dict[str, Any]) -> bool:
+    vcodec = fmt.get("vcodec")
+    if not vcodec or vcodec in {"none", ""}:
+        return False
+    return _codec_prefix(vcodec) in {"avc1", "avc3", "h264"}
+
+
+def _needs_ios_video_transcode(fmt: Dict[str, Any]) -> bool:
+    vcodec = fmt.get("vcodec")
+    if not vcodec or vcodec in {"none", ""}:
+        return False
+    return not _is_ios_compatible_video_codec(fmt)
+
+
 def _select_progressive_video_format(resolved: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     # Prefer muxed video+audio progressive format.
     for fmt in resolved:
@@ -978,6 +998,13 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
         session.filesize = fmt.get("filesize") or fmt.get("filesize_approx")
         protocol = fmt.get("protocol")
         if delivery.mode == "single_progressive":
+            if _needs_ios_video_transcode(fmt):
+                return {
+                    "protocol": protocol,
+                    "delivery_mode": "ffmpeg",
+                    "needs_ffmpeg": True,
+                    "ffmpeg_audio_only": False,
+                }
             return {
                 "protocol": protocol,
                 "delivery_mode": "single_progressive",

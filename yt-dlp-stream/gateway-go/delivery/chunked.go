@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // StreamChunked performs HTTP Range requests in sequential chunks (10MB video / 8MB audio).
@@ -63,6 +65,9 @@ func (d *Delivery) StreamChunked(
 	}
 	read := int64(0)
 	mediaClient := d.mediaHTTPClient(workerID)
+	refreshAttempts := 0
+	const maxRefreshAttempts = 10
+	const maxRetriesPerChunk = 3
 
 	for read < totalSize {
 		end := read + chunkSize - 1
@@ -70,61 +75,81 @@ func (d *Delivery) StreamChunked(
 			end = totalSize - 1
 		}
 
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
-		if err != nil {
-			return
-		}
-		for k, v := range currentReqHeaders {
-			req.Header.Set(k, v)
-		}
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
-
-		resp, err := mediaClient.Do(req)
-		if err != nil {
-			if r.Context().Err() != nil || isClientAbortError(err) {
-				return
-			}
-			return
-		}
-
-		if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			refreshedPlan, err := onRefresh()
+		chunkComplete := false
+		for chunkRetry := 0; chunkRetry < maxRetriesPerChunk && !chunkComplete; chunkRetry++ {
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
 			if err != nil {
 				return
 			}
-			if refreshedPlan.DirectURL != "" {
-				currentURL = refreshedPlan.DirectURL
+			for k, v := range currentReqHeaders {
+				req.Header.Set(k, v)
 			}
-			currentPlan["direct_url"] = refreshedPlan.DirectURL
-			currentPlan["request_headers"] = refreshedPlan.RequestHeaders
-			currentReqHeaders = refreshedPlan.RequestHeaders
-			continue
-		}
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 
-		if resp.StatusCode != http.StatusPartialContent && !(resp.StatusCode == http.StatusOK && read == 0) {
-			_, _ = io.Copy(io.Discard, resp.Body)
+			resp, err := mediaClient.Do(req)
+			if err != nil {
+				if r.Context().Err() != nil || isClientAbortError(err) {
+					return
+				}
+				if chunkRetry == maxRetriesPerChunk-1 {
+					log.Printf("chunked upstream request failed at %d-%d: %v", read, end, err)
+					return
+				}
+				time.Sleep(time.Duration(1<<chunkRetry) * time.Second)
+				continue
+			}
+
+			if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				refreshedPlan, refreshErr := onRefresh()
+				if refreshErr != nil {
+					log.Printf("chunked refresh failed at %d-%d: %v", read, end, refreshErr)
+					return
+				}
+				if refreshedPlan.DirectURL != "" {
+					currentURL = refreshedPlan.DirectURL
+				}
+				currentPlan["direct_url"] = refreshedPlan.DirectURL
+				currentPlan["request_headers"] = refreshedPlan.RequestHeaders
+				currentReqHeaders = refreshedPlan.RequestHeaders
+				refreshAttempts++
+				continue
+			}
+
+			if resp.StatusCode != http.StatusPartialContent && !(resp.StatusCode == http.StatusOK && read == 0) {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				if chunkRetry == maxRetriesPerChunk-1 {
+					log.Printf("chunked upstream status %d at %d-%d", resp.StatusCode, read, end)
+					return
+				}
+				time.Sleep(time.Duration(1<<chunkRetry) * time.Second)
+				continue
+			}
+
+			n, copyErr := io.Copy(w, resp.Body)
 			_ = resp.Body.Close()
-			return
-		}
-
-		n, copyErr := io.Copy(w, resp.Body)
-		_ = resp.Body.Close()
-		if copyErr != nil {
-			if isClientAbortError(copyErr) || r.Context().Err() != nil {
+			if copyErr != nil {
+				if isClientAbortError(copyErr) || r.Context().Err() != nil {
+					return
+				}
+				log.Printf("chunked stream copy error at %d-%d: %v", read, end, copyErr)
 				return
 			}
-			return
-		}
-		read += n
+			read += n
 
-		// Some servers ignore range and stream whole body on first request.
-		if resp.StatusCode == http.StatusOK {
-			return
+			// Some servers ignore range and stream whole body on first request.
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+			if n <= 0 {
+				return
+			}
+			chunkComplete = true
 		}
-		if n <= 0 {
-			break
+		if !chunkComplete {
+			return
 		}
 	}
 }

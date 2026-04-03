@@ -2,10 +2,14 @@ package delivery
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -16,15 +20,16 @@ func (d *Delivery) StreamWorkerMP3(
 	workerID string,
 	plan DeliveryPlan,
 	key string,
-) bool {
-	container := workerContainerName(workerID)
+) error {
+	container, err := resolveWorkerContainer(r.Context(), workerID)
+	if err != nil {
+		return err
+	}
 	if container == "" {
-		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid worker for MP3 stream"})
-		return false
+		return fmt.Errorf("unable to resolve worker container for %s", workerID)
 	}
 	if strings.TrimSpace(key) == "" {
-		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "Missing MP3 session key"})
-		return false
+		return errors.New("missing MP3 session key")
 	}
 
 	cmd := exec.CommandContext(
@@ -35,15 +40,13 @@ func (d *Delivery) StreamWorkerMP3(
 	)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to create worker MP3 pipe", "detail": err.Error()})
-		return false
+		return fmt.Errorf("create worker MP3 pipe failed: %w", err)
 	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to start worker MP3 process", "detail": err.Error()})
-		return false
+		return fmt.Errorf("start worker MP3 process failed (%s): %w", container, err)
 	}
 
 	for k, v := range plan.ResponseHeaders {
@@ -62,10 +65,27 @@ func (d *Delivery) StreamWorkerMP3(
 	if waitErr != nil && r.Context().Err() == nil && !isClientAbortError(waitErr) {
 		log.Printf("worker mp3 error: %v, out=%s", waitErr, strings.TrimSpace(stderr.String()))
 	}
-	return true
+	return nil
 }
 
-func workerContainerName(workerID string) string {
+func resolveWorkerContainer(ctx context.Context, workerID string) (string, error) {
+	service := workerServiceName(workerID)
+	if service == "" {
+		return "", fmt.Errorf("invalid worker id: %s", workerID)
+	}
+	if name, ok := findContainerByComposeService(ctx, service); ok {
+		return name, nil
+	}
+	suffix := strings.TrimPrefix(workerID, "w")
+	for _, name := range workerContainerAliases(suffix) {
+		if containerExists(ctx, name) {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("container not found for worker %s (service %s)", workerID, service)
+}
+
+func workerServiceName(workerID string) string {
 	if !strings.HasPrefix(workerID, "w") {
 		return ""
 	}
@@ -73,5 +93,72 @@ func workerContainerName(workerID string) string {
 	if suffix == "" {
 		return ""
 	}
-	return fmt.Sprintf("ytdlp-stream-%s", suffix)
+	if _, err := strconv.Atoi(suffix); err != nil {
+		return ""
+	}
+	prefix := strings.TrimSpace(os.Getenv("WORKER_SERVICE_PREFIX"))
+	if prefix == "" {
+		prefix = "ytdlp-"
+	}
+	return prefix + suffix
+}
+
+func workerContainerAliases(workerSuffix string) []string {
+	prefixes := []string{"ytdlp-stream-", "ytdlp-"}
+	raw := strings.TrimSpace(os.Getenv("WORKER_CONTAINER_PREFIXES"))
+	if raw != "" {
+		prefixes = prefixes[:0]
+		for _, part := range strings.Split(raw, ",") {
+			p := strings.TrimSpace(part)
+			if p != "" {
+				prefixes = append(prefixes, p)
+			}
+		}
+		if len(prefixes) == 0 {
+			prefixes = []string{"ytdlp-stream-", "ytdlp-"}
+		}
+	}
+	out := make([]string, 0, len(prefixes))
+	for _, p := range prefixes {
+		out = append(out, p+workerSuffix)
+	}
+	return out
+}
+
+func findContainerByComposeService(ctx context.Context, service string) (string, bool) {
+	cmd := exec.CommandContext(
+		ctx,
+		"docker", "ps",
+		"--filter", "status=running",
+		"--filter", "label=com.docker.compose.service="+service,
+		"--format", "{{.Names}}",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	name := strings.TrimSpace(string(out))
+	if name == "" {
+		return "", false
+	}
+	lines := strings.Split(name, "\n")
+	if len(lines) == 0 {
+		return "", false
+	}
+	return strings.TrimSpace(lines[0]), true
+}
+
+func containerExists(ctx context.Context, container string) bool {
+	cmd := exec.CommandContext(
+		ctx,
+		"docker", "ps",
+		"--filter", "status=running",
+		"--filter", "name=^"+container+"$",
+		"--format", "{{.Names}}",
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(out)) != ""
 }

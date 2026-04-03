@@ -199,7 +199,11 @@ func (h *Handlers) handleDownloadViaExtractorIPC(w http.ResponseWriter, r *http.
 
 	if plan.NeedsFFmpeg {
 		if plan.UseWorkerMP3 {
-			h.Delivery.StreamWorkerMP3(w, r, workerID, plan, key)
+			if h.streamWorkerMP3WithFailover(w, r, workerID, plan, key) {
+				return
+			}
+			log.Printf("[mp3] worker-stream unavailable for key %s; falling back to gateway ffmpeg", key)
+			h.Delivery.StreamFFmpeg(w, r, workerID, plan, refreshFn)
 			return
 		}
 		h.Delivery.StreamFFmpeg(w, r, workerID, plan, refreshFn)
@@ -347,7 +351,11 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 
 	if plan.NeedsFFmpeg {
 		if plan.UseWorkerMP3 {
-			h.Delivery.StreamWorkerMP3(w, r, workerID, plan, key)
+			if h.streamWorkerMP3WithFailover(w, r, workerID, plan, key) {
+				return
+			}
+			log.Printf("[mp3] worker-stream unavailable for key %s; falling back to gateway ffmpeg", key)
+			h.Delivery.StreamFFmpeg(w, r, workerID, plan, refreshFn)
 			return
 		}
 		h.Delivery.StreamFFmpeg(w, r, workerID, plan, refreshFn)
@@ -582,6 +590,33 @@ func anyMapToStringMap(v any) map[string]string {
 		}
 	}
 	return out
+}
+
+func (h *Handlers) streamWorkerMP3WithFailover(
+	w http.ResponseWriter,
+	r *http.Request,
+	primaryWorkerID string,
+	plan delivery.DeliveryPlan,
+	key string,
+) bool {
+	candidates := h.extractorWorkerCandidates(primaryWorkerID, true)
+	if len(candidates) == 0 && primaryWorkerID != "" {
+		candidates = append(candidates, primaryWorkerID)
+	}
+	if len(candidates) == 0 {
+		return false
+	}
+	for idx, workerID := range candidates {
+		err := h.Delivery.StreamWorkerMP3(w, r, workerID, plan, key)
+		if err == nil {
+			return true
+		}
+		log.Printf("[mp3:%s] worker stream attempt %d/%d failed: %v", workerID, idx+1, len(candidates), err)
+		if idx+1 < len(candidates) {
+			h.scheduleWorkerRestart(workerID, false)
+		}
+	}
+	return false
 }
 
 func (h *Handlers) extractorWorkerCandidates(preferred string, requireHealthy bool) []string {

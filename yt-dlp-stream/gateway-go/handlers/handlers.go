@@ -198,6 +198,10 @@ func (h *Handlers) handleDownloadViaExtractorIPC(w http.ResponseWriter, r *http.
 	}
 
 	if plan.NeedsFFmpeg {
+		if plan.UseWorkerMP3 {
+			h.Delivery.StreamWorkerMP3(w, r, workerID, plan, key)
+			return
+		}
 		h.Delivery.StreamFFmpeg(w, r, workerID, plan, refreshFn)
 		return
 	}
@@ -342,6 +346,10 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 	}
 
 	if plan.NeedsFFmpeg {
+		if plan.UseWorkerMP3 {
+			h.Delivery.StreamWorkerMP3(w, r, workerID, plan, key)
+			return
+		}
 		h.Delivery.StreamFFmpeg(w, r, workerID, plan, refreshFn)
 		return
 	}

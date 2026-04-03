@@ -41,6 +41,7 @@ func ParseDeliveryPlan(plan map[string]any) DeliveryPlan {
 		ContentType:      anyString(plan["content_type"]),
 		FallbackProxy:    plan["fallback_proxy"] == true,
 		Key:              anyString(plan["key"]),
+		UseWorkerMP3:     plan["use_worker_mp3"] == true,
 	}
 }
 
@@ -65,6 +66,7 @@ type DeliveryPlan struct {
 	ContentType       string   // "slideshow" for TikTok photo posts
 	FallbackProxy     bool     // Whether fallback proxy was needed
 	Key               string   // Session key for refresh
+	UseWorkerMP3      bool     // Run MP3 transcode inside worker container
 }
 
 // ResolveDeliveryMode decides which delivery mode to use based on the plan and route.
@@ -322,6 +324,7 @@ func planToMap(p DeliveryPlan) map[string]any {
 		"content_type":           p.ContentType,
 		"fallback_proxy":         p.FallbackProxy,
 		"key":                    p.Key,
+		"use_worker_mp3":         p.UseWorkerMP3,
 	}
 }
 

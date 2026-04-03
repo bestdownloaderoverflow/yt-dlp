@@ -932,11 +932,14 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
         protocol = fmt.get("protocol")
         delivery = plan_delivery(resolved)
         # Keep old behavior: mp3 is transcoded output.
+        # use_worker_mp3 signals the gateway to run ffmpeg inside the worker
+        # container (1 VPN hop) instead of at the gateway (2 VPN hops).
         return {
             "protocol": protocol,
             "delivery_mode": delivery.mode,
             "needs_ffmpeg": True,
             "ffmpeg_audio_only": True,
+            "use_worker_mp3": True,
         }
 
     if content_type == "video":
@@ -1040,6 +1043,10 @@ def _download_prepare(params: Dict[str, Any]) -> Dict[str, Any]:
         }))
 
     meta = _hydrate_generic_session(session)
+    # Persist enriched session (direct_url, http_headers, cookies) back to Redis
+    # so mp3_stream.py can find it when called via docker exec.
+    if session.direct_url:
+        _get_download_cache().update_session(key, session)
     plan = _build_stream_plan_from_session(session, download)
     plan["session_type"] = session.type
     plan["protocol"] = meta.get("protocol")
@@ -1048,6 +1055,7 @@ def _download_prepare(params: Dict[str, Any]) -> Dict[str, Any]:
     plan["needs_ffmpeg"] = bool(meta.get("needs_ffmpeg"))
     plan["ffmpeg_audio_only"] = bool(meta.get("ffmpeg_audio_only"))
     plan["ffmpeg_merge"] = bool(meta.get("ffmpeg_merge"))
+    plan["use_worker_mp3"] = bool(meta.get("use_worker_mp3"))
     if meta.get("ffmpeg_audio_url"):
         plan["ffmpeg_audio_url"] = meta.get("ffmpeg_audio_url")
     if meta.get("ffmpeg_audio_headers"):

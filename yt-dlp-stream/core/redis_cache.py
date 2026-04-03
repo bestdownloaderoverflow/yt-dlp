@@ -124,6 +124,16 @@ class RedisDownloadCache:
         session_dict = json.loads(data)
         return DownloadSession(**session_dict)
 
+    def update_session(self, key: str, session: DownloadSession) -> bool:
+        """Update an existing session in Redis (refresh TTL)."""
+        raw_key = self._extract_raw_key(key)
+        redis_key = f"{self._key_prefix}{raw_key}"
+        ttl = self._redis.ttl(redis_key)
+        if ttl <= 0:
+            ttl = self._ttl
+        self._redis.setex(redis_key, ttl, json.dumps(asdict(session)))
+        return True
+
     def delete_session(self, key: str):
         """Delete session manually."""
         raw_key = self._extract_raw_key(key)

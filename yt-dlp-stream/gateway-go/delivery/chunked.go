@@ -128,7 +128,7 @@ func (d *Delivery) StreamChunked(
 				continue
 			}
 
-			n, copyErr := io.Copy(w, resp.Body)
+			n, copyErr := copyBuffer(w, resp.Body)
 			_ = resp.Body.Close()
 			if copyErr != nil {
 				if isClientAbortError(copyErr) || r.Context().Err() != nil {
@@ -281,7 +281,7 @@ func (d *Delivery) DownloadToFile(
 			total = parsePositiveInt64(resp.Header.Get("Content-Length"))
 		}
 
-		n, copyErr := io.Copy(f, resp.Body)
+		n, copyErr := copyBuffer(f, resp.Body)
 		_ = resp.Body.Close()
 		if copyErr != nil {
 			if ctx.Err() != nil {
@@ -417,7 +417,7 @@ func (d *Delivery) DownloadToWriter(
 			return fmt.Errorf("upstream ignored resume range at offset %d", read)
 		}
 
-		n, copyErr := io.Copy(dst, resp.Body)
+		n, copyErr := copyBuffer(dst, resp.Body)
 		_ = resp.Body.Close()
 		if copyErr != nil {
 			if ctx.Err() != nil {

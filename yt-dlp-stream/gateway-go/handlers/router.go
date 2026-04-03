@@ -362,7 +362,7 @@ func (h *Handlers) proxyStreamingResponse(w http.ResponseWriter, r *http.Request
 	if resp.StatusCode == http.StatusOK {
 		copyHeader(w.Header(), resp.Header, map[string]bool{"transfer-encoding": true})
 		w.WriteHeader(resp.StatusCode)
-		_, copyErr := io.Copy(w, resp.Body)
+		_, copyErr := io.CopyBuffer(w, resp.Body, make([]byte, 256*1024))
 		if copyErr != nil {
 			if !isClientAbortError(copyErr) {
 				log.Printf("[%s] stream copy error: %v", worker.ID, copyErr)
@@ -376,7 +376,7 @@ func (h *Handlers) proxyStreamingResponse(w http.ResponseWriter, r *http.Request
 
 func (h *Handlers) handleResponse(w http.ResponseWriter, resp *http.Response, worker *registry.Worker) proxyResult {
 	status := resp.StatusCode
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
 	text := strings.ToLower(string(body))
 
 	isGeoRestricted := strings.Contains(text, "geo_restricted") ||
@@ -602,7 +602,7 @@ func (h *Handlers) streamFromWorker(w http.ResponseWriter, r *http.Request, work
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, resp.Body)
+	_, err = io.CopyBuffer(w, resp.Body, make([]byte, 256*1024))
 	if err != nil {
 		if !isClientAbortError(err) {
 			log.Printf("[%s] stream copy error: %v", worker.ID, err)

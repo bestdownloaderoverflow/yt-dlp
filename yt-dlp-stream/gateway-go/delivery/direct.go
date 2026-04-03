@@ -114,7 +114,7 @@ func (d *Delivery) StreamDirect(
 		if resp.StatusCode >= 400 {
 			CopyHeader(w.Header(), resp.Header, map[string]bool{"transfer-encoding": true})
 			w.WriteHeader(resp.StatusCode)
-			_, _ = io.Copy(w, resp.Body)
+			_, _ = copyBuffer(w, resp.Body)
 			_ = resp.Body.Close()
 			return false
 		}
@@ -140,7 +140,7 @@ func (d *Delivery) StreamDirect(
 		}
 
 		w.WriteHeader(resp.StatusCode)
-		_, copyErr := io.Copy(w, resp.Body)
+		_, copyErr := copyBuffer(w, resp.Body)
 		_ = resp.Body.Close()
 		if copyErr != nil && !isClientAbortError(copyErr) {
 			log.Printf("download stream copy error: %v", copyErr)

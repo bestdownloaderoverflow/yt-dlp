@@ -40,7 +40,7 @@ func (d *Delivery) StreamTikTokSlideshow(
 				w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
 			}
 			w.WriteHeader(http.StatusOK)
-			_, copyErr := io.Copy(w, f)
+			_, copyErr := copyBuffer(w, f)
 			if copyErr != nil && !isClientAbortError(copyErr) {
 				log.Printf("slideshow stream copy error: %v", copyErr)
 			}
@@ -202,7 +202,7 @@ func downloadImage(ctx context.Context, client *http.Client, srcURL string, dstP
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	_, err = copyBuffer(f, resp.Body)
 	return err
 }
 

@@ -165,7 +165,7 @@ func (d *Delivery) StreamFFmpeg(
 		w.Header().Set("Content-Type", plan.MediaType)
 	}
 	w.WriteHeader(http.StatusOK)
-	_, copyErr := io.Copy(w, stdout)
+	_, copyErr := copyBuffer(w, stdout)
 	waitErr := cmd.Wait()
 	for i := 0; i < feedWorkers; i++ {
 		if feedErr := <-feedErrCh; feedErr != nil && r.Context().Err() == nil && !isClientAbortError(feedErr) {
@@ -208,6 +208,6 @@ func DownloadToFileSimple(ctx context.Context, client *http.Client, srcURL strin
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	_, err = copyBuffer(f, resp.Body)
 	return err
 }

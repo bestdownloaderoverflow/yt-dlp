@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -37,9 +38,10 @@ func (w *Worker) HTTPProxyURL() string {
 }
 
 type Delivery struct {
-	Config  DeliveryConfig
-	Worker  WorkerLookup
-	BaseCl  *http.Client
+	Config       DeliveryConfig
+	Worker       WorkerLookup
+	BaseCl       *http.Client
+	proxyClients sync.Map // map[string]*http.Client keyed by proxy URL
 }
 
 type DeliveryConfig struct {
@@ -58,20 +60,33 @@ func (d *Delivery) mediaHTTPClient(workerID string) *http.Client {
 	if worker == nil || worker.Host == "" || worker.ProxyPort <= 0 {
 		return d.BaseCl
 	}
+	proxyURLStr := worker.HTTPProxyURL()
+
+	// Check cache first.
+	if cached, ok := d.proxyClients.Load(proxyURLStr); ok {
+		return cached.(*http.Client)
+	}
+
 	baseTransport, ok := d.BaseCl.Transport.(*http.Transport)
 	if !ok || baseTransport == nil {
 		return d.BaseCl
 	}
-	proxyURL, err := url.Parse(worker.HTTPProxyURL())
+	proxyURL, err := url.Parse(proxyURLStr)
 	if err != nil {
 		return d.BaseCl
 	}
 	tr := baseTransport.Clone()
 	tr.Proxy = http.ProxyURL(proxyURL)
-	return &http.Client{
+	cl := &http.Client{
 		Transport: tr,
 		Timeout:   d.BaseCl.Timeout,
 	}
+
+	// Store in cache (or return existing if raced).
+	if existing, loaded := d.proxyClients.LoadOrStore(proxyURLStr, cl); loaded {
+		return existing.(*http.Client)
+	}
+	return cl
 }
 
 func (d *Delivery) mediaHTTPClientForPlan(workerID string, plan map[string]any) *http.Client {

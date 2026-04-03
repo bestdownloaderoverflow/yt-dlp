@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"net/http"
@@ -44,17 +43,6 @@ func (v *VPNRotator) HealthCheck(workerID string) bool {
 		return false
 	}
 
-	ipURL := fmt.Sprintf("%s/v1/publicip/ip", worker.ControlURL(v.cfg.GluetunPassword))
-	if req, err := http.NewRequest(http.MethodGet, ipURL, nil); err == nil {
-		resp, err := v.healthCl.Do(req)
-		if err == nil {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64))
-			_ = resp.Body.Close()
-			if ip := strings.TrimSpace(string(body)); ip != "" {
-				log.Printf("[%s] VPN public IP: %s", workerID, ip)
-			}
-		}
-	}
 
 	addr := fmt.Sprintf("%s:%d", worker.Host, worker.APIPort)
 	timeout := v.healthCl.Timeout

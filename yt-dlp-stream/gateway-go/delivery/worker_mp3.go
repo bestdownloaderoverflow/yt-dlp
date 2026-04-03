@@ -14,6 +14,11 @@ import (
 )
 
 // StreamWorkerMP3 delegates MP3 generation to the Python worker container via docker exec.
+// Writes headers and streams the response. Returns nil on success.
+// IMPORTANT: Must only be called from streamWorkerMP3WithFailover so that
+// early failures (bad cmd start, immediate script exit) are caught before
+// any headers are written. If headers have already been written, the caller
+// is responsible for not triggering failover.
 func (d *Delivery) StreamWorkerMP3(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -49,6 +54,15 @@ func (d *Delivery) StreamWorkerMP3(
 		return fmt.Errorf("start worker MP3 process failed (%s): %w", container, err)
 	}
 
+	// Commit point: probe one byte to detect immediate script errors
+	// (e.g. no direct_url, invalid session) before writing headers.
+	probe := make([]byte, 1)
+	n, probeErr := stdout.Read(probe)
+	if probeErr != nil {
+		_ = cmd.Wait()
+		return fmt.Errorf("mp3 stream probe failed (%s): %w", container, stderrToDetail(probeErr, stderr.String()))
+	}
+
 	for k, v := range plan.ResponseHeaders {
 		w.Header().Set(k, v)
 	}
@@ -56,6 +70,11 @@ func (d *Delivery) StreamWorkerMP3(
 		w.Header().Set("Content-Type", "audio/mpeg")
 	}
 	w.WriteHeader(http.StatusOK)
+
+	// Write the probe byte we already read.
+	if n > 0 {
+		_, _ = w.Write(probe[:n])
+	}
 
 	_, copyErr := copyBuffer(w, stdout)
 	waitErr := cmd.Wait()
@@ -66,6 +85,13 @@ func (d *Delivery) StreamWorkerMP3(
 		log.Printf("worker mp3 error: %v, out=%s", waitErr, strings.TrimSpace(stderr.String()))
 	}
 	return nil
+}
+
+func stderrToDetail(err error, stderr string) error {
+	if strings.TrimSpace(stderr) != "" {
+		return fmt.Errorf("stderr: %s", strings.TrimSpace(stderr))
+	}
+	return fmt.Errorf("mp3 script error: %w", err)
 }
 
 func resolveWorkerContainer(ctx context.Context, workerID string) (string, error) {

@@ -163,9 +163,13 @@ func (d *Delivery) DownloadToFile(
 	selector planSourceSelector,
 	chunkSize int64,
 	onRefresh func() (DeliveryPlan, error),
+	client *http.Client,
 ) (DeliveryPlan, error) {
 	if selector == nil {
 		return plan, fmt.Errorf("missing source selector")
+	}
+	if client == nil {
+		client = d.BaseCl
 	}
 	if chunkSize <= 0 {
 		chunkSize = VideoChunkSize
@@ -216,7 +220,7 @@ func (d *Delivery) DownloadToFile(
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 		}
 
-		resp, err := d.BaseCl.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return plan, ctx.Err()
@@ -311,12 +315,16 @@ func (d *Delivery) DownloadToWriter(
 	selector planSourceSelector,
 	chunkSize int64,
 	onRefresh func() (DeliveryPlan, error),
+	client *http.Client,
 ) error {
 	if dst == nil {
 		return fmt.Errorf("missing destination writer")
 	}
 	if selector == nil {
 		return fmt.Errorf("missing source selector")
+	}
+	if client == nil {
+		client = d.BaseCl
 	}
 	if chunkSize <= 0 {
 		chunkSize = VideoChunkSize
@@ -361,7 +369,7 @@ func (d *Delivery) DownloadToWriter(
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 		}
 
-		resp, err := d.BaseCl.Do(req)
+		resp, err := client.Do(req)
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()

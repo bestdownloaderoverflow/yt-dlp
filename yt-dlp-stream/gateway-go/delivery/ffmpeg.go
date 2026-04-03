@@ -25,6 +25,8 @@ func (d *Delivery) StreamFFmpeg(
 		return false
 	}
 
+	mediaClient := d.mediaHTTPClientForPlan(workerID, planToMap(plan))
+
 	ffmpegArgs := []string{"-hide_banner", "-loglevel", "error"}
 	var stdinSource io.Reader
 	var extraFiles []*os.File
@@ -46,6 +48,7 @@ func (d *Delivery) StreamFFmpeg(
 					selectPrimarySource,
 					AudioChunkSize,
 					onRefresh,
+					mediaClient,
 				)
 				_ = pipeW.CloseWithError(err)
 				feedErrCh <- err
@@ -71,6 +74,7 @@ func (d *Delivery) StreamFFmpeg(
 					selectPrimarySource,
 					VideoChunkSize,
 					onRefresh,
+					mediaClient,
 				)
 				_ = videoW.CloseWithError(err)
 				feedErrCh <- err
@@ -91,6 +95,7 @@ func (d *Delivery) StreamFFmpeg(
 					selectPrimarySource,
 					AudioChunkSize,
 					nil,
+					mediaClient,
 				)
 				_ = audioW.Close()
 				feedErrCh <- nil

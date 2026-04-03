@@ -22,9 +22,11 @@ type Worker struct {
 	Failures         int
 	RestartFailures  int
 	ProbeFailures    int
+	IPCTimeoutStreak int
 	StartedAt        time.Time
 	ActiveRequests   int
 	LastRateLimit    time.Time
+	DegradedUntil    time.Time
 	NextRestartAt    time.Time
 	QuarantineUntil  time.Time
 	RestartEvents    []time.Time
@@ -46,6 +48,7 @@ func (w *Worker) HTTPProxyURL() string {
 type Config struct {
 	WorkerCount               int
 	RateLimitCooldownSeconds  int
+	DegradedTimeoutSeconds    int
 	RestartBackoffBase        int
 	RestartBackoffMax         int
 	RestartBackoffJitter      int
@@ -108,6 +111,9 @@ func (r *WorkerRegistry) GetHealthyWorkers(exclude map[string]bool) []*Worker {
 	result := make([]*Worker, 0, len(r.workers))
 	for _, w := range r.workers {
 		if now.Before(w.QuarantineUntil) {
+			continue
+		}
+		if now.Before(w.DegradedUntil) {
 			continue
 		}
 		if !w.Healthy || w.Restarting || w.RestartScheduled || w.BreakerOpen {
@@ -204,8 +210,10 @@ func (r *WorkerRegistry) MarkRestarted(workerID string, success bool) {
 		w.Healthy = true
 		w.Failures = 0
 		w.RestartFailures = 0
+		w.IPCTimeoutStreak = 0
 		w.StartedAt = time.Now()
 		w.LastRateLimit = time.Time{}
+		w.DegradedUntil = time.Time{}
 		w.NextRestartAt = time.Time{}
 		w.QuarantineUntil = time.Time{}
 		w.RestartEvents = nil
@@ -287,6 +295,8 @@ func (r *WorkerRegistry) SetHealthy(workerID string, healthy bool) {
 		w.Healthy = healthy
 		if healthy {
 			w.BreakerOpen = false
+			w.IPCTimeoutStreak = 0
+			w.DegradedUntil = time.Time{}
 		}
 	}
 }
@@ -312,6 +322,8 @@ func (r *WorkerRegistry) RecordProbe(workerID string, healthy bool) {
 		}
 		w.Healthy = true
 		w.BreakerOpen = false
+		w.IPCTimeoutStreak = 0
+		w.DegradedUntil = time.Time{}
 		return
 	}
 
@@ -322,6 +334,42 @@ func (r *WorkerRegistry) RecordProbe(workerID string, healthy bool) {
 		}
 		w.Healthy = false
 	}
+}
+
+func (r *WorkerRegistry) RecordIPCError(workerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	w := r.getWorkerUnlocked(workerID)
+	if w == nil {
+		return
+	}
+
+	w.IPCTimeoutStreak++
+	if w.IPCTimeoutStreak < 2 {
+		return
+	}
+
+	timeoutSeconds := r.cfg.DegradedTimeoutSeconds
+	if timeoutSeconds < 1 {
+		timeoutSeconds = 30
+	}
+	degradedUntil := time.Now().Add(time.Duration(timeoutSeconds) * time.Second)
+	if degradedUntil.After(w.DegradedUntil) {
+		w.DegradedUntil = degradedUntil
+		log.Printf("[%s] marked degraded for %ds after %d consecutive IPC timeouts", workerID, timeoutSeconds, w.IPCTimeoutStreak)
+	}
+}
+
+func (r *WorkerRegistry) RecordIPCSuccess(workerID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	w := r.getWorkerUnlocked(workerID)
+	if w == nil {
+		return
+	}
+	w.IPCTimeoutStreak = 0
 }
 
 func (r *WorkerRegistry) GetWorkersNeedingRestart() []string {

@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -39,6 +41,7 @@ func (h *Handlers) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"active_requests":           worker.ActiveRequests,
 			"failures":                  worker.Failures,
 			"restart_failures":          worker.RestartFailures,
+			"degraded_remaining":        positiveSeconds(worker.DegradedUntil.Sub(now)),
 			"quarantine_remaining":      positiveSeconds(worker.QuarantineUntil.Sub(now)),
 			"restart_backoff_remaining": positiveSeconds(worker.NextRestartAt.Sub(now)),
 		})
@@ -664,6 +667,18 @@ func isRetryableExtractorRPC(rpcErr *IPCError) bool {
 	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
 }
 
+func isTimeoutIPCError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
+}
+
 func (h *Handlers) callExtractorMapWithFailover(
 	preferred string,
 	requireHealthy bool,
@@ -680,6 +695,7 @@ func (h *Handlers) callExtractorMapWithFailover(
 	for i, workerID := range candidates {
 		result, rpcErr, err := call(workerID)
 		if err == nil && rpcErr == nil {
+			h.Registry.RecordIPCSuccess(workerID)
 			return result, workerID, nil, nil
 		}
 
@@ -688,6 +704,9 @@ func (h *Handlers) callExtractorMapWithFailover(
 			if rpcErr != nil {
 				h.scheduleWorkerRestart(workerID, rpcErr.Status == http.StatusTooManyRequests)
 			} else {
+				if isTimeoutIPCError(err) {
+					h.Registry.RecordIPCError(workerID)
+				}
 				h.scheduleWorkerRestart(workerID, false)
 			}
 		}

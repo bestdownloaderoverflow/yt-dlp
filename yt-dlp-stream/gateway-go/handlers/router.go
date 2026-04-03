@@ -219,6 +219,9 @@ func (h *Handlers) isWorkerAcceptingRequests(worker *registry.Worker) bool {
 		return false
 	}
 	now := time.Now()
+	if now.Before(worker.DegradedUntil) {
+		return false
+	}
 	if now.Before(worker.QuarantineUntil) {
 		return false
 	}
@@ -709,7 +712,7 @@ func (h *Handlers) HealthMonitor() {
 					h.Registry.SetHealthy(worker.ID, false)
 					continue
 				}
-				h.Registry.RecordProbe(worker.ID, h.Rotator.HealthCheck(worker.ID))
+				h.Registry.RecordProbe(worker.ID, h.healthCheckWorker(worker.ID))
 				if h.Registry.ShouldRestartUnhealthy(worker.ID) {
 					log.Printf("[%s] unhealthy for %d consecutive probes; scheduling restart", worker.ID, h.Config.UnhealthyRestartThreshold)
 					_ = h.Registry.ScheduleRestart(worker.ID)
@@ -717,6 +720,17 @@ func (h *Handlers) HealthMonitor() {
 			}
 		}
 	}
+}
+
+func (h *Handlers) healthCheckWorker(workerID string) bool {
+	if h.Extractor != nil {
+		if err := h.Extractor.Health(workerID); err != nil {
+			log.Printf("[%s] worker IPC health check error: %v", workerID, err)
+			return false
+		}
+		return true
+	}
+	return h.Rotator.HealthCheck(workerID)
 }
 
 func extractWorkerID(key string, workerCount int) string {

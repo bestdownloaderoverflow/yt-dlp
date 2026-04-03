@@ -31,6 +31,7 @@ func main() {
 	reg := registry.NewWorkerRegistry(registry.Config{
 		WorkerCount:               cfg.WorkerCount,
 		RateLimitCooldownSeconds:  cfg.RateLimitCooldownSeconds,
+		DegradedTimeoutSeconds:    cfg.DegradedTimeoutSeconds,
 		RestartBackoffBase:        cfg.RestartBackoffBase,
 		RestartBackoffMax:         cfg.RestartBackoffMax,
 		RestartBackoffJitter:      cfg.RestartBackoffJitter,
@@ -148,7 +149,7 @@ func (e *extractorAdapter) ResolveFormats(wid, url, format, proxy, impersonate s
 	r, err, network := e.pool.ResolveFormats(wid, url, format, proxy, impersonate)
 	return r, wrapIPCErr(err), network
 }
-func (e *extractorAdapter) Health(wid string) error           { return e.pool.Health(wid) }
+func (e *extractorAdapter) Health(wid string) error            { return e.pool.Health(wid) }
 func (e *extractorAdapter) PickWorker(preferred string) string { return e.pool.PickWorker(preferred) }
 func (e *extractorAdapter) HasWorker(wid string) bool          { return e.pool.HasWorker(wid) }
 

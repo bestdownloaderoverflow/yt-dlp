@@ -12,10 +12,6 @@ import (
 	"time"
 )
 
-func resolveWorkerScriptPath(path string) string {
-	return path
-}
-
 type ipcRequest struct {
 	ID     string         `json:"id"`
 	Method string         `json:"method"`
@@ -42,7 +38,7 @@ type ExtractorPool struct {
 	rrCounter atomic.Uint64
 }
 
-func NewExtractorPool(workerCount int, _ string, _ string, timeout time.Duration) (*ExtractorPool, error) {
+func NewExtractorPool(workerCount int, timeout time.Duration) (*ExtractorPool, error) {
 	if workerCount < 1 {
 		workerCount = 1
 	}

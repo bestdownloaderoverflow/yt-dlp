@@ -134,3 +134,6 @@ yt-dlp-plugins
 
 # Packages
 yt_dlp_ejs/
+
+# Go binaries
+gateway-go/gateway-go

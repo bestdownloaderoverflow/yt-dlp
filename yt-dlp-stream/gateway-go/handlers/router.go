@@ -593,6 +593,14 @@ func (h *Handlers) streamFromWorker(w http.ResponseWriter, r *http.Request, work
 		return proxyResult{success: false}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		estimated := resp.Header.Get("estimated-content-length")
+		contentLength := resp.Header.Get("content-length")
+		if estimated != "" && (contentLength == "" || contentLength == "0") {
+			log.Printf("[%s] possible rate limit in stream", worker.ID)
+			h.scheduleWorkerRestart(worker.ID, true)
+		}
+	}
 	copyHeader(w.Header(), resp.Header, map[string]bool{"transfer-encoding": true, "content-length": true})
 	if resp.Header.Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -746,8 +754,15 @@ func (h *Handlers) healthCheckWorker(worker registry.Worker) bool {
 	if time.Since(worker.StartedAt) < workerStartupGracePeriod {
 		return true
 	}
-	// TCP dial only (matches 723dda9 behavior): fast, non-blocking, does not
-	// compete with real requests for the Python IPC server's attention.
+	// IPC health check: asks the Python yt-dlp process directly so that
+	// rate-limited or hung workers are detected, not just container liveness.
+	if h.Extractor != nil {
+		if err := h.Extractor.Health(worker.ID); err != nil {
+			log.Printf("[%s] worker IPC health check error: %v", worker.ID, err)
+			return false
+		}
+		return true
+	}
 	return h.Rotator.HealthCheck(worker.ID)
 }
 

@@ -22,7 +22,6 @@ type Worker struct {
 	Failures         int
 	RestartFailures  int
 	ProbeFailures    int
-	IPCTimeoutStreak int
 	StartedAt        time.Time
 	ActiveRequests   int
 	LastRateLimit    time.Time
@@ -31,13 +30,7 @@ type Worker struct {
 	QuarantineUntil  time.Time
 	RestartEvents    []time.Time
 	BreakerOpen      bool
-	TransientErrors  []time.Time
 }
-
-const (
-	transientWindowSeconds = 20
-	transientThreshold    = 3
-)
 
 func (w *Worker) APIURL() string {
 	return fmt.Sprintf("http://%s:%d", w.Host, w.APIPort)
@@ -221,7 +214,7 @@ func (r *WorkerRegistry) MarkRestarted(workerID string, success bool) {
 		w.Healthy = true
 		w.Failures = 0
 		w.RestartFailures = 0
-		w.IPCTimeoutStreak = 0
+		w.ProbeFailures = 0
 		w.StartedAt = time.Now()
 		w.LastRateLimit = time.Time{}
 		w.DegradedUntil = time.Time{}
@@ -306,7 +299,6 @@ func (r *WorkerRegistry) SetHealthy(workerID string, healthy bool) {
 		w.Healthy = healthy
 		if healthy {
 			w.BreakerOpen = false
-			w.IPCTimeoutStreak = 0
 			w.DegradedUntil = time.Time{}
 		}
 	}
@@ -333,7 +325,6 @@ func (r *WorkerRegistry) RecordProbe(workerID string, healthy bool) {
 		}
 		w.Healthy = true
 		w.BreakerOpen = false
-		w.IPCTimeoutStreak = 0
 		w.DegradedUntil = time.Time{}
 		return
 	}
@@ -345,64 +336,6 @@ func (r *WorkerRegistry) RecordProbe(workerID string, healthy bool) {
 		}
 		w.Healthy = false
 	}
-}
-
-func (r *WorkerRegistry) RecordIPCError(workerID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	w := r.getWorkerUnlocked(workerID)
-	if w == nil {
-		return
-	}
-
-	if w.Restarting || w.RestartScheduled || w.BreakerOpen {
-		return
-	}
-
-	if !w.DegradedUntil.IsZero() && time.Now().Before(w.DegradedUntil) {
-		return
-	}
-
-	now := time.Now()
-	w.TransientErrors = append(w.TransientErrors, now)
-
-	windowStart := now.Add(-time.Duration(transientWindowSeconds) * time.Second)
-	validCount := 0
-	recentErrors := make([]time.Time, 0)
-	for _, ts := range w.TransientErrors {
-		if ts.After(windowStart) {
-			validCount++
-			recentErrors = append(recentErrors, ts)
-		}
-	}
-	w.TransientErrors = recentErrors
-
-	if validCount < transientThreshold {
-		return
-	}
-
-	timeoutSeconds := r.cfg.DegradedTimeoutSeconds
-	if timeoutSeconds < 1 {
-		timeoutSeconds = 30
-	}
-	degradedUntil := now.Add(time.Duration(timeoutSeconds) * time.Second)
-	if degradedUntil.After(w.DegradedUntil) {
-		w.DegradedUntil = degradedUntil
-		log.Printf("[%s] marked degraded for %ds after %d transient errors in %ds window", workerID, timeoutSeconds, validCount, transientWindowSeconds)
-	}
-}
-
-func (r *WorkerRegistry) RecordIPCSuccess(workerID string) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	w := r.getWorkerUnlocked(workerID)
-	if w == nil {
-		return
-	}
-	w.IPCTimeoutStreak = 0
-	w.TransientErrors = nil
 }
 
 func (r *WorkerRegistry) GetWorkersNeedingRestart() []string {

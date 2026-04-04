@@ -696,6 +696,8 @@ func (h *Handlers) UptimeChecker() {
 	}
 }
 
+const workerStartupGracePeriod = 10 * time.Second
+
 func (h *Handlers) HealthMonitor() {
 	interval := h.Config.HealthMonitorIntervalMs
 	if interval < 1000 {
@@ -709,7 +711,10 @@ func (h *Handlers) HealthMonitor() {
 			return
 		case <-ticker.C:
 			now := time.Now()
-			for _, worker := range h.Registry.WorkersSnapshot() {
+			workers := h.Registry.WorkersSnapshot()
+			var wg sync.WaitGroup
+			for _, worker := range workers {
+				worker := worker
 				if worker.Restarting || worker.RestartScheduled {
 					h.Registry.SetHealthy(worker.ID, false)
 					continue
@@ -717,28 +722,34 @@ func (h *Handlers) HealthMonitor() {
 				if !worker.DegradedUntil.IsZero() && now.Before(worker.DegradedUntil) {
 					continue
 				}
-				h.Registry.RecordProbe(worker.ID, h.healthCheckWorker(worker.ID))
-				if h.Registry.ShouldRestartUnhealthy(worker.ID) {
-					log.Printf("[%s] unhealthy for %d consecutive probes; scheduling restart", worker.ID, h.Config.UnhealthyRestartThreshold)
-					_ = h.Registry.ScheduleRestart(worker.ID)
-				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					h.Registry.RecordProbe(worker.ID, h.healthCheckWorker(worker))
+					if h.Registry.ShouldRestartUnhealthy(worker.ID) {
+						log.Printf("[%s] unhealthy for %d consecutive probes; scheduling restart", worker.ID, h.Config.UnhealthyRestartThreshold)
+						_ = h.Registry.ScheduleRestart(worker.ID)
+					}
+				}()
 			}
+			wg.Wait()
 		}
 	}
 }
 
-func (h *Handlers) healthCheckWorker(workerID string) bool {
-	if h.Extractor != nil {
-		if time.Since(h.startedAt) < 60*time.Second {
-			return true
-		}
-		if err := h.Extractor.Health(workerID); err != nil {
-			log.Printf("[%s] worker IPC health check error: %v", workerID, err)
-			return false
-		}
+func (h *Handlers) healthCheckWorker(worker registry.Worker) bool {
+	// Gateway startup grace — skip probing until all workers have had a
+	// chance to initialise on first boot.
+	if time.Since(h.startedAt) < 60*time.Second {
 		return true
 	}
-	return h.Rotator.HealthCheck(workerID)
+	// Per-worker grace after a restart — StartedAt is reset by MarkRestarted.
+	if time.Since(worker.StartedAt) < workerStartupGracePeriod {
+		return true
+	}
+	// TCP dial only (matches 723dda9 behavior): fast, non-blocking, does not
+	// compete with real requests for the Python IPC server's attention.
+	return h.Rotator.HealthCheck(worker.ID)
 }
 
 func extractWorkerID(key string, workerCount int) string {

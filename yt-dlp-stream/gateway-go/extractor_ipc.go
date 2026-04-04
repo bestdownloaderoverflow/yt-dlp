@@ -80,6 +80,26 @@ func (p *ExtractorPool) Close() {
 	}
 }
 
+// PurgeConnections drains and closes all pooled connections for a worker.
+// Must be called when a worker is about to restart so stale connections
+// don't cause a storm of "connection reset by peer" errors.
+func (p *ExtractorPool) PurgeConnections(workerID string) {
+	ch := p.connPool[workerID]
+	if ch == nil {
+		return
+	}
+	for {
+		select {
+		case conn := <-ch:
+			if conn != nil {
+				conn.Close()
+			}
+		default:
+			return
+		}
+	}
+}
+
 func (p *ExtractorPool) getConn(workerID string, timeout time.Duration) (net.Conn, error) {
 	ch := p.connPool[workerID]
 	if ch == nil {

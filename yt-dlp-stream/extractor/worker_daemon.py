@@ -579,6 +579,29 @@ def _generate_tiktok_photo_links(
     return links, photos, slideshow_link
 
 
+def _is_ip_blocked_message(message: str) -> bool:
+    lower = message.lower()
+    return any(p in lower for p in (
+        "ip address is blocked",
+        "ip blocked",
+        "blocked by tiktok",
+        "access denied",
+        "captcha",
+        "verify you are human",
+        "verify that you are human",
+    ))
+
+
+def _is_rate_limited_tiktok_message(message: str) -> bool:
+    lower = message.lower()
+    return any(p in lower for p in (
+        "rate-limited",
+        "rate limited",
+        "too many requests",
+        "try again later",
+    ))
+
+
 def _map_tiktok_error(exc: BaseException) -> Dict[str, Any]:
     from core.error_mapping import is_dns_failure_message, is_geo_restricted_message
 
@@ -587,6 +610,10 @@ def _map_tiktok_error(exc: BaseException) -> Dict[str, Any]:
         return {"status": 503, "code": "UPSTREAM_DNS_FAILURE", "message": msg}
     if is_geo_restricted_message(msg):
         return {"status": 503, "code": "GEO_RESTRICTED", "message": msg}
+    if _is_ip_blocked_message(msg):
+        return {"status": 503, "code": "IP_BLOCKED", "message": msg}
+    if _is_rate_limited_tiktok_message(msg):
+        return {"status": 429, "code": "RATE_LIMITED", "message": msg}
     return {"status": 500, "code": "internal_error", "message": msg}
 
 

@@ -152,7 +152,12 @@ func (r *WorkerRegistry) MarkFailure(workerID string) {
 	defer r.mu.Unlock()
 	if w := r.getWorkerUnlocked(workerID); w != nil {
 		w.Failures++
-		log.Printf("[%s] marked as failed", workerID)
+		// Only log when the worker is not already known-bad to avoid
+		// flooding logs with hundreds of duplicate "marked as failed"
+		// lines during a restart cycle.
+		if !w.Restarting && !w.RestartScheduled && !w.BreakerOpen {
+			log.Printf("[%s] marked as failed (failures=%d)", workerID, w.Failures)
+		}
 	}
 }
 
@@ -348,6 +353,10 @@ func (r *WorkerRegistry) RecordIPCError(workerID string) {
 
 	w := r.getWorkerUnlocked(workerID)
 	if w == nil {
+		return
+	}
+
+	if w.Restarting || w.RestartScheduled || w.BreakerOpen {
 		return
 	}
 

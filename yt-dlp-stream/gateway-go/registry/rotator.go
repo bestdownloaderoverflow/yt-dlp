@@ -19,10 +19,15 @@ type RotatorConfig struct {
 	RestartStabilizeSeconds int
 }
 
+// PreRestartHook is called right before container restarts to allow
+// callers to clean up resources (e.g. purge stale connection pools).
+type PreRestartHook func(workerID string)
+
 type VPNRotator struct {
-	registry *WorkerRegistry
-	cfg      RotatorConfig
-	healthCl *http.Client
+	registry       *WorkerRegistry
+	cfg            RotatorConfig
+	healthCl       *http.Client
+	preRestartHook PreRestartHook
 }
 
 func NewVPNRotator(registry *WorkerRegistry, cfg RotatorConfig) *VPNRotator {
@@ -35,6 +40,10 @@ func NewVPNRotator(registry *WorkerRegistry, cfg RotatorConfig) *VPNRotator {
 		cfg:      cfg,
 		healthCl: &http.Client{Timeout: time.Duration(timeout) * time.Millisecond},
 	}
+}
+
+func (v *VPNRotator) SetPreRestartHook(hook PreRestartHook) {
+	v.preRestartHook = hook
 }
 
 func (v *VPNRotator) HealthCheck(workerID string) bool {
@@ -103,6 +112,13 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	gluetun := fmt.Sprintf("ytdlp-gluetun-%s", strings.TrimPrefix(workerID, "w"))
 	ytdlp := fmt.Sprintf("ytdlp-stream-%s", strings.TrimPrefix(workerID, "w"))
 
+	// Purge pooled connections right before gluetun restart kills the
+	// network namespace — any connection created since the initial purge
+	// in scheduleWorkerRestart becomes stale the moment gluetun stops.
+	if v.preRestartHook != nil {
+		v.preRestartHook(workerID)
+	}
+
 	log.Printf("[%s] restarting %s", workerID, gluetun)
 	if err := v.restartContainer(gluetun); err != nil {
 		log.Printf("[%s] restart error: %v", workerID, err)
@@ -113,6 +129,12 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	case <-ctx.Done():
 		return false
 	case <-time.After(10 * time.Second):
+	}
+
+	// Purge again before stream restart — gluetun restart may have
+	// allowed new TCP dials during the 10s stabilization window.
+	if v.preRestartHook != nil {
+		v.preRestartHook(workerID)
 	}
 
 	log.Printf("[%s] restarting %s", workerID, ytdlp)

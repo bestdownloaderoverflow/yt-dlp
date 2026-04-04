@@ -66,6 +66,14 @@ func main() {
 		DegradedRetryAfter: cfg.DegradedRetryAfter,
 	}, client, deliveryWorkerLookup{reg})
 
+	// Wire a pre-restart hook so the rotator purges stale IPC connections
+	// right before killing gluetun/stream containers.
+	if ext != nil {
+		rotator.SetPreRestartHook(func(workerID string) {
+			ext.PurgeConnections(workerID)
+		})
+	}
+
 	// Handlers serve all HTTP routes.
 	h := handlers.New(cfg, reg, rotator, wrapExtractor(ext), del, client)
 	defer h.Shutdown()
@@ -152,6 +160,7 @@ func (e *extractorAdapter) ResolveFormats(wid, url, format, proxy, impersonate s
 func (e *extractorAdapter) Health(wid string) error            { return e.pool.Health(wid) }
 func (e *extractorAdapter) PickWorker(preferred string) string { return e.pool.PickWorker(preferred) }
 func (e *extractorAdapter) HasWorker(wid string) bool          { return e.pool.HasWorker(wid) }
+func (e *extractorAdapter) PurgeConnections(wid string)        { e.pool.PurgeConnections(wid) }
 
 func wrapIPCErr(err *ipcError) *handlers.IPCError {
 	if err == nil {

@@ -45,6 +45,7 @@ type Extractor interface {
 	Health(workerID string) error
 	PickWorker(preferred string) string
 	HasWorker(workerID string) bool
+	PurgeConnections(workerID string)
 }
 
 type Handlers struct {
@@ -280,9 +281,14 @@ func (h *Handlers) scheduleWorkerRestart(workerID string, rateLimited bool) {
 	} else {
 		h.Registry.MarkFailure(workerID)
 	}
+	// Always purge pooled connections when the circuit is open so that
+	// connections created after the initial purge (e.g. by health probes
+	// or concurrent requests) don't sit in the pool as stale sockets.
+	if h.Extractor != nil {
+		h.Extractor.PurgeConnections(workerID)
+	}
 	scheduled := h.Registry.ScheduleRestart(workerID)
 	if !scheduled {
-		log.Printf("[%s] restart already scheduled/running; skip duplicate schedule", workerID)
 		return
 	}
 	if !h.ensureRestartTask(workerID, true) {

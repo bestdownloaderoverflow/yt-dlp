@@ -620,6 +620,9 @@ func (h *Handlers) streamWorkerMP3WithFailover(
 			return true
 		}
 		log.Printf("[mp3:%s] worker stream attempt %d/%d failed: %v", workerID, idx+1, len(candidates), err)
+		if isStaleConnectionError(err) || isTimeoutIPCError(err) {
+			continue
+		}
 		if idx+1 < len(candidates) {
 			h.scheduleWorkerRestart(workerID, false)
 		}
@@ -679,6 +682,18 @@ func isTimeoutIPCError(err error) bool {
 	return strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
 }
 
+func isStaleConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "connection refused")
+}
+
 func (h *Handlers) callExtractorMapWithFailover(
 	preferred string,
 	requireHealthy bool,
@@ -702,12 +717,18 @@ func (h *Handlers) callExtractorMapWithFailover(
 		retryable := err != nil || isRetryableExtractorRPC(rpcErr)
 		if retryable {
 			if rpcErr != nil {
-				h.scheduleWorkerRestart(workerID, rpcErr.Status == http.StatusTooManyRequests)
+				if rpcErr.Status == http.StatusTooManyRequests {
+					h.scheduleWorkerRestart(workerID, true)
+				} else if rpcErr.Status >= http.StatusInternalServerError {
+					h.scheduleWorkerRestart(workerID, false)
+				}
 			} else {
 				if isTimeoutIPCError(err) {
 					h.Registry.RecordIPCError(workerID)
 				}
-				h.scheduleWorkerRestart(workerID, false)
+				if isStaleConnectionError(err) {
+					continue
+				}
 			}
 		}
 

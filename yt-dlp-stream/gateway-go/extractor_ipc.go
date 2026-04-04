@@ -89,13 +89,22 @@ func (p *ExtractorPool) getConn(workerID string, timeout time.Duration) (net.Con
 	select {
 	case conn := <-ch:
 		if conn != nil {
-			// Validate the connection is still alive by setting a short deadline.
-			_ = conn.SetDeadline(time.Now().Add(timeout))
-			return conn, nil
+			// Validate connection is still alive with a non-blocking read probe.
+			if n, err := conn.Read(make([]byte, 1)); err == nil && n == 0 {
+				// Connection closed cleanly by peer.
+				conn.Close()
+			} else if err != nil {
+				// Stale connection — discard and dial fresh.
+				conn.Close()
+			} else {
+				// Connection alive — restore deadline and return.
+				_ = conn.SetDeadline(time.Now().Add(timeout))
+				return conn, nil
+			}
 		}
 	default:
 	}
-	// Pool empty — dial a new one.
+	// Pool empty or stale — dial a new one.
 	addr := p.addrs[workerID]
 	return net.DialTimeout("tcp", addr, timeout)
 }

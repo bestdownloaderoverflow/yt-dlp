@@ -1,0 +1,25 @@
+root@vps-ffff604a:/www/wwwroot/f.snaptik.fit/yt-dlp/yt-dlp-stream# docker compose -f docker-compose.proton.yml logs -f gateway-warp
+ytdlp-gateway-warp  | 2026/04/04 09:03:51 initialized 10 workers
+ytdlp-gateway-warp  | 2026/04/04 09:03:51 extractor IPC enabled: python=python3 script=../extractor/worker_daemon.py workers=10
+ytdlp-gateway-warp  | 2026/04/04 09:03:51 starting Go gateway on port 9111
+ytdlp-gateway-warp  | 2026/04/04 09:03:53 [extractor:w2] tiktok ipc error: dial tcp 172.30.0.3:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:53 [extractor:w10] tiktok ipc error: dial tcp 172.30.0.6:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:53 [extractor:w3] tiktok ipc error: dial tcp 172.30.0.10:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:53 [extractor:w4] tiktok ipc error: dial tcp 172.30.0.12:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:53 [extractor:w5] tiktok ipc error: dial tcp 172.30.0.4:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:53 [extractor:w6] tiktok ipc error: dial tcp 172.30.0.7:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:54 [extractor:w7] tiktok ipc error: dial tcp 172.30.0.9:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:54 [extractor:w8] tiktok ipc error: dial tcp 172.30.0.11:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w1] worker TCP health check error: dial tcp 172.30.0.8:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w2] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w3] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w4] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w5] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w6] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w7] worker TCP health check error: dial tcp 172.30.0.9:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w8] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w9] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:03:56 [w10] worker TCP health check error: dial tcp 172.30.0.6:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 09:04:01 [w1] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:04:01 [w7] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 09:04:01 [w10] marked healthy after successful probe

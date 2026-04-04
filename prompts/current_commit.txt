@@ -1,0 +1,987 @@
+root@vps-ffff604a:/www/wwwroot/f.snaptik.fit/yt-dlp/yt-dlp-stream# docker compose -f docker-compose.proton.yml logs -f gateway-warp
+ytdlp-gateway-warp  | 2026/04/04 08:28:34 initialized 10 workers
+ytdlp-gateway-warp  | 2026/04/04 08:28:34 extractor IPC enabled: workers=10
+ytdlp-gateway-warp  | 2026/04/04 08:28:34 starting Go gateway on port 9111
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w1] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w2] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w3] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w4] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w5] worker IPC health check error: dial tcp 172.30.0.4:9487: connect: connection refused
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w6] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w7] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w8] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w9] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:39 [w10] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:28:44 [w5] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:29:29 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:29:29 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:29:29 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:29:38 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:29:38 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:29:38 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:29:41 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:29:46 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:29:46 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:29:46 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:29:49 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:29:53 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:29:53 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:29:53 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:29:57 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:30:01 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:30:01 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:30:01 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:30:04 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:30:06 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:30:06 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:30:06 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:30:12 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:30:14 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:30:14 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:30:14 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:30:18 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:30:21 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:30:21 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:30:21 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:30:21 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:30:25 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:30:29 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:30:30 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:30:30 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:30:30 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:30:33 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:30:37 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:30:37 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:30:37 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:30:37 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:30:41 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:30:44 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:30:45 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53720->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:46 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53736->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:46 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53742->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:46 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53738->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:47 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53772->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:47 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53756->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:47 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53774->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:48 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:30:48 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53798->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:48 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53808->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:48 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53790->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:49 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:53810->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:50 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:60974->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:50 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:60980->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:51 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:60986->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:51 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:60990->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:52 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:32768->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:30:52 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:30:58 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:31:06 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:31:09 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:31:09 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:31:09 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:31:13 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:31:20 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:31:22 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:31:28 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:31:59 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:31:59 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:31:59 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:32:00 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:32:10 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:32:27 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:32:27 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:32:27 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:32:34 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:32:34 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:32:34 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:32:38 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:32:39 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:35190->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:32:42 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:32:42 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:32:42 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:51712->172.30.0.9:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:32:42 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:32:45 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:32:51 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:32:53 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:32:54 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:32:54 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:32:54 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:33:05 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:33:07 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:52120->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:33:10 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:33:10 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:33:10 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:33:19 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:33:21 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:33:26 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:33:34 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:33:45 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:33:58 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:33:58 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:33:58 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:34:02 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:34:09 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:34:44 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:34:44 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:34:44 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:34:49 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:34:49 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:34:49 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:34:49 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:34:55 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:34:57 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:34:57 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:34:57 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:35:01 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:35:05 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:35:05 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:35:05 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:35:08 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:35:12 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:35:12 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:35:12 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:35:16 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:35:18 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:35:18 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:35:18 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:35:23 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:35:26 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:35:26 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:35:26 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:35:29 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:35:34 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:35:34 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:35:34 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:35:35 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:35:37 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:35:40 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:35:40 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:35:40 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:35:41 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:35:44 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:35:48 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:35:51 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:35:51 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:56062->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:35:56 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:35:56 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:35:56 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:35:56 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:36:03 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:36:07 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:36:09 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:36:17 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:36:25 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:36:31 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:36:45 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:36:45 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:36:45 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:36:47 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:36:56 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:37:32 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:37:32 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:37:32 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:37:36 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:37:37 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:37:37 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:37:37 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:37:43 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:37:49 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:37:53 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:37:53 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:37:53 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:38:04 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:38:09 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:38:09 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:38:09 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:38:20 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:38:21 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:38:21 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:38:21 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:38:23 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:38:27 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:38:27 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:38:27 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:38:29 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:38:29 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:38:29 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:38:29 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:38:32 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:38:37 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:38:37 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:38:37 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:38:38 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:38:40 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:38:44 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:38:44 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:38:44 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:38:45 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:38:48 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:38:52 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:38:52 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:38:52 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:38:52 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59558->172.30.0.9:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:38:55 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:39:00 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38548->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:00 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38538->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:00 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:39:00 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38564->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:01 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38574->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:02 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38584->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:03 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38596->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:03 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:39:03 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38612->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:04 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38618->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:04 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38634->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:04 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38636->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:04 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38624->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:05 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38660->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:05 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38654->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:05 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38668->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:05 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38678->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:05 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38682->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:06 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38698->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:07 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38712->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:07 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38728->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:13 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:39:13 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:39:13 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:39:13 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:39:19 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:39:19 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:39:19 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:39:19 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:39:21 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:39:24 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:39:29 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:39:30 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:39:30 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:39:30 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:39:30 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:39:36 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:39:38 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:36280->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:39 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:36294->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:39 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:36306->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:40 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:42552->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:41 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:39:41 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:42564->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:41 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:42568->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:41 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:42580->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:43 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:39:45 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:42586->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:39:45 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:42592->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:40:04 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:40:11 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:40:15 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:40:15 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:40:15 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:40:16 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:37182->172.30.0.4:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:40:20 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:49524->172.30.0.4:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:40:21 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:40:24 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:49516->172.30.0.4:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:40:26 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:40:29 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:40:29 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:40:29 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:40:37 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:40:37 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:40:37 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:40:40 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:40:44 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:40:44 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:40:44 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:40:48 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:40:52 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:40:52 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:40:52 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:40:55 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:41:00 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:41:00 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:41:00 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:41:03 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:41:07 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:41:07 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:41:07 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:41:07 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:41:11 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:41:14 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:41:14 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:41:14 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:41:18 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:41:21 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:41:25 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:41:25 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:41:25 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:41:25 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:41:28 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:41:35 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:41:36 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:41:44 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:41:51 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:41:59 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:42:06 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:42:09 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:42:09 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:42:09 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:42:16 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:42:16 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:42:16 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:42:16 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:42:20 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:42:24 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:42:24 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:42:24 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:42:26 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:42:26 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:42:26 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:42:28 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:42:31 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:42:31 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:42:31 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:42:33 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:42:33 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:42:33 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:42:34 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:42:34 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:42:34 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:55758->172.30.0.11:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:42:34 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:42:35 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:42:37 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:42:37 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:42:37 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:42:38 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:42:42 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:42:45 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:42:45 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:42:48 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:43:00 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:43:08 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:43:15 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:43:18 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:43:18 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:43:18 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:43:18 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:43:23 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:43:25 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:43:26 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:43:29 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:43:30 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:43:39 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:43:39 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:43:39 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:43:46 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:43:46 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:43:46 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:43:48 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:43:48 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:43:48 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:38324->172.30.0.9:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:43:48 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:43:50 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:43:50 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:43:50 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:43:50 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:43:51 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:57092->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:43:51 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:57114->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:43:54 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:43:54 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:43:54 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:43:55 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:52982->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:43:55 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:52974->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:43:56 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:43:56 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:43:56 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:43:57 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:53020->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:43:57 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:43:59 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:43:59 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:53064->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:00 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:53070->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:01 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:53104->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:01 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:44:02 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:53134->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:02 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:53118->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:02 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:44:02 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:44:02 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:44:03 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:53144->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:03 [extractor:w3] tiktok ipc error: read tcp 172.30.0.13:53156->172.30.0.3:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:06 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:44:06 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:37738->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:07 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:44:10 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:44:10 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:44:10 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:44:10 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:44:13 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:44:17 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:44:17 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:44:17 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:38388->172.30.0.9:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:44:17 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:44:21 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:44:26 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35328->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:26 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35316->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:26 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35340->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:27 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35346->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:28 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35358->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:28 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:44:29 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35374->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:29 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35404->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:29 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35388->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:30 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:42406->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:30 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:42400->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:30 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:42414->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:30 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:44:31 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:42420->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:31 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:42422->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:32 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:42434->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:32 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:42446->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:38 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:44:39 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:44:42 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:44:46 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:44:47 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:44:53 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:44:54 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:44:54 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:44:54 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:44:59 [extractor:w2] tiktok ipc error: read tcp 172.30.0.13:35614->172.30.0.9:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:44:59 [extractor:w2] tiktok ipc error: read tcp 172.30.0.13:35612->172.30.0.9:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:45:01 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:45:02 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:02 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:02 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:45:02 [extractor:w2] tiktok ipc error: read tcp 172.30.0.13:44768->172.30.0.9:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:45:05 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:45:06 [extractor:w2] tiktok ipc error: read tcp 172.30.0.13:44790->172.30.0.9:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:45:07 [extractor:w2] tiktok ipc error: read tcp 172.30.0.13:44774->172.30.0.9:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:45:08 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:45:09 [extractor:w2] tiktok ipc error: read tcp 172.30.0.13:35610->172.30.0.9:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:45:13 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:45:16 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:16 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:16 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:45:20 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:20 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:20 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:45:24 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:24 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:24 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:53204->172.30.0.9:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:45:24 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:45:27 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:45:28 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:28 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:28 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:45:32 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:45:35 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:45:35 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:35 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:35 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:45:39 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:45:43 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:43 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:43 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:45:46 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:45:47 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:45:50 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:50 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:50 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:45:53 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:45:54 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:45:57 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:45:57 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:45:57 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:46:01 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:46:06 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59542->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:06 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59562->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:06 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59550->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:06 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59570->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:08 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:46:09 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59584->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:09 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:46:10 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:39820->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:12 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:39834->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:12 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:46:13 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:39850->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:13 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:39862->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:15 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:46:20 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:46:23 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:46:23 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:46:23 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:46:27 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:46:31 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:46:31 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:46:31 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:46:34 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:46:35 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:46:41 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:46:43 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:46:46 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:50336->172.30.0.4:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:46:49 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:46:56 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:46:56 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:46:56 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:47:03 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:47:03 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:47:03 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:47:07 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:47:11 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:47:11 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:47:11 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:47:14 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:47:15 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:47:19 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:47:19 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:47:19 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:47:22 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:47:23 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:47:26 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:47:26 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:47:26 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:47:30 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:47:33 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:35510->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:47:34 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:47:34 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:47:34 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:47:37 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:47:42 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:54638->172.30.0.7:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:47:42 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:47:42 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:47:42 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:47:45 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:47:47 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:47:49 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:47:49 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:47:49 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:47:50 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:42464->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:47:53 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:47:55 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:47:58 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:51154->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:47:59 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:47:59 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:47:59 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:48:00 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:47328->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:00 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:47334->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:01 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:48:02 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:48:03 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:47348->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:05 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:47362->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:06 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:48:06 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:48:06 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:48:08 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:48:08 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:48:08 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:48:10 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:48:10 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:48:17 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:48:18 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:48:19 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:48:21 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:48:21 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:48:21 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:48:26 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:48:28 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:48:28 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:48:28 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:48:32 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:48:33 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:48:37 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:34642->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:39 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:48:39 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:34644->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:40 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:34120->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:41 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:48:46 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:48:46 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:48:46 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:48:50 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:48:53 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:48:53 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:48:53 [extractor:w7] tiktok ipc error: read tcp 172.30.0.13:34632->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:53 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:48:56 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:57314->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:57 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:48:57 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:57338->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:57 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:57388->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:58 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:48:58 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:57398->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:48:59 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:49:02 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:52736->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:49:02 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:52752->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:49:02 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:52762->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:49:04 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:49:07 [extractor:w7] tiktok ipc error: read tcp 172.30.0.13:44996->172.30.0.12:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:49:08 [extractor:w7] tiktok ipc error: read tcp 172.30.0.13:45004->172.30.0.12:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:49:12 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:49:19 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:49:37 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:49:39 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:49:39 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:49:39 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:49:42 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:33840->172.30.0.7:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:49:42 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:33856->172.30.0.7:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:49:45 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:49:45 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:49:45 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:49:45 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:49:49 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:33908->172.30.0.7:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:49:50 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:49:56 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:50:31 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:50:31 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:50:31 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:50:31 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:50:36 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:50:42 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:50:47 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:50:47 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:50:47 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:50:53 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:50:53 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:50:53 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:50:58 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:51:04 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:51:22 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:51:23 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:51:23 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:51:23 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:51:34 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:51:38 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:51:38 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:51:38 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:51:38 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:51:43 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:51:43 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:51:43 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:51:44 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:51:44 [w4] marked unhealthy after failed probe
+ytdlp-gateway-warp  | 2026/04/04 08:51:49 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:51:49 [w4] marked healthy after successful probe
+ytdlp-gateway-warp  | 2026/04/04 08:51:51 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:51:51 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:51:51 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:51:54 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:51:57 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:51:57 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:51:57 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:52:02 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:52:04 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:52:04 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:52:04 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35304->172.30.0.4:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:52:04 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:52:05 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:52:05 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:52:05 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:52:08 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:52:08 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:52:08 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:52:09 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:52:14 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:58752->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:52:15 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:52:16 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:52:17 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:52:20 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:52:27 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:52:27 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:52:27 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:52:29 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:52:35 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:52:37 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:52:43 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:52:49 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:52:49 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:52:49 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:52:49 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:52:55 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:52:55 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:52:55 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:52:56 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:52:57 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:53:00 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:53:01 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:53:05 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:49516->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:53:05 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:49552->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:53:05 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:49442->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:53:05 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:49428->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:53:05 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:49488->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:53:06 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:53:18 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:53:19 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:53:19 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:53:19 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:53:31 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:53:41 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:53:44 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:53:44 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:53:44 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:53:47 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:53:50 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:53:50 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:53:50 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:59794->172.30.0.4:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:53:50 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:53:50 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:45498->172.30.0.4:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:53:50 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:41336->172.30.0.4:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:53:56 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:54:01 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:54:12 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:54:13 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:54:13 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:54:13 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:54:22 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:54:22 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:54:22 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:54:24 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:54:27 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:54:27 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:54:27 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:54:33 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:54:34 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:54:34 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:54:34 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:54:35 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:58756->172.30.0.8:9487: i/o timeout
+ytdlp-gateway-warp  | 2026/04/04 08:54:36 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:54:38 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:54:39 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:54:39 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:54:39 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:54:41 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:54:42 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:54:42 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:54:42 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:54:45 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:54:49 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:54:49 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:54:49 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:54924->172.30.0.6:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:54:49 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:54:50 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:54:53 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:54:57 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35346->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:54:58 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:35352->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:55:00 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:46024->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:55:00 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:55:00 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:46034->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:55:00 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:46048->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:55:03 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:46058->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:55:03 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:46070->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:55:04 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:55:14 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:55:18 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:55:24 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:55:24 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:55:24 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:55:25 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:55:31 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:55:33 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:55:35 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:55:40 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:56:14 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:56:14 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:56:14 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:56:15 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:56:25 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:57:00 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:57:00 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:57:00 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:57:05 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:57:11 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:57:34 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:57:34 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:57:34 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:57:39 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:57:39 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:57:39 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:57:45 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:57:45 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:57:45 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:57:45 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:57:45 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:57:45 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:57:45 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:57:51 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:57:51 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:57:51 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:57:51 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:57:52 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:57:56 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:57:57 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:57:58 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:57:58 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:57:58 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:58:03 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:58:05 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:58:05 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:58:05 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:58:10 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:58:10 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:58:10 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:58:10 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:58:11 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:58:11 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:58:11 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:58:15 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:58:15 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:58:15 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:55314->172.30.0.6:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:15 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:58:16 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:58:21 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 08:58:22 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:58:26 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:58:26 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:40884->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:26 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:40900->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:26 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 08:58:27 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:40904->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:28 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:40912->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:29 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:40922->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:29 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:40918->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:29 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:40936->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:29 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:40928->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:30 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:55284->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:58:31 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:58:37 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:58:37 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:58:43 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:58:51 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:58:56 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:58:56 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:58:56 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 08:58:56 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:59:02 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:59:02 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:02 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:02 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 08:59:03 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:59:03 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:03 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:03 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 08:59:07 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:59:07 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 08:59:11 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:11 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:11 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 08:59:13 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 08:59:15 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 08:59:19 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:19 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:19 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 08:59:22 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 08:59:26 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:26 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:26 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 08:59:26 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:26 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:26 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 08:59:30 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 08:59:32 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:53416->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:59:37 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 08:59:37 [extractor:w7] tiktok ipc error: read tcp 172.30.0.13:36658->172.30.0.12:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:59:38 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 08:59:40 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:40 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:40 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 08:59:43 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:56730->172.30.0.7:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:59:43 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:56878->172.30.0.7:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:59:44 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:56862->172.30.0.7:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 08:59:48 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:48 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:48 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 08:59:48 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:59:51 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 08:59:54 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:59:55 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 08:59:56 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 08:59:56 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 08:59:56 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 08:59:59 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 09:00:02 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:00:04 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:49312->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:04 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:49316->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:04 [w2] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:00:04 [w2] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:00:04 [w2] restarting ytdlp-gluetun-2
+ytdlp-gateway-warp  | 2026/04/04 09:00:05 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:49320->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:05 [w3] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:00:05 [w3] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:00:05 [w3] restarting ytdlp-gluetun-3
+ytdlp-gateway-warp  | 2026/04/04 09:00:06 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:49326->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:07 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 09:00:07 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:49338->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:08 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:49354->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:10 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:52334->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:10 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:52340->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:10 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:00:11 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:52352->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:11 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:52358->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:12 [w4] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:00:12 [w4] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:00:12 [w4] restarting ytdlp-gluetun-4
+ytdlp-gateway-warp  | 2026/04/04 09:00:15 [w2] restarting ytdlp-stream-2
+ytdlp-gateway-warp  | 2026/04/04 09:00:16 [w3] restarting ytdlp-stream-3
+ytdlp-gateway-warp  | 2026/04/04 09:00:17 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:00:18 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:00:20 [w5] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:00:20 [w5] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:00:20 [w5] restarting ytdlp-gluetun-5
+ytdlp-gateway-warp  | 2026/04/04 09:00:24 [w4] restarting ytdlp-stream-4
+ytdlp-gateway-warp  | 2026/04/04 09:00:27 [extractor:w4] tiktok ipc error: read tcp 172.30.0.13:51418->172.30.0.11:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:27 [w6] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:00:27 [w6] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:00:27 [w6] restarting ytdlp-gluetun-6
+ytdlp-gateway-warp  | 2026/04/04 09:00:28 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:00:28 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:00:28 [w1] restarting ytdlp-gluetun-1
+ytdlp-gateway-warp  | 2026/04/04 09:00:31 [w5] restarting ytdlp-stream-5
+ytdlp-gateway-warp  | 2026/04/04 09:00:32 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:00:34 [extractor:w5] tiktok ipc error: read tcp 172.30.0.13:54620->172.30.0.9:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:35 [w7] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:00:35 [w7] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:00:35 [w7] restarting ytdlp-gluetun-7
+ytdlp-gateway-warp  | 2026/04/04 09:00:38 [w6] restarting ytdlp-stream-6
+ytdlp-gateway-warp  | 2026/04/04 09:00:39 [w1] restarting ytdlp-stream-1
+ytdlp-gateway-warp  | 2026/04/04 09:00:39 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:00:42 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:47602->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:42 [extractor:w6] tiktok ipc error: read tcp 172.30.0.13:47614->172.30.0.8:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:43 [w8] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:00:43 [w8] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:00:43 [w8] restarting ytdlp-gluetun-8
+ytdlp-gateway-warp  | 2026/04/04 09:00:45 [extractor:w7] tiktok ipc error: read tcp 172.30.0.13:49364->172.30.0.12:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:45 [extractor:w7] tiktok ipc error: read tcp 172.30.0.13:49368->172.30.0.12:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:46 [extractor:w7] tiktok ipc error: read tcp 172.30.0.13:49384->172.30.0.12:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:46 [w7] restarting ytdlp-stream-7
+ytdlp-gateway-warp  | 2026/04/04 09:00:47 [extractor:w7] tiktok ipc error: read tcp 172.30.0.13:49388->172.30.0.12:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:47 [w10] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:00:51 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:35326->172.30.0.7:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:53 [extractor:w8] tiktok ipc error: read tcp 172.30.0.13:35334->172.30.0.7:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:00:54 [w8] restarting ytdlp-stream-8
+ytdlp-gateway-warp  | 2026/04/04 09:00:56 [w2] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:00:57 [w3] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:01:04 [w9] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:01:04 [w9] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:01:04 [w4] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:01:04 [w9] restarting ytdlp-gluetun-9
+ytdlp-gateway-warp  | 2026/04/04 09:01:10 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:49576->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:12 [w5] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:01:12 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:49584->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:12 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:49598->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:13 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:49606->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:15 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:40742->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:15 [w9] restarting ytdlp-stream-9
+ytdlp-gateway-warp  | 2026/04/04 09:01:16 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:40744->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:16 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:40746->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:17 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:40748->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:17 [extractor:w9] tiktok ipc error: read tcp 172.30.0.13:40764->172.30.0.10:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:19 [w6] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:01:19 [w1] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:01:20 [w10] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:01:20 [w10] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:01:20 [w10] restarting ytdlp-gluetun-10
+ytdlp-gateway-warp  | 2026/04/04 09:01:22 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59306->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:23 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59322->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:23 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59330->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:26 [w7] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:01:31 [w10] restarting ytdlp-stream-10
+ytdlp-gateway-warp  | 2026/04/04 09:01:35 [w8] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:01:35 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59340->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:35 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:60484->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:36 [extractor:w10] tiktok ipc error: read tcp 172.30.0.13:59296->172.30.0.5:9487: read: connection reset by peer
+ytdlp-gateway-warp  | 2026/04/04 09:01:55 [w9] restarted successfully
+ytdlp-gateway-warp  | 2026/04/04 09:02:04 [w1] circuit opened (drain mode)
+ytdlp-gateway-warp  | 2026/04/04 09:02:04 [w1] restart scheduled
+ytdlp-gateway-warp  | 2026/04/04 09:02:04 [w1] restarting ytdlp-gluetun-1

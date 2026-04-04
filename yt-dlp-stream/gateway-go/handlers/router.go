@@ -61,6 +61,7 @@ type Handlers struct {
 	restartTasks   map[string]context.CancelFunc
 	ctx            context.Context
 	cancel         context.CancelFunc
+	startedAt      time.Time
 }
 
 func New(cfg utils.Config, reg *registry.WorkerRegistry, rotator *registry.VPNRotator, ext Extractor, del *delivery.Delivery, client *http.Client) *Handlers {
@@ -77,6 +78,7 @@ func New(cfg utils.Config, reg *registry.WorkerRegistry, rotator *registry.VPNRo
 		restartTasks: map[string]context.CancelFunc{},
 		ctx:          ctx,
 		cancel:       cancel,
+		startedAt:    time.Now(),
 	}
 }
 
@@ -724,6 +726,9 @@ func (h *Handlers) HealthMonitor() {
 
 func (h *Handlers) healthCheckWorker(workerID string) bool {
 	if h.Extractor != nil {
+		if time.Since(h.startedAt) < 30*time.Second {
+			return true
+		}
 		if err := h.Extractor.Health(workerID); err != nil {
 			log.Printf("[%s] worker IPC health check error: %v", workerID, err)
 			return false

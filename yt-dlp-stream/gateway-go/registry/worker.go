@@ -31,7 +31,13 @@ type Worker struct {
 	QuarantineUntil  time.Time
 	RestartEvents    []time.Time
 	BreakerOpen      bool
+	TransientErrors  []time.Time
 }
+
+const (
+	transientWindowSeconds = 20
+	transientThreshold    = 3
+)
 
 func (w *Worker) APIURL() string {
 	return fmt.Sprintf("http://%s:%d", w.Host, w.APIPort)
@@ -345,8 +351,21 @@ func (r *WorkerRegistry) RecordIPCError(workerID string) {
 		return
 	}
 
-	w.IPCTimeoutStreak++
-	if w.IPCTimeoutStreak < 2 {
+	now := time.Now()
+	w.TransientErrors = append(w.TransientErrors, now)
+
+	windowStart := now.Add(-time.Duration(transientWindowSeconds) * time.Second)
+	validCount := 0
+	recentErrors := make([]time.Time, 0)
+	for _, ts := range w.TransientErrors {
+		if ts.After(windowStart) {
+			validCount++
+			recentErrors = append(recentErrors, ts)
+		}
+	}
+	w.TransientErrors = recentErrors
+
+	if validCount < transientThreshold {
 		return
 	}
 
@@ -354,10 +373,10 @@ func (r *WorkerRegistry) RecordIPCError(workerID string) {
 	if timeoutSeconds < 1 {
 		timeoutSeconds = 30
 	}
-	degradedUntil := time.Now().Add(time.Duration(timeoutSeconds) * time.Second)
+	degradedUntil := now.Add(time.Duration(timeoutSeconds) * time.Second)
 	if degradedUntil.After(w.DegradedUntil) {
 		w.DegradedUntil = degradedUntil
-		log.Printf("[%s] marked degraded for %ds after %d consecutive IPC timeouts", workerID, timeoutSeconds, w.IPCTimeoutStreak)
+		log.Printf("[%s] marked degraded for %ds after %d transient errors in %ds window", workerID, timeoutSeconds, validCount, transientWindowSeconds)
 	}
 }
 
@@ -370,6 +389,7 @@ func (r *WorkerRegistry) RecordIPCSuccess(workerID string) {
 		return
 	}
 	w.IPCTimeoutStreak = 0
+	w.TransientErrors = nil
 }
 
 func (r *WorkerRegistry) GetWorkersNeedingRestart() []string {

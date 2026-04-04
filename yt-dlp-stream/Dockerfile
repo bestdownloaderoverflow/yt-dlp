@@ -1,5 +1,6 @@
-# Use Python 3.13 slim image
-FROM python:3.13-slim AS base
+# Use Python 3.12 slim image.
+# curl_cffi impersonation support is unstable on 3.13 in this stack.
+FROM python:3.12-slim AS base
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -29,6 +30,7 @@ COPY yt-dlp-stream/utils.py .
 # Copy directories (api, core)
 COPY yt-dlp-stream/api ./api
 COPY yt-dlp-stream/core ./core
+COPY yt-dlp-stream/extractor ./extractor
 
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -42,13 +44,12 @@ RUN python --version
 # Expose port
 EXPOSE 9487
 
-# Health check
+# Health check for extractor TCP worker protocol
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; r=urllib.request.urlopen('http://localhost:9487/health', timeout=2); r.read(1)" || exit 1
+    CMD python -c "import socket,json; s=socket.create_connection(('127.0.0.1',9487),2); s.sendall(b'{\"id\":\"hc\",\"method\":\"health\"}\\n'); d=s.recv(4096); s.close(); o=json.loads(d.decode().strip()); raise SystemExit(0 if o.get('ok') else 1)" || exit 1
 
-# Run with Granian defaults for worker/thread concurrency while preserving
-# the app interface and bind address used by this deployment.
-CMD ["sh", "-c", "exec granian --workers ${GRANIAN_WORKERS:-8} --interface asgi --loop uvloop --host 0.0.0.0 --port 9487 main:app"]
+# Run extractor daemon server (non-HTTP).
+CMD ["python", "extractor/worker_server.py"]
 
 # Development stage
 FROM base AS development
@@ -56,5 +57,5 @@ FROM base AS development
 # Install dev dependencies
 RUN pip install --no-cache-dir watchfiles
 
-# Run with reload for development
-CMD ["sh", "-c", "exec granian --workers ${GRANIAN_WORKERS:-8} --interface asgi --loop uvloop --host 0.0.0.0 --port 9487 --reload main:app"]
+# Run extractor daemon server for development as well.
+CMD ["python", "extractor/worker_server.py"]

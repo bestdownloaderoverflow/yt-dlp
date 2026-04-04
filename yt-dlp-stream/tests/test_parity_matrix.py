@@ -32,7 +32,7 @@ if "redis" not in sys.modules:
             pass
 
         @staticmethod
-        def from_url(url, decode_responses=True):
+        def from_url(url, decode_responses=True, **kwargs):
             return _FakeRedisConn()
 
     sys.modules["redis"] = _FakeRedisModule()

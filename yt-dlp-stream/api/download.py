@@ -12,8 +12,7 @@ from fastapi.responses import StreamingResponse, RedirectResponse
 from urllib.parse import quote
 
 from core.redis_cache import download_cache
-from core.config import QUALITY_FORMATS, STREAM_BUFFER_SIZE
-from core.http_pool import get_async_pool
+from core.config import QUALITY_FORMATS, AUDIO_FORMAT, VIDEO_CHUNK_SIZE
 from core.delivery import plan_delivery
 from core.error_mapping import map_generic_exception, map_yt_dlp_exception
 from core.generators import (
@@ -32,8 +31,6 @@ router = APIRouter()
 logger = logging.getLogger("ytdlp_stream")
 DIRECT_PROXY_PLATFORMS = {"twitter", "x"}
 
-AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
-VIDEO_CHUNK_SIZE = 10 * 1024 * 1024  # 10MB
 VIDEO_MIME_BY_EXT = {
     "mp4": "video/mp4",
     "webm": "video/webm",
@@ -55,7 +52,7 @@ async def download(
     Key expires in 5 minutes after being generated.
     For Twitter/X videos, uses direct URL proxy with session integrity headers.
     """
-    session = await download_cache.get_session(key)
+    session = download_cache.get_session(key)
     if not session:
         raise HTTPException(
             status_code=404, detail="Download link expired or invalid"
@@ -79,9 +76,6 @@ async def download(
                     session.title,
                     download,
                     request,
-                    url=url,
-                    proxy=session.proxy,
-                    impersonate=session.impersonate,
                 )
             # Fallback to traditional method
             return await _download_video(
@@ -103,10 +97,7 @@ async def download(
                 impersonate=session.impersonate,
             )
         elif type == "photo":
-            return await _download_photo(
-                url, session.photo_index, download, request,
-                proxy=session.proxy, impersonate=session.impersonate,
-            )
+            return await _download_photo(url, session.photo_index, download, request)
         else:
             raise HTTPException(status_code=400, detail=f"Unknown type: {type}")
 
@@ -126,9 +117,6 @@ async def _download_video_direct(
     title: Optional[str],
     download: bool,
     request: FastAPIRequest,
-    url: Optional[str] = None,
-    proxy: Optional[str] = None,
-    impersonate: Optional[str] = None,
 ):
     """Download video using direct URL proxy with session integrity headers (for Twitter/X)."""
     # Build safe headers (remove accept-encoding to avoid compression issues)
@@ -148,67 +136,19 @@ async def _download_video_direct(
     filename = f"{base_filename}.{default_ext}"
     media_type = VIDEO_MIME_BY_EXT.get(default_ext, "application/octet-stream")
 
-    max_refreshes = 2
-    refresh_count = 0
-
     async def _stream_video() -> AsyncIterator[bytes]:
-        nonlocal direct_url, safe_headers, refresh_count
-
-        client = get_async_pool()
-        while True:
-            try:
-                async with client.stream(
-                    "GET", direct_url, headers=safe_headers
-                ) as resp:
-                    if resp.status_code == 403 and refresh_count < max_refreshes and url:
-                        logger.warning(
-                            f"Direct video URL expired (403), refresh {refresh_count + 1}/{max_refreshes}"
-                        )
-                        from ytdl_manager import ydl_manager
-                        try:
-                            info = await asyncio.wait_for(
-                                asyncio.to_thread(ydl_manager.extract_info, url, proxy, impersonate),
-                                timeout=30,
-                            )
-                            if info:
-                                formats = info.get("formats", [])
-                                new_fmt = next(
-                                    (f for f in formats
-                                     if f.get("protocol") in ("http", "https", "")
-                                     and f.get("url")),
-                                    None,
-                                )
-                                if new_fmt:
-                                    direct_url = new_fmt["url"]
-                                    new_headers = new_fmt.get("http_headers") or info.get("http_headers") or {}
-                                    safe_headers = {
-                                        k: v for k, v in new_headers.items()
-                                        if k.lower() not in ("accept-encoding", "cookie")
-                                    }
-                                    safe_headers["Accept-Encoding"] = "identity"
-                                    try:
-                                        calc = ydl_manager.calc_headers(new_fmt, load_cookies=True, proxy=proxy, impersonate=impersonate)
-                                        c = calc.get("Cookie") or calc.get("cookie")
-                                        if c:
-                                            safe_headers["Cookie"] = c
-                                    except Exception:
-                                        pass
-                                    refresh_count += 1
-                                    continue
-                        except Exception as exc:
-                            logger.error(f"Refresh failed: {exc}")
-                        raise HTTPException(status_code=403, detail="Video URL expired and could not be refreshed")
-
-                    resp.raise_for_status()
-                    async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
-                        if await request.is_disconnected():
-                            logger.info("Client disconnected from direct video stream")
-                            break
-                        yield data
-                    break
-
-            except httpx.HTTPStatusError as e:
-                raise HTTPException(status_code=e.response.status_code, detail=f"Download failed: {e}")
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=300
+        ) as client:
+            async with client.stream(
+                "GET", direct_url, headers=safe_headers
+            ) as resp:
+                resp.raise_for_status()
+                async for data in resp.aiter_bytes(65536):
+                    if await request.is_disconnected():
+                        logger.info("Client disconnected from direct video stream")
+                        break
+                    yield data
 
     response_headers = _build_disposition_header(filename, download)
 
@@ -231,15 +171,9 @@ async def _download_video(
     """Download video using chunked method."""
     format_str = QUALITY_FORMATS.get(quality, QUALITY_FORMATS["1080"])
 
-    try:
-        info, resolved, global_headers = await asyncio.wait_for(
-            asyncio.to_thread(
-                _extract_info_and_resolve, url, format_str, proxy, impersonate
-            ),
-            timeout=30,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Video extraction timed out")
+    info, resolved, global_headers = await asyncio.to_thread(
+        _extract_info_and_resolve, url, format_str, proxy, impersonate
+    )
 
     base_filename = info.get("title", "download") or "download"
     delivery = plan_delivery(resolved)
@@ -274,16 +208,18 @@ async def _download_video(
             safe_headers["Accept-Encoding"] = "identity"
 
             async def _strict_simple_stream() -> AsyncIterator[bytes]:
-                client = get_async_pool()
-                async with client.stream(
-                    "GET", direct_url, headers=safe_headers
-                ) as resp:
-                    resp.raise_for_status()
-                    async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
-                        if await request.is_disconnected():
-                            logger.info("Client disconnected")
-                            break
-                        yield data
+                async with httpx.AsyncClient(
+                    follow_redirects=True, timeout=60
+                ) as client:
+                    async with client.stream(
+                        "GET", direct_url, headers=safe_headers
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for data in resp.aiter_bytes(65536):
+                            if await request.is_disconnected():
+                                logger.info("Client disconnected")
+                                break
+                            yield data
 
             body = _strict_simple_stream()
         elif filesize:
@@ -309,16 +245,18 @@ async def _download_video(
             }
 
             async def _simple_stream() -> AsyncIterator[bytes]:
-                client = get_async_pool()
-                async with client.stream(
-                    "GET", direct_url, headers=safe_headers
-                ) as resp:
-                    resp.raise_for_status()
-                    async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
-                        if await request.is_disconnected():
-                            logger.info("Client disconnected")
-                            break
-                        yield data
+                async with httpx.AsyncClient(
+                    follow_redirects=True, timeout=60
+                ) as client:
+                    async with client.stream(
+                        "GET", direct_url, headers=safe_headers
+                    ) as resp:
+                        resp.raise_for_status()
+                        async for data in resp.aiter_bytes(65536):
+                            if await request.is_disconnected():
+                                logger.info("Client disconnected")
+                                break
+                            yield data
 
             body = _simple_stream()
 
@@ -387,15 +325,9 @@ async def _download_mp3(
     impersonate: Optional[str] = None,
 ):
     """Download MP3 using chunked method."""
-    try:
-        info, resolved, global_headers = await asyncio.wait_for(
-            asyncio.to_thread(
-                _extract_info_and_resolve, url, AUDIO_FORMAT, proxy, impersonate
-            ),
-            timeout=30,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Audio extraction timed out")
+    info, resolved, global_headers = await asyncio.to_thread(
+        _extract_info_and_resolve, url, AUDIO_FORMAT, proxy, impersonate
+    )
 
     base_filename = info.get("title", "download") or "download"
     out_filename = f"{base_filename}.mp3"
@@ -441,78 +373,58 @@ async def _download_mp3(
 
 
 async def _download_photo(
-    url: str,
-    photo_index: int,
-    download: bool,
-    request: FastAPIRequest,
-    proxy: Optional[str] = None,
-    impersonate: Optional[str] = None,
+    url: str, photo_index: int, download: bool, request: FastAPIRequest
 ):
     """Download photo as attachment (proxy stream)."""
+    # Use ydl_manager for session integrity (preserves cookies)
     from ytdl_manager import ydl_manager
 
-    try:
-        info = await asyncio.wait_for(
-            asyncio.to_thread(ydl_manager.extract_info, url, proxy, impersonate),
-            timeout=30,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Photo extraction timed out")
+    info = await asyncio.to_thread(ydl_manager.extract_info, url)
 
     photo_url = None
-    photo_fmt = None
+    width = None
+    height = None
 
     if info.get("_type") == "playlist":
         entries = info.get("entries", [])
         if 1 <= photo_index <= len(entries):
             entry = entries[photo_index - 1]
             formats = entry.get("formats", [])
+            width = entry.get("width")
+            height = entry.get("height")
             for f in formats:
                 if f.get("format_id") == "orig":
-                    photo_fmt = f
+                    photo_url = f.get("url")
                     break
-            if not photo_fmt and formats:
-                photo_fmt = formats[-1]
+            if not photo_url and formats:
+                photo_url = formats[-1].get("url")
     else:
         formats = info.get("formats", [])
+        width = info.get("width")
+        height = info.get("height")
         for f in formats:
             if f.get("format_id") == "orig":
-                photo_fmt = f
+                photo_url = f.get("url")
                 break
-        if not photo_fmt and formats:
-            photo_fmt = formats[-1]
-
-    if photo_fmt:
-        photo_url = photo_fmt.get("url")
+        if not photo_url and formats:
+            photo_url = formats[-1].get("url")
 
     if not photo_url:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    # Build headers with session integrity (cookies, user-agent, etc.)
-    global_headers = info.get("http_headers") or {}
-    fmt_headers = photo_fmt.get("http_headers") or global_headers
-    safe_headers = {
-        k: v for k, v in fmt_headers.items()
-        if k.lower() not in ("accept-encoding", "cookie")
-    }
-    safe_headers["Accept-Encoding"] = "identity"
-
-    cookies = fmt_headers.get("Cookie") or fmt_headers.get("cookie")
-    if cookies:
-        safe_headers["Cookie"] = cookies
-
+    # Stream photo as attachment instead of redirect
     ext = photo_url.split("?")[0].split(".")[-1] if "." in photo_url else "jpg"
     filename = f"photo_{photo_index}.{ext}"
 
     async def _stream_photo() -> AsyncIterator[bytes]:
-        client = get_async_pool()
-        async with client.stream("GET", photo_url, headers=safe_headers) as resp:
-            resp.raise_for_status()
-            async for data in resp.aiter_bytes(STREAM_BUFFER_SIZE):
-                if await request.is_disconnected():
-                    logger.info("Client disconnected from photo stream")
-                    break
-                yield data
+        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
+            async with client.stream("GET", photo_url) as resp:
+                resp.raise_for_status()
+                async for data in resp.aiter_bytes(65536):
+                    if await request.is_disconnected():
+                        logger.info("Client disconnected from photo stream")
+                        break
+                    yield data
 
     response_headers = _build_disposition_header(filename, download)
 

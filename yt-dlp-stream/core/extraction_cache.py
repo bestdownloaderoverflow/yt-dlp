@@ -1,212 +1,195 @@
-"""Redis-based extraction cache to avoid repeated yt-dlp extract_info calls.
+"""Redis-backed cache for yt-dlp extract_info results.
 
-Caches the full info dict from extract_info() keyed by URL+proxy hash.
-Dramatically reduces rate-limit risk when multiple users request the same video.
+Reduces redundant extractions for the same URL within a short window,
+lowering latency and reducing risk of platform-side rate limiting.
 
-TTL is kept short (60-120s) because format URLs inside the info dict expire.
-Platform-specific TTLs account for different URL expiry windows.
-
-Async methods (get/put/invalidate) use redis.asyncio to avoid blocking the
-event loop.  health_check() stays synchronous as it is called from a
-background thread that has no running event loop.
-
-Stampede protection: when multiple concurrent requests miss the cache for
-the same URL, only the first caller extracts; the rest wait up to
-STAMPEDE_WAIT_SECONDS and read from the cache once it is populated.
+TTLs are platform-specific since URL expiry differs per platform:
+- TikTok CDN URLs expire quickly (~90s)
+- YouTube signed URLs last longer (~180s)
+- Twitter/X URLs (~120s)
+- Generic fallback: 60s
 """
 
-import asyncio
 import hashlib
 import json
 import logging
 import os
 import time
-from typing import Optional, Dict, Any, Callable, Awaitable
+from typing import Any, Callable, Optional
 
 import redis
-import redis.asyncio as aioredis
 
-logger = logging.getLogger("ytdl_stream")
+logger = logging.getLogger("ytdlp_stream")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
-# Platform-specific TTLs (seconds)
-PLATFORM_TTL = {
-    "tiktok": 90,
-    "youtube": 180,
-    "twitter": 120,
-    "default": 90,
+_TIKTOK_TTL = int(os.getenv("TIKTOK_EXTRACT_CACHE_TTL_SECONDS", "90"))
+_DOUYIN_TTL = int(os.getenv("DOUYIN_EXTRACT_CACHE_TTL_SECONDS", str(_TIKTOK_TTL)))
+_YOUTUBE_TTL = int(os.getenv("YOUTUBE_EXTRACT_CACHE_TTL_SECONDS", "180"))
+_TWITTER_TTL = int(os.getenv("TWITTER_EXTRACT_CACHE_TTL_SECONDS", "120"))
+
+_PLATFORM_TTL: dict[str, int] = {
+    "tiktok": _TIKTOK_TTL,
+    "douyin": _DOUYIN_TTL,
+    "youtube": _YOUTUBE_TTL,
+    "twitter": _TWITTER_TTL,
+    "x": _TWITTER_TTL,
 }
+_DEFAULT_TTL = 60
 
-# How long waiters will poll for a result before doing their own extraction
-STAMPEDE_WAIT_SECONDS = 8
-STAMPEDE_LOCK_TTL = 35  # slightly longer than max extraction time
+# Stampede protection: how long the distributed lock is held (seconds)
+_LOCK_TTL = 35
+# How long waiters poll before falling through to own extraction
+_STAMPEDE_WAIT = 8
+_POLL_INTERVAL = 0.3
 
-_KEY_PREFIX = "extract:"
-_LOCK_PREFIX = "extract_lock:"
-
-
-def _detect_platform(url: str) -> str:
-    """Detect platform from URL for TTL selection."""
-    url_lower = url.lower()
-    if "tiktok.com" in url_lower or "douyin.com" in url_lower:
-        return "tiktok"
-    if "youtube.com" in url_lower or "youtu.be" in url_lower:
-        return "youtube"
-    if "twitter.com" in url_lower or "x.com" in url_lower:
-        return "twitter"
-    return "default"
+_KEY_PREFIX = "exinfo:"
+_LOCK_PREFIX = "exlock:"
 
 
-def _make_cache_key(url: str, proxy: Optional[str] = None) -> str:
-    """Create a deterministic cache key from URL and proxy."""
-    raw = f"{url}|{proxy or ''}"
-    return f"{_KEY_PREFIX}{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
+def _cache_key(url: str, proxy: Optional[str], impersonate: Optional[str]) -> str:
+    """SHA-256 of url|proxy|impersonate for a stable, compact key."""
+    raw = f"{url}|{proxy or ''}|{impersonate or ''}"
+    return _KEY_PREFIX + hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _make_lock_key(url: str, proxy: Optional[str] = None) -> str:
-    raw = f"{url}|{proxy or ''}"
-    return f"{_LOCK_PREFIX}{hashlib.sha256(raw.encode()).hexdigest()[:24]}"
+def _lock_key(url: str, proxy: Optional[str], impersonate: Optional[str]) -> str:
+    raw = f"{url}|{proxy or ''}|{impersonate or ''}"
+    return _LOCK_PREFIX + hashlib.sha256(raw.encode()).hexdigest()
 
 
-class ExtractionCache:
-    """Redis-backed extraction result cache with async I/O and stampede protection."""
-
-    def __init__(self):
-        self._redis = aioredis.from_url(REDIS_URL, decode_responses=True)
-        self._redis_sync = redis.from_url(REDIS_URL, decode_responses=True)
-        self._hits = 0
-        self._misses = 0
-
-    async def get(self, url: str, proxy: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Get cached extraction result, or None on miss."""
-        key = _make_cache_key(url, proxy)
-        try:
-            data = await self._redis.get(key)
-            if data:
-                self._hits += 1
-                logger.debug(f"Extraction cache HIT: {url[:60]}...")
-                return json.loads(data)
-        except (aioredis.ConnectionError, json.JSONDecodeError) as e:
-            logger.warning(f"Extraction cache get error: {e}")
-        self._misses += 1
-        return None
-
-    async def put(self, url: str, info: Dict[str, Any], proxy: Optional[str] = None) -> bool:
-        """Cache an extraction result with platform-specific TTL."""
-        if not info:
-            return False
-
-        key = _make_cache_key(url, proxy)
-        platform = _detect_platform(url)
-        ttl = PLATFORM_TTL.get(platform, PLATFORM_TTL["default"])
-
-        try:
-            serializable = _make_serializable(info)
-            data = json.dumps(serializable, default=str)
-            await self._redis.setex(key, ttl, data)
-            logger.debug(f"Extraction cache PUT ({platform}, TTL={ttl}s): {url[:60]}...")
-            return True
-        except (aioredis.ConnectionError, TypeError, ValueError) as e:
-            logger.warning(f"Extraction cache put error: {e}")
-            return False
-
-    async def get_or_extract(
-        self,
-        url: str,
-        proxy: Optional[str],
-        extract_fn: Callable[[], Awaitable[Optional[Dict[str, Any]]]],
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Stampede-safe cache-aside: returns cached result or calls extract_fn
-        exactly once per URL, even under concurrent load.
-
-        Strategy (Redis SET NX distributed lock):
-        1. Cache hit → return immediately.
-        2. Acquire lock (SET NX, TTL=STAMPEDE_LOCK_TTL).
-           a. Lock acquired → extract, store result, release lock.
-           b. Lock not acquired → wait up to STAMPEDE_WAIT_SECONDS polling
-              the cache.  If still nothing after the wait, fall through to
-              our own extraction (avoids indefinite starvation if the lock
-              holder crashes).
-        """
-        cached = await self.get(url, proxy)
-        if cached is not None:
-            return cached
-
-        lock_key = _make_lock_key(url, proxy)
-        lock_acquired = await self._redis.set(lock_key, "1", nx=True, ex=STAMPEDE_LOCK_TTL)
-
-        if lock_acquired:
-            try:
-                info = await extract_fn()
-                if info:
-                    await self.put(url, info, proxy)
-                return info
-            finally:
-                await self._redis.delete(lock_key)
-        else:
-            deadline = time.monotonic() + STAMPEDE_WAIT_SECONDS
-            while time.monotonic() < deadline:
-                await asyncio.sleep(0.4)
-                cached = await self.get(url, proxy)
-                if cached is not None:
-                    return cached
-            logger.warning(
-                "Stampede wait timed out for %s, falling through to own extraction", url[:60]
-            )
-            return await extract_fn()
-
-    async def invalidate(self, url: str, proxy: Optional[str] = None):
-        """Remove a cached entry (e.g. after known URL expiry)."""
-        key = _make_cache_key(url, proxy)
-        try:
-            await self._redis.delete(key)
-        except aioredis.ConnectionError:
-            pass
-
-    @property
-    def stats(self) -> Dict[str, int]:
-        total = self._hits + self._misses
-        return {
-            "hits": self._hits,
-            "misses": self._misses,
-            "hit_rate": round(self._hits / total * 100, 1) if total > 0 else 0,
-        }
-
-    def health_check(self) -> bool:
-        """Synchronous health check for background-thread monitoring."""
-        try:
-            self._redis_sync.ping()
-            return True
-        except redis.ConnectionError:
-            return False
+def _ttl_for_platform(info: dict) -> int:
+    extractor = (info.get("extractor_key") or info.get("extractor") or "").lower()
+    return _PLATFORM_TTL.get(extractor, _DEFAULT_TTL)
 
 
 def _make_serializable(obj: Any) -> Any:
-    """Recursively convert info dict to JSON-serializable form.
-
-    yt-dlp info dicts can contain non-serializable objects like
-    CookieJar, format selectors, etc. We strip those.
-    """
+    """Recursively convert yt-dlp info dict to JSON-serializable form."""
     if isinstance(obj, dict):
-        result = {}
-        for k, v in obj.items():
-            # Skip known non-serializable / internal keys
-            if k.startswith("__") or k in ("_filename", "requested_downloads"):
-                continue
-            try:
-                result[k] = _make_serializable(v)
-            except (TypeError, ValueError):
-                result[k] = str(v)
-        return result
-    elif isinstance(obj, (list, tuple)):
-        return [_make_serializable(item) for item in obj]
-    elif isinstance(obj, (str, int, float, bool, type(None))):
+        return {k: _make_serializable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_make_serializable(i) for i in obj]
+    if isinstance(obj, (str, int, float, bool, type(None))):
         return obj
-    else:
-        return str(obj)
+    return str(obj)
 
 
-# Singleton
+class ExtractionCache:
+    """Redis-backed cache with stampede protection for yt-dlp info dicts."""
+
+    def __init__(self):
+        self._redis: Optional[redis.Redis] = None
+        self._available = False
+        self._last_check = 0.0
+        self._check_interval = 30
+
+    def _get_redis(self) -> Optional[redis.Redis]:
+        now = time.time()
+        if now - self._last_check < self._check_interval and self._redis is not None:
+            return self._redis if self._available else None
+        try:
+            if self._redis is None:
+                self._redis = redis.from_url(
+                    REDIS_URL, decode_responses=True, socket_connect_timeout=1
+                )
+            self._redis.ping()
+            self._available = True
+        except Exception:
+            self._available = False
+        self._last_check = now
+        return self._redis if self._available else None
+
+    def get(self, url: str, proxy: Optional[str], impersonate: Optional[str]) -> Optional[dict]:
+        """Return cached info dict or None."""
+        r = self._get_redis()
+        if r is None:
+            return None
+        try:
+            data = r.get(_cache_key(url, proxy, impersonate))
+            if data:
+                return json.loads(data)
+        except Exception as e:
+            logger.debug(f"ExtractionCache.get error: {e}")
+        return None
+
+    def put(self, url: str, proxy: Optional[str], impersonate: Optional[str], info: dict) -> None:
+        """Store info dict with platform-appropriate TTL."""
+        r = self._get_redis()
+        if r is None:
+            return
+        try:
+            ttl = _ttl_for_platform(info)
+            serializable = _make_serializable(info)
+            r.setex(_cache_key(url, proxy, impersonate), ttl, json.dumps(serializable))
+        except Exception as e:
+            logger.debug(f"ExtractionCache.put error: {e}")
+
+    def get_or_extract(
+        self,
+        url: str,
+        proxy: Optional[str],
+        impersonate: Optional[str],
+        extract_fn: Callable[[], dict],
+    ) -> dict:
+        """
+        Return cached info or call extract_fn, with Redis SET NX stampede protection.
+
+        If another worker is currently extracting the same URL, wait up to
+        _STAMPEDE_WAIT seconds for the result to appear in cache before
+        falling through to own extraction.
+        """
+        # Fast path: already cached
+        cached = self.get(url, proxy, impersonate)
+        if cached is not None:
+            logger.debug(f"ExtractionCache hit: {url[:60]}")
+            return cached
+
+        r = self._get_redis()
+        if r is None:
+            return extract_fn()
+
+        lkey = _lock_key(url, proxy, impersonate)
+        ckey = _cache_key(url, proxy, impersonate)
+
+        # Try to acquire the extraction lock (SET NX)
+        acquired = r.set(lkey, "1", nx=True, ex=_LOCK_TTL)
+
+        if not acquired:
+            # Another worker is extracting — wait for their result
+            deadline = time.time() + _STAMPEDE_WAIT
+            while time.time() < deadline:
+                time.sleep(_POLL_INTERVAL)
+                try:
+                    data = r.get(ckey)
+                    if data:
+                        logger.debug(f"ExtractionCache stampede wait hit: {url[:60]}")
+                        return json.loads(data)
+                except Exception:
+                    break
+            # Timed out waiting — fall through to own extraction
+            logger.debug(f"ExtractionCache stampede wait timeout: {url[:60]}")
+
+        try:
+            info = extract_fn()
+            self.put(url, proxy, impersonate, info)
+            return info
+        finally:
+            if acquired:
+                try:
+                    r.delete(lkey)
+                except Exception:
+                    pass
+
+    def invalidate(self, url: str, proxy: Optional[str], impersonate: Optional[str]) -> None:
+        """Manually invalidate a cached entry."""
+        r = self._get_redis()
+        if r is None:
+            return
+        try:
+            r.delete(_cache_key(url, proxy, impersonate))
+        except Exception as e:
+            logger.debug(f"ExtractionCache.invalidate error: {e}")
+
+
+# Singleton instance
 extraction_cache = ExtractionCache()

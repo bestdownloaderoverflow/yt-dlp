@@ -61,7 +61,7 @@ TikTok memakai endpoint terpisah:
 ### Contoh request
 
 ```bash
-curl -X POST "http://localhost:9487/tiktok" \
+curl -X POST "http://localhost:9111/tiktok" \
   -H "Content-Type: application/json" \
   -d '{
     "url": "https://www.tiktok.com/@scout2015/video/6718335390845095173",

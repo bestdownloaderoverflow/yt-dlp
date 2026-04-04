@@ -104,30 +104,23 @@ class ProcessManager:
         with self._process_lock:
             if pid not in self._processes:
                 return False
-            
-            info = self._processes[pid]
+            info = self._processes.pop(pid)
             process = info.process
-            
+
+        # Blocking wait dilakukan di luar lock agar tidak memblok thread lain
+        try:
+            process.terminate()
             try:
-                # Try graceful termination first
-                process.terminate()
-                
-                # Wait for process to exit
-                try:
-                    process.wait(timeout=timeout)
-                    logger.info(f"Process PID={pid} terminated gracefully")
-                except:
-                    # Force kill if not responding
-                    process.kill()
-                    process.wait(timeout=2)
-                    logger.warning(f"Process PID={pid} force killed")
-                
-                self._processes.pop(pid, None)
-                return True
-                
-            except Exception as e:
-                logger.error(f"Failed to terminate process PID={pid}: {e}")
-                return False
+                process.wait(timeout=timeout)
+                logger.info(f"Process PID={pid} terminated gracefully")
+            except Exception:
+                process.kill()
+                process.wait(timeout=2)
+                logger.warning(f"Process PID={pid} force killed")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to terminate process PID={pid}: {e}")
+            return False
 
     def _background_cleanup(self):
         """Background thread untuk periodic cleanup."""

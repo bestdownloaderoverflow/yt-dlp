@@ -8,6 +8,7 @@ import yt_dlp
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from core.error_mapping import map_generic_exception, map_yt_dlp_exception
+from core.extraction_cache import extraction_cache
 from core.redis_cache import download_cache
 from core.helpers import _enforce_rate_limit
 from ytdl_manager import ydl_manager
@@ -23,13 +24,18 @@ def detect_content_type(info: dict) -> str:
     if info.get("_type") == "playlist":
         entries = info.get("entries", [])
         if entries and entries[0].get("formats"):
-            first_fmt = entries[0]["formats"][0]
+            first_formats = entries[0]["formats"]
+            if any(f.get("format_id", "").startswith("image-") for f in first_formats):
+                return "photos"
+            first_fmt = first_formats[0]
             if first_fmt.get("video_ext") == "jpg":
                 return "photos"
         return "playlist"
 
     formats = info.get("formats", [])
     if formats:
+        if any(f.get("format_id", "").startswith("image-") for f in formats):
+            return "photos"
         first_fmt = formats[0]
         if first_fmt.get("video_ext") == "jpg":
             return "photos"
@@ -54,7 +60,7 @@ def get_available_qualities(formats: list) -> list:
     return qualities if qualities else ["best"]
 
 
-async def generate_video_links(url: str, info: dict, qualities: list, platform: str) -> dict:
+def generate_video_links(url: str, info: dict, qualities: list, platform: str) -> dict:
     """Generate download links for video qualities with session integrity."""
     links = {}
     formats = info.get("formats", [])
@@ -79,23 +85,25 @@ async def generate_video_links(url: str, info: dict, qualities: list, platform: 
                     fmt = f
                     break
 
-        # Prepare session data — use pre-computed headers from the format dict
-        # (built by ydl_manager._build_outbound_headers_locked during extract_info)
-        # to avoid acquiring an extra ydl_manager slot just for header lookup.
+        # Prepare session data
         direct_url = None
         http_headers = None
         cookies = None
 
         if fmt and use_direct_proxy:
             direct_url = fmt.get("url")
+            # Get format-specific headers or global headers
             fmt_headers = fmt.get("http_headers") or global_headers
-            http_headers = {
-                k: v for k, v in fmt_headers.items()
-                if k.lower() not in ("cookie", "accept-encoding")
-            }
-            cookies = fmt_headers.get("Cookie") or fmt_headers.get("cookie")
+            # Calculate headers with cookies using ydl_manager
+            try:
+                calc_headers = ydl_manager.calc_headers(fmt, load_cookies=True)
+                http_headers = {k: v for k, v in calc_headers.items() if k.lower() != "cookie"}
+                cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
+            except Exception:
+                # Fallback to format headers
+                http_headers = fmt_headers
 
-        key = await download_cache.create_session(
+        key = download_cache.create_session(
             url=url,
             type="video",
             quality=quality.replace("p", ""),
@@ -111,9 +119,9 @@ async def generate_video_links(url: str, info: dict, qualities: list, platform: 
     return links
 
 
-async def generate_mp3_link(url: str, platform: str, title: Optional[str], proxy: Optional[str], impersonate: Optional[str]) -> str:
+def generate_mp3_link(url: str, platform: str, title: Optional[str], proxy: Optional[str], impersonate: Optional[str]) -> str:
     """Generate download link for MP3."""
-    key = await download_cache.create_session(
+    key = download_cache.create_session(
         url=url,
         type="mp3",
         platform=platform,
@@ -130,13 +138,18 @@ def get_photo_url(formats: list) -> str:
     for f in formats:
         if f.get("format_id") == "orig":
             return f.get("url")
-    # Fallback to last format (usually highest quality)
+    for f in formats:
+        if f.get("format_id", "").startswith("image-") and f.get("url"):
+            return f.get("url")
     if formats:
+        for f in formats:
+            if f.get("url"):
+                return f.get("url")
         return formats[-1].get("url")
     return None
 
 
-async def generate_photo_links(url: str, info: dict, proxy: Optional[str] = None, impersonate: Optional[str] = None) -> list:
+def generate_photo_links(url: str, info: dict) -> list:
     """Generate download links for photos."""
     photos = []
 
@@ -146,9 +159,8 @@ async def generate_photo_links(url: str, info: dict, proxy: Optional[str] = None
         for idx, entry in enumerate(entries, 1):
             formats = entry.get("formats", [])
             photo_url = get_photo_url(formats)
-            key = await download_cache.create_session(
-                url=url, type="photo", photo_index=idx,
-                proxy=proxy, impersonate=impersonate,
+            key = download_cache.create_session(
+                url=url, type="photo", photo_index=idx
             )
             photos.append({
                 "index": idx,
@@ -161,10 +173,7 @@ async def generate_photo_links(url: str, info: dict, proxy: Optional[str] = None
         # Single photo
         formats = info.get("formats", [])
         photo_url = get_photo_url(formats)
-        key = await download_cache.create_session(
-            url=url, type="photo", photo_index=1,
-            proxy=proxy, impersonate=impersonate,
-        )
+        key = download_cache.create_session(url=url, type="photo", photo_index=1)
         photos.append({
             "index": 1,
             "width": info.get("width"),
@@ -200,15 +209,12 @@ async def fetch(
     _enforce_rate_limit(request)
 
     try:
-        # Gunakan ydl_manager untuk session integrity (CookieJar persistent)
-        info = await asyncio.wait_for(
-            asyncio.to_thread(
-                ydl_manager.extract_info,
-                url,
-                proxy,
-                impersonate,
-            ),
-            timeout=30,
+        info = await asyncio.to_thread(
+            extraction_cache.get_or_extract,
+            url,
+            proxy,
+            impersonate,
+            lambda: ydl_manager.extract_info(url, proxy, impersonate),
         )
 
         if not info:
@@ -234,8 +240,8 @@ async def fetch(
         if content_type == "video":
             qualities = get_available_qualities(info.get("formats", []))
             response["download_links"] = {
-                "video": await generate_video_links(url, info, qualities, platform),
-                "mp3": await generate_mp3_link(
+                "video": generate_video_links(url, info, qualities, platform),
+                "mp3": generate_mp3_link(
                     url=url,
                     platform=platform,
                     title=info.get("title"),
@@ -245,7 +251,7 @@ async def fetch(
             }
 
         elif content_type == "photos":
-            response["photos"] = await generate_photo_links(url, info, proxy=proxy, impersonate=impersonate)
+            response["photos"] = generate_photo_links(url, info)
 
         elif content_type == "playlist":
             response["playlist_count"] = info.get("playlist_count")
@@ -260,8 +266,6 @@ async def fetch(
 
         return response
 
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=504, detail="Extraction timed out")
     except yt_dlp.utils.DownloadError as e:
         raise map_yt_dlp_exception(e, default_status=400)
     except Exception as e:

@@ -118,7 +118,7 @@ func (h *Handlers) handleInfoViaExtractorIPC(w http.ResponseWriter, r *http.Requ
 	proxy := strings.TrimSpace(r.URL.Query().Get("proxy"))
 	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
 	preferred := extractWorkerID(r.URL.Query().Get("key"), h.Config.WorkerCount)
-	workerID := h.selectExtractorWorker(preferred, false)
+	workerID := h.selectExtractorWorker(preferred, true)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
@@ -541,16 +541,38 @@ func (h *Handlers) handleTunnel(w http.ResponseWriter, r *http.Request) {
 // handle logNoHealthyWorkersSnapshot
 func (h *Handlers) logNoHealthyWorkersSnapshot(tried map[string]bool) {
 	workers := h.Registry.WorkersSnapshot()
+	now := time.Now()
 	parts := make([]string, 0, len(workers))
 	for _, w := range workers {
 		reasons := make([]string, 0, 8)
 		if tried != nil && tried[w.ID] {
 			reasons = append(reasons, "tried")
 		}
+		if !w.Healthy {
+			reasons = append(reasons, "unhealthy")
+		}
+		if w.Restarting {
+			reasons = append(reasons, "restarting")
+		}
+		if w.RestartScheduled {
+			reasons = append(reasons, "restart_scheduled")
+		}
+		if w.BreakerOpen {
+			reasons = append(reasons, "breaker_open")
+		}
+		if !w.DegradedUntil.IsZero() && now.Before(w.DegradedUntil) {
+			reasons = append(reasons, "degraded("+strconv.Itoa(positiveSeconds(w.DegradedUntil.Sub(now)))+"s)")
+		}
+		if !w.QuarantineUntil.IsZero() && now.Before(w.QuarantineUntil) {
+			reasons = append(reasons, "quarantine("+strconv.Itoa(positiveSeconds(w.QuarantineUntil.Sub(now)))+"s)")
+		}
+		if !w.LastRateLimit.IsZero() && now.Sub(w.LastRateLimit) <= time.Duration(h.Config.RateLimitCooldownSeconds)*time.Second {
+			reasons = append(reasons, "rate_limited")
+		}
 		if len(reasons) == 0 {
 			reasons = append(reasons, "eligible")
 		}
-		parts = append(parts, "w:"+w.ID+"(active="+strconv.Itoa(w.ActiveRequests)+",reasons="+strings.Join(reasons, "|")+")")
+		parts = append(parts, "w:"+w.ID+"(active="+strconv.Itoa(w.ActiveRequests)+","+strings.Join(reasons, "|")+")")
 	}
 	log.Printf("[diag] no healthy workers snapshot: %s", strings.Join(parts, "; "))
 }

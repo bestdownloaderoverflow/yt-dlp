@@ -89,6 +89,17 @@ func (d *Delivery) mediaHTTPClient(workerID string) *http.Client {
 	return cl
 }
 
+// PurgeWorkerClient removes the cached proxy client for a worker.
+// Call this before restarting the worker's gluetun container so that
+// stale TCP connections to the old VPN network namespace are discarded.
+func (d *Delivery) PurgeWorkerClient(workerID string) {
+	worker := d.Worker.GetWorker(workerID)
+	if worker == nil || worker.Host == "" || worker.ProxyPort <= 0 {
+		return
+	}
+	d.proxyClients.Delete(worker.HTTPProxyURL())
+}
+
 func (d *Delivery) mediaHTTPClientForPlan(workerID string, plan map[string]any) *http.Client {
 	if shouldBypassWorkerProxy(plan) {
 		return d.BaseCl

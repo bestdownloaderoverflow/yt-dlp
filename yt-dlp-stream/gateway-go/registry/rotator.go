@@ -120,7 +120,7 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	}
 
 	log.Printf("[%s] restarting %s", workerID, gluetun)
-	if err := v.restartContainer(gluetun); err != nil {
+	if err := v.restartContainer(ctx, gluetun); err != nil {
 		log.Printf("[%s] restart error: %v", workerID, err)
 		v.registry.MarkRestarted(workerID, false)
 		return false
@@ -138,7 +138,7 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	}
 
 	log.Printf("[%s] restarting %s", workerID, ytdlp)
-	if err := v.restartContainer(ytdlp); err != nil {
+	if err := v.restartContainer(ctx, ytdlp); err != nil {
 		log.Printf("[%s] restart error: %v", workerID, err)
 		v.registry.MarkRestarted(workerID, false)
 		return false
@@ -181,10 +181,13 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	return false
 }
 
-func (v *VPNRotator) restartContainer(container string) error {
-	cmd := exec.Command("docker", "restart", "--time", "30", container)
+func (v *VPNRotator) restartContainer(ctx context.Context, container string) error {
+	cmd := exec.CommandContext(ctx, "docker", "restart", "--time", "30", container)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("docker restart %s failed: %v (%s)", container, err, strings.TrimSpace(string(out)))
 	}
 	return nil

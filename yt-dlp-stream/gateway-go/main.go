@@ -66,6 +66,10 @@ func main() {
 		DegradedRetryAfter: cfg.DegradedRetryAfter,
 	}, client, deliveryWorkerLookup{reg})
 
+	// Purge stale proxy connections before each container restart so that
+	// the old VPN network namespace's TCP connections are not reused.
+	rotator.SetPreRestartHook(func(wid string) { del.PurgeWorkerClient(wid) })
+
 	// Handlers serve all HTTP routes.
 	h := handlers.New(cfg, reg, rotator, wrapExtractor(ext), del, client)
 	defer h.Shutdown()

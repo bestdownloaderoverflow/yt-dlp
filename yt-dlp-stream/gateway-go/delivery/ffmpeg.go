@@ -88,7 +88,7 @@ func (d *Delivery) StreamFFmpeg(
 					CanRefresh:      plan.CanRefresh,
 					Platform:        plan.Platform,
 				}
-				_ = d.DownloadToWriter(
+				err := d.DownloadToWriter(
 					r.Context(),
 					audioW,
 					audioPlan,
@@ -98,7 +98,7 @@ func (d *Delivery) StreamFFmpeg(
 					mediaClient,
 				)
 				_ = audioW.Close()
-				feedErrCh <- nil
+				feedErrCh <- err
 			}()
 		}
 		defer audioR.Close()

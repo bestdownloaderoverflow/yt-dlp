@@ -593,14 +593,6 @@ func (h *Handlers) streamFromWorker(w http.ResponseWriter, r *http.Request, work
 		return proxyResult{success: false}
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusOK {
-		estimated := resp.Header.Get("estimated-content-length")
-		contentLength := resp.Header.Get("content-length")
-		if estimated != "" && (contentLength == "" || contentLength == "0") {
-			log.Printf("[%s] possible rate limit in stream", worker.ID)
-			h.scheduleWorkerRestart(worker.ID, true)
-		}
-	}
 	copyHeader(w.Header(), resp.Header, map[string]bool{"transfer-encoding": true, "content-length": true})
 	if resp.Header.Get("Content-Type") == "" {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -668,6 +660,9 @@ func (h *Handlers) RestartScheduler() {
 func (h *Handlers) UptimeChecker() {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
+	// pendingWatchers tracks workers that already have an active idle-wait
+	// goroutine to prevent spawning duplicates on each 60s tick.
+	var pendingWatchers sync.Map
 	for {
 		select {
 		case <-h.ctx.Done():
@@ -676,7 +671,11 @@ func (h *Handlers) UptimeChecker() {
 			needing := h.Registry.GetWorkersNeedingRestart()
 			for _, workerID := range needing {
 				wid := workerID
+				if _, loaded := pendingWatchers.LoadOrStore(wid, struct{}{}); loaded {
+					continue // watcher already running for this worker
+				}
 				go func() {
+					defer pendingWatchers.Delete(wid)
 					waited := 0
 					for !h.Registry.IsWorkerIdle(wid) && waited < 300 {
 						select {

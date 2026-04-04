@@ -48,8 +48,9 @@ func (d *Delivery) StreamChunked(
 		w.Header().Set("Content-Type", plan.MediaType)
 	}
 	w.Header().Set("Accept-Ranges", "bytes")
-	w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
-	w.WriteHeader(http.StatusOK)
+	// Content-Length and WriteHeader(200) are committed on the first successful
+	// chunk so that upstream errors can still produce a 5xx instead of a
+	// truncated 200 body.
 
 	currentURL := plan.DirectURL
 	currentReqHeaders := plan.RequestHeaders
@@ -64,6 +65,7 @@ func (d *Delivery) StreamChunked(
 		"photo_urls":       []string{plan.DirectURL},
 	}
 	read := int64(0)
+	headersSent := false
 	mediaClient := d.mediaHTTPClient(workerID)
 	refreshAttempts := 0
 	const maxRefreshAttempts = 10
@@ -79,6 +81,9 @@ func (d *Delivery) StreamChunked(
 		for chunkRetry := 0; chunkRetry < maxRetriesPerChunk && !chunkComplete; chunkRetry++ {
 			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
 			if err != nil {
+				if !headersSent {
+					WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "chunked stream error"})
+				}
 				return
 			}
 			for k, v := range currentReqHeaders {
@@ -93,6 +98,9 @@ func (d *Delivery) StreamChunked(
 				}
 				if chunkRetry == maxRetriesPerChunk-1 {
 					log.Printf("chunked upstream request failed at %d-%d: %v", read, end, err)
+					if !headersSent {
+						WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "chunked upstream failed"})
+					}
 					return
 				}
 				time.Sleep(time.Duration(1<<chunkRetry) * time.Second)
@@ -105,6 +113,9 @@ func (d *Delivery) StreamChunked(
 				refreshedPlan, refreshErr := onRefresh()
 				if refreshErr != nil {
 					log.Printf("chunked refresh failed at %d-%d: %v", read, end, refreshErr)
+					if !headersSent {
+						WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "chunked refresh failed"})
+					}
 					return
 				}
 				if refreshedPlan.DirectURL != "" {
@@ -122,10 +133,20 @@ func (d *Delivery) StreamChunked(
 				_ = resp.Body.Close()
 				if chunkRetry == maxRetriesPerChunk-1 {
 					log.Printf("chunked upstream status %d at %d-%d", resp.StatusCode, read, end)
+					if !headersSent {
+						WriteJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("chunked upstream status %d", resp.StatusCode)})
+					}
 					return
 				}
 				time.Sleep(time.Duration(1<<chunkRetry) * time.Second)
 				continue
+			}
+
+			// First successful chunk — commit headers now.
+			if !headersSent {
+				w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
+				w.WriteHeader(http.StatusOK)
+				headersSent = true
 			}
 
 			n, copyErr := copyBuffer(w, resp.Body)
@@ -149,6 +170,9 @@ func (d *Delivery) StreamChunked(
 			chunkComplete = true
 		}
 		if !chunkComplete {
+			if !headersSent {
+				WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "chunked stream failed to start"})
+			}
 			return
 		}
 	}

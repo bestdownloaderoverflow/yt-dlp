@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,7 +34,8 @@ type ExtractorPool struct {
 	timeout   time.Duration
 	addrs     map[string]string
 	workers   []string
-	rrCounter atomic.Uint64
+	rrCounter atomic.Uint64 // used for request IDs only
+	rwCounter atomic.Uint64 // used for round-robin worker selection only
 }
 
 func NewExtractorPool(workerCount int, timeout time.Duration) (*ExtractorPool, error) {
@@ -209,7 +209,7 @@ func (p *ExtractorPool) PickWorker(preferred string) string {
 	if len(p.workers) == 0 {
 		return ""
 	}
-	i := int(p.rrCounter.Add(1) % uint64(len(p.workers)))
+	i := int(p.rwCounter.Add(1) % uint64(len(p.workers)))
 	return p.workers[i]
 }
 
@@ -218,17 +218,3 @@ func (p *ExtractorPool) HasWorker(workerID string) bool {
 	return ok
 }
 
-func (p *ExtractorPool) EnsureHealthy(workerID string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	done := make(chan error, 1)
-	go func() {
-		done <- p.Health(workerID)
-	}()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}

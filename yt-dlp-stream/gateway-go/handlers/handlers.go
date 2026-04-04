@@ -2,10 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -77,13 +75,12 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 	proxy := strings.TrimSpace(r.URL.Query().Get("proxy"))
 	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
 	preferred := extractWorkerID(r.URL.Query().Get("key"), h.Config.WorkerCount)
-	result, workerID, rpcErr, err := h.callExtractorMapWithFailover(preferred, true, func(wid string) (map[string]any, *IPCError, error) {
-		return h.Extractor.Fetch(wid, url, proxy, impersonate)
-	})
+	workerID := h.selectExtractorWorker(preferred, true)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
+	result, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate)
 	if err != nil {
 		log.Printf("[extractor:%s] fetch ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -121,13 +118,12 @@ func (h *Handlers) handleInfoViaExtractorIPC(w http.ResponseWriter, r *http.Requ
 	proxy := strings.TrimSpace(r.URL.Query().Get("proxy"))
 	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
 	preferred := extractWorkerID(r.URL.Query().Get("key"), h.Config.WorkerCount)
-	result, workerID, rpcErr, err := h.callExtractorMapWithFailover(preferred, false, func(wid string) (map[string]any, *IPCError, error) {
-		return h.Extractor.ExtractInfo(wid, url, proxy, impersonate)
-	})
+	workerID := h.selectExtractorWorker(preferred, false)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
+	result, rpcErr, err := h.Extractor.ExtractInfo(workerID, url, proxy, impersonate)
 	if err != nil {
 		log.Printf("[extractor:%s] ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -168,13 +164,12 @@ func (h *Handlers) handleDownloadViaExtractorIPC(w http.ResponseWriter, r *http.
 	}
 	download := utilsParseBool(r.URL.Query().Get("download"), true)
 	preferred := extractWorkerID(key, h.Config.WorkerCount)
-	planRaw, workerID, rpcErr, err := h.callExtractorMapWithFailover(preferred, false, func(wid string) (map[string]any, *IPCError, error) {
-		return h.Extractor.DownloadPrepare(wid, key, download)
-	})
+	workerID := h.selectExtractorWorker(preferred, false)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
+	planRaw, rpcErr, err := h.Extractor.DownloadPrepare(workerID, key, download)
 	if err != nil {
 		log.Printf("[extractor:%s] download prepare ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -242,13 +237,12 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 	download := utilsParseBool(r.URL.Query().Get("download"), false)
 	// m4a special case
 	if r.URL.Path == "/stream/m4a" {
-		resolved, workerID, rpcErr, err := h.callExtractorMapWithFailover("", true, func(wid string) (map[string]any, *IPCError, error) {
-			return h.Extractor.ResolveFormats(wid, url, "bestaudio[ext=m4a]/bestaudio", proxy, impersonate)
-		})
+		workerID := h.selectExtractorWorker("", true)
 		if workerID == "" {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 			return
 		}
+		resolved, rpcErr, err := h.Extractor.ResolveFormats(workerID, url, "bestaudio[ext=m4a]/bestaudio", proxy, impersonate)
 		if err != nil {
 			log.Printf("[extractor:%s] stream m4a resolve ipc error: %v", workerID, err)
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -292,13 +286,12 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	fetchResult, workerID, rpcErr, err := h.callExtractorMapWithFailover("", true, func(wid string) (map[string]any, *IPCError, error) {
-		return h.Extractor.Fetch(wid, url, proxy, impersonate)
-	})
+	workerID := h.selectExtractorWorker("", true)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
+	fetchResult, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate)
 	if err != nil {
 		log.Printf("[extractor:%s] stream fetch ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -320,13 +313,12 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 	}
 
 	preferred := extractWorkerID(key, h.Config.WorkerCount)
-	planRaw, workerID, rpcErr, err := h.callExtractorMapWithFailover(preferred, false, func(wid string) (map[string]any, *IPCError, error) {
-		return h.Extractor.DownloadPrepare(wid, key, download)
-	})
+	workerID = h.selectExtractorWorker(preferred, false)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
+	planRaw, rpcErr, err := h.Extractor.DownloadPrepare(workerID, key, download)
 	if err != nil {
 		log.Printf("[extractor:%s] stream download prepare ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -424,13 +416,12 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "URL is required"})
 		return
 	}
-	result, workerID, rpcErr, err := h.callExtractorMapWithFailover("", true, func(wid string) (map[string]any, *IPCError, error) {
-		return h.Extractor.TikTok(wid, payload.URL, payload.Proxy, payload.Impersonate)
-	})
+	workerID := h.selectExtractorWorker("", true)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
+	result, rpcErr, err := h.Extractor.TikTok(workerID, payload.URL, payload.Proxy, payload.Impersonate)
 	if err != nil {
 		log.Printf("[extractor:%s] tiktok ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -467,13 +458,12 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 	}
 	download := utilsParseBool(r.URL.Query().Get("download"), true)
 	preferred := extractWorkerID(key, h.Config.WorkerCount)
-	planRaw, workerID, rpcErr, err := h.callExtractorMapWithFailover(preferred, false, func(wid string) (map[string]any, *IPCError, error) {
-		return h.Extractor.TikTokDownloadPrepare(wid, key, download)
-	})
+	workerID := h.selectExtractorWorker(preferred, false)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
+	planRaw, rpcErr, err := h.Extractor.TikTokDownloadPrepare(workerID, key, download)
 	if err != nil {
 		log.Printf("[extractor:%s] tiktok download prepare ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -598,156 +588,20 @@ func anyMapToStringMap(v any) map[string]string {
 func (h *Handlers) streamWorkerMP3WithFailover(
 	w http.ResponseWriter,
 	r *http.Request,
-	primaryWorkerID string,
+	workerID string,
 	plan delivery.DeliveryPlan,
 	key string,
 ) bool {
-	candidates := h.extractorWorkerCandidates(primaryWorkerID, true)
-	if len(candidates) == 0 && primaryWorkerID != "" {
-		candidates = append(candidates, primaryWorkerID)
-	}
-	if len(candidates) == 0 {
+	if workerID == "" {
 		return false
 	}
-	for idx, workerID := range candidates {
-		err := h.Delivery.StreamWorkerMP3(w, r, workerID, plan, key)
-		if err == nil {
-			return true
-		}
-		if delivery.IsResponseCommittedError(err) {
-			log.Printf("[mp3:%s] worker stream failed after response commit: %v", workerID, err)
-			h.scheduleWorkerRestart(workerID, false)
-			return true
-		}
-		log.Printf("[mp3:%s] worker stream attempt %d/%d failed: %v", workerID, idx+1, len(candidates), err)
-		if isStaleConnectionError(err) || isTimeoutIPCError(err) {
-			continue
-		}
-		if idx+1 < len(candidates) {
-			h.scheduleWorkerRestart(workerID, false)
-		}
+	err := h.Delivery.StreamWorkerMP3(w, r, workerID, plan, key)
+	if err == nil {
+		return true
 	}
+	if delivery.IsResponseCommittedError(err) {
+		return true
+	}
+	log.Printf("[mp3:%s] worker stream failed: %v", workerID, err)
 	return false
-}
-
-func (h *Handlers) extractorWorkerCandidates(preferred string, requireHealthy bool) []string {
-	if h.Extractor == nil {
-		return nil
-	}
-	seen := map[string]bool{}
-	candidates := make([]string, 0, h.Config.WorkerCount)
-	add := func(workerID string) {
-		if workerID == "" || seen[workerID] || !h.Extractor.HasWorker(workerID) {
-			return
-		}
-		if requireHealthy && !h.isWorkerAcceptingRequests(h.Registry.GetWorker(workerID)) {
-			return
-		}
-		seen[workerID] = true
-		candidates = append(candidates, workerID)
-	}
-
-	add(preferred)
-	for _, worker := range h.Registry.GetHealthyWorkers(nil) {
-		add(worker.ID)
-	}
-	if !requireHealthy {
-		for i := 1; i <= h.Config.WorkerCount; i++ {
-			add("w" + strconv.Itoa(i))
-		}
-	}
-	return candidates
-}
-
-func isRetryableExtractorRPC(rpcErr *IPCError) bool {
-	if rpcErr == nil {
-		return false
-	}
-	status := rpcErr.Status
-	if status == 0 {
-		return true
-	}
-	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
-}
-
-func isTimeoutIPCError(err error) bool {
-	if err == nil {
-		return false
-	}
-	var netErr net.Error
-	if errors.As(err, &netErr) && netErr.Timeout() {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded")
-}
-
-func isStaleConnectionError(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "connection reset by peer") ||
-		strings.Contains(msg, "broken pipe") ||
-		strings.Contains(msg, "use of closed network connection") ||
-		strings.Contains(msg, "i/o timeout") ||
-		strings.Contains(msg, "connection refused")
-}
-
-func (h *Handlers) callExtractorMapWithFailover(
-	preferred string,
-	requireHealthy bool,
-	call func(workerID string) (map[string]any, *IPCError, error),
-) (map[string]any, string, *IPCError, error) {
-	var zero map[string]any
-	candidates := h.extractorWorkerCandidates(preferred, requireHealthy)
-	if len(candidates) == 0 {
-		return zero, "", nil, nil
-	}
-
-	var lastErr error
-	var lastRPC *IPCError
-	for i, workerID := range candidates {
-		// Re-check worker state before calling — another goroutine may
-		// have opened the breaker between candidate selection and now.
-		if w := h.Registry.GetWorker(workerID); w != nil && (w.BreakerOpen || w.Restarting || w.RestartScheduled) {
-			continue
-		}
-
-		result, rpcErr, err := call(workerID)
-		if err == nil && rpcErr == nil {
-			h.Registry.RecordIPCSuccess(workerID)
-			return result, workerID, nil, nil
-		}
-
-		retryable := err != nil || isRetryableExtractorRPC(rpcErr)
-		if retryable {
-			if rpcErr != nil {
-				if rpcErr.Status == http.StatusTooManyRequests {
-					h.scheduleWorkerRestart(workerID, true)
-				} else if rpcErr.Status >= http.StatusInternalServerError {
-					h.scheduleWorkerRestart(workerID, false)
-				}
-			} else {
-				if isTimeoutIPCError(err) {
-					h.Registry.RecordIPCError(workerID)
-				}
-				if isStaleConnectionError(err) {
-					continue
-				}
-			}
-		}
-
-		if err != nil {
-			lastErr = err
-		}
-		if rpcErr != nil {
-			lastRPC = rpcErr
-		}
-
-		if !retryable || i == len(candidates)-1 {
-			return zero, workerID, lastRPC, lastErr
-		}
-	}
-	return zero, "", lastRPC, lastErr
 }

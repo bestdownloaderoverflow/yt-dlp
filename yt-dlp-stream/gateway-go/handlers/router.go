@@ -715,9 +715,13 @@ func (h *Handlers) HealthMonitor() {
 		case <-h.ctx.Done():
 			return
 		case <-ticker.C:
+			now := time.Now()
 			for _, worker := range h.Registry.WorkersSnapshot() {
 				if worker.Restarting || worker.RestartScheduled {
 					h.Registry.SetHealthy(worker.ID, false)
+					continue
+				}
+				if !worker.DegradedUntil.IsZero() && now.Before(worker.DegradedUntil) {
 					continue
 				}
 				h.Registry.RecordProbe(worker.ID, h.healthCheckWorker(worker.ID))
@@ -732,7 +736,7 @@ func (h *Handlers) HealthMonitor() {
 
 func (h *Handlers) healthCheckWorker(workerID string) bool {
 	if h.Extractor != nil {
-		if time.Since(h.startedAt) < 30*time.Second {
+		if time.Since(h.startedAt) < 60*time.Second {
 			return true
 		}
 		if err := h.Extractor.Health(workerID); err != nil {

@@ -360,6 +360,10 @@ func (r *WorkerRegistry) RecordIPCError(workerID string) {
 		return
 	}
 
+	if !w.DegradedUntil.IsZero() && time.Now().Before(w.DegradedUntil) {
+		return
+	}
+
 	now := time.Now()
 	w.TransientErrors = append(w.TransientErrors, now)
 

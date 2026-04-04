@@ -1,5 +1,6 @@
-# Use Python 3.13 slim image
-FROM python:3.13-slim AS base
+# Use Python 3.12 slim image.
+# curl_cffi impersonation support is unstable on 3.13 in this stack.
+FROM python:3.12-slim AS base
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

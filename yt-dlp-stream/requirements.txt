@@ -6,4 +6,4 @@ uvloop>=0.22.1; sys_platform != 'win32'
 httpx>=0.28.1
 psutil>=6.0.0
 redis>=5.0.0
-curl_cffi>=0.7.4
+curl_cffi>=0.14,<0.15

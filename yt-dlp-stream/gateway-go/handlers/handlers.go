@@ -693,6 +693,12 @@ func (h *Handlers) callExtractorMapWithFailover(
 	var lastErr error
 	var lastRPC *IPCError
 	for i, workerID := range candidates {
+		// Re-check worker state before calling — another goroutine may
+		// have opened the breaker between candidate selection and now.
+		if w := h.Registry.GetWorker(workerID); w != nil && (w.BreakerOpen || w.Restarting || w.RestartScheduled) {
+			continue
+		}
+
 		result, rpcErr, err := call(workerID)
 		if err == nil && rpcErr == nil {
 			h.Registry.RecordIPCSuccess(workerID)

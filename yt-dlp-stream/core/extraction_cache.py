@@ -22,6 +22,7 @@ import redis
 logger = logging.getLogger("ytdlp_stream")
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+WORKER_ID = os.getenv("WORKER_ID", "").strip()
 
 _TIKTOK_TTL = int(os.getenv("TIKTOK_EXTRACT_CACHE_TTL_SECONDS", "90"))
 _DOUYIN_TTL = int(os.getenv("DOUYIN_EXTRACT_CACHE_TTL_SECONDS", str(_TIKTOK_TTL)))
@@ -48,13 +49,19 @@ _LOCK_PREFIX = "exlock:"
 
 
 def _cache_key(url: str, proxy: Optional[str], impersonate: Optional[str]) -> str:
-    """SHA-256 of url|proxy|impersonate for a stable, compact key."""
-    raw = f"{url}|{proxy or ''}|{impersonate or ''}"
+    """SHA-256 of url|proxy|impersonate|worker_id for a stable, compact key.
+
+    WORKER_ID is included so that each worker (with its own outgoing IP via
+    gluetun/VPN) maintains a separate cache. CDN URLs returned by yt-dlp are
+    IP-bound: a URL extracted on worker w2 will be rejected (403) when a
+    different worker w3 tries to download it from a different IP.
+    """
+    raw = f"{url}|{proxy or ''}|{impersonate or ''}|{WORKER_ID}"
     return _KEY_PREFIX + hashlib.sha256(raw.encode()).hexdigest()
 
 
 def _lock_key(url: str, proxy: Optional[str], impersonate: Optional[str]) -> str:
-    raw = f"{url}|{proxy or ''}|{impersonate or ''}"
+    raw = f"{url}|{proxy or ''}|{impersonate or ''}|{WORKER_ID}"
     return _LOCK_PREFIX + hashlib.sha256(raw.encode()).hexdigest()
 
 

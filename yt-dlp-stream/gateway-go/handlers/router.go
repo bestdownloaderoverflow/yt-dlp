@@ -45,6 +45,7 @@ type Extractor interface {
 	Health(workerID string) error
 	PickWorker(preferred string) string
 	HasWorker(workerID string) bool
+	InFlight(workerID string) int
 }
 
 type Handlers struct {
@@ -267,10 +268,61 @@ func (h *Handlers) selectExtractorWorker(preferred string, requireHealthy bool) 
 			}
 		}
 		if len(candidates) > 0 {
-			return candidates[rand.Intn(len(candidates))]
+			return h.pickLeastLoadedExtractorWorker(candidates)
 		}
 	}
+	candidates := make([]string, 0, h.Config.WorkerCount)
+	for i := 1; i <= h.Config.WorkerCount; i++ {
+		workerID := "w" + strconv.Itoa(i)
+		if h.Extractor.HasWorker(workerID) {
+			candidates = append(candidates, workerID)
+		}
+	}
+	if len(candidates) > 0 {
+		return h.pickLeastLoadedExtractorWorker(candidates)
+	}
 	return h.Extractor.PickWorker("")
+}
+
+func (h *Handlers) pickLeastLoadedExtractorWorker(candidates []string) string {
+	if len(candidates) == 0 {
+		return ""
+	}
+	maxConcurrency := h.Config.MaxWorkerIPCConcurrency
+	bestLoad := int(^uint(0) >> 1)
+	best := make([]string, 0, len(candidates))
+	busyBestLoad := int(^uint(0) >> 1)
+	busyBest := make([]string, 0, len(candidates))
+	for _, workerID := range candidates {
+		load := h.Extractor.InFlight(workerID)
+		if load < 0 {
+			load = 0
+		}
+		if maxConcurrency > 0 && load >= maxConcurrency {
+			switch {
+			case load < busyBestLoad:
+				busyBestLoad = load
+				busyBest = []string{workerID}
+			case load == busyBestLoad:
+				busyBest = append(busyBest, workerID)
+			}
+			continue
+		}
+		switch {
+		case load < bestLoad:
+			bestLoad = load
+			best = []string{workerID}
+		case load == bestLoad:
+			best = append(best, workerID)
+		}
+	}
+	if len(best) > 0 {
+		return best[rand.Intn(len(best))]
+	}
+	if len(busyBest) > 0 {
+		return busyBest[rand.Intn(len(busyBest))]
+	}
+	return candidates[rand.Intn(len(candidates))]
 }
 
 func (h *Handlers) scheduleWorkerRestart(workerID string, rateLimited bool) {

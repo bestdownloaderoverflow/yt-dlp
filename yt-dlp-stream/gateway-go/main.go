@@ -58,7 +58,13 @@ func main() {
 			log.Fatalf("failed to initialize extractor IPC pool: %v", err)
 		}
 		ext = pool
-		log.Printf("extractor IPC enabled: workers=%d", cfg.WorkerCount)
+		log.Printf(
+			"extractor IPC enabled: workers=%d read_timeout_ms=%d connect_timeout_ms=%d max_worker_ipc_concurrency=%d",
+			cfg.WorkerCount,
+			cfg.ExtractorTimeoutMs,
+			10000,
+			cfg.MaxWorkerIPCConcurrency,
+		)
 	}
 
 	// Delivery engine (streaming orchestration in Go).
@@ -156,6 +162,7 @@ func (e *extractorAdapter) ResolveFormats(wid, url, format, proxy, impersonate s
 func (e *extractorAdapter) Health(wid string) error            { return e.pool.Health(wid) }
 func (e *extractorAdapter) PickWorker(preferred string) string { return e.pool.PickWorker(preferred) }
 func (e *extractorAdapter) HasWorker(wid string) bool          { return e.pool.HasWorker(wid) }
+func (e *extractorAdapter) InFlight(wid string) int            { return e.pool.InFlight(wid) }
 
 func wrapIPCErr(err *ipcError) *handlers.IPCError {
 	if err == nil {

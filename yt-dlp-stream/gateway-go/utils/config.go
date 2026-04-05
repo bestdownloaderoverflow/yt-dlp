@@ -13,6 +13,7 @@ type Config struct {
 	ExtractorPythonBin        string
 	ExtractorWorkerPath       string
 	ExtractorTimeoutMs        int
+	MaxWorkerIPCConcurrency   int
 	DegradedTimeoutSeconds    int
 	GluetunPassword           string
 	MaxRetries                int
@@ -44,6 +45,7 @@ func LoadConfig() Config {
 		ExtractorPythonBin:        getenvDefault("EXTRACTOR_PYTHON_BIN", "python3"),
 		ExtractorWorkerPath:       getenvDefault("EXTRACTOR_WORKER_PATH", "../extractor/worker_daemon.py"),
 		ExtractorTimeoutMs:        envInt("EXTRACTOR_TIMEOUT_MS", 45000),
+		MaxWorkerIPCConcurrency:   envInt("MAX_WORKER_IPC_CONCURRENCY", 0),
 		DegradedTimeoutSeconds:    envInt("DEGRADED_TIMEOUT_SECONDS", 30),
 		GluetunPassword:           getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
 		MaxRetries:                envInt("MAX_RETRIES", 3),

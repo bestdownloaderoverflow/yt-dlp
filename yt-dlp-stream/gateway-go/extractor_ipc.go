@@ -31,11 +31,13 @@ type ipcResponse struct {
 }
 
 type ExtractorPool struct {
-	timeout   time.Duration
-	addrs     map[string]string
-	workers   []string
-	rrCounter atomic.Uint64 // used for request IDs only
-	rwCounter atomic.Uint64 // used for round-robin worker selection only
+	timeout        time.Duration
+	connectTimeout time.Duration
+	addrs          map[string]string
+	inFlight       map[string]*atomic.Int64
+	workers        []string
+	rrCounter      atomic.Uint64 // used for request IDs only
+	rwCounter      atomic.Uint64 // used for round-robin worker selection only
 }
 
 func NewExtractorPool(workerCount int, timeout time.Duration) (*ExtractorPool, error) {
@@ -43,18 +45,22 @@ func NewExtractorPool(workerCount int, timeout time.Duration) (*ExtractorPool, e
 		workerCount = 1
 	}
 	addrs := make(map[string]string, workerCount)
+	inFlight := make(map[string]*atomic.Int64, workerCount)
 	workers := make([]string, 0, workerCount)
 	for i := 1; i <= workerCount; i++ {
 		workerID := fmt.Sprintf("w%d", i)
 		addr := fmt.Sprintf("gluetun-%d:9487", i)
 		addrs[workerID] = addr
+		inFlight[workerID] = &atomic.Int64{}
 		workers = append(workers, workerID)
 	}
 	sort.Strings(workers)
 	return &ExtractorPool{
-		timeout: timeout,
-		addrs:   addrs,
-		workers: workers,
+		timeout:        timeout,
+		connectTimeout: 10 * time.Second,
+		addrs:          addrs,
+		inFlight:       inFlight,
+		workers:        workers,
 	}, nil
 }
 
@@ -65,19 +71,29 @@ func (p *ExtractorPool) call(workerID, method string, params map[string]any) (ma
 	if !ok {
 		return nil, nil, fmt.Errorf("unknown worker: %s", workerID)
 	}
+	inFlight, ok := p.inFlight[workerID]
+	if !ok || inFlight == nil {
+		return nil, nil, fmt.Errorf("missing in-flight tracker for worker: %s", workerID)
+	}
+	inFlight.Add(1)
+	defer inFlight.Add(-1)
 
-	timeout := p.timeout
-	if timeout <= 0 {
-		timeout = 45 * time.Second
+	readTimeout := p.timeout
+	if readTimeout <= 0 {
+		readTimeout = 45 * time.Second
+	}
+	connectTimeout := p.connectTimeout
+	if connectTimeout <= 0 {
+		connectTimeout = 10 * time.Second
 	}
 
-	conn, err := net.DialTimeout("tcp", addr, timeout)
+	conn, err := net.DialTimeout("tcp", addr, connectTimeout)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer conn.Close()
 
-	_ = conn.SetDeadline(time.Now().Add(timeout))
+	_ = conn.SetDeadline(time.Now().Add(readTimeout))
 
 	reqID := fmt.Sprintf("%s-%d", workerID, p.rrCounter.Add(1))
 	req := ipcRequest{ID: reqID, Method: method, Params: params}
@@ -218,3 +234,17 @@ func (p *ExtractorPool) HasWorker(workerID string) bool {
 	return ok
 }
 
+func (p *ExtractorPool) InFlight(workerID string) int {
+	inFlight, ok := p.inFlight[workerID]
+	if !ok || inFlight == nil {
+		return 0
+	}
+	v := inFlight.Load()
+	if v < 0 {
+		return 0
+	}
+	if v > int64(^uint(0)>>1) {
+		return int(^uint(0) >> 1)
+	}
+	return int(v)
+}

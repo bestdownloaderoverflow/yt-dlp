@@ -33,6 +33,7 @@ Gateway listen di port `9111` (default).
 - `EXTRACTOR_PYTHON_BIN` (default `python3`)
 - `EXTRACTOR_WORKER_PATH` (default `../extractor/worker_daemon.py`)
 - `EXTRACTOR_TIMEOUT_MS` (default `45000`)
+- `MAX_WORKER_IPC_CONCURRENCY` (default `0`, disabled; used by least-loaded worker picker)
 - `GLUETUN_PASSWORD` (default `secretpassword`)
 - `MAX_RETRIES` (default `3`)
 - `HEALTH_CHECK_TIMEOUT_MS` (default `8000`)

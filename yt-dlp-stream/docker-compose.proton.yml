@@ -539,6 +539,124 @@ services:
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
+  gluetun-11:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-11
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8011:8000"
+      - "9497:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=2Fxrep3b6xWpp3zLPFqCQvqugT9nBXnIWqBkLg9qNWo=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data11:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-11
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-11:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-11
+    network_mode: "service:gluetun-11"
+    depends_on:
+      - gluetun-11
+      - redis
+    environment:
+      - WORKER_ID=w11
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  gluetun-12:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-12
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8012:8000"
+      - "9498:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=2Fxrep3b6xWpp3zLPFqCQvqugT9nBXnIWqBkLg9qNWo=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data12:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-12
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-12:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-12
+    network_mode: "service:gluetun-12"
+    depends_on:
+      - gluetun-12
+      - redis
+    environment:
+      - WORKER_ID=w12
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
   redis:
     image: redis:7-alpine
     container_name: ytdlp-redis
@@ -561,7 +679,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - GATEWAY_PORT=9111
-      - WORKER_COUNT=10
+      - WORKER_COUNT=12
       - EXTRACTOR_IPC_ENABLED=true
       - EXTRACTOR_TIMEOUT_MS=90000
       - MAX_WORKER_IPC_CONCURRENCY=2
@@ -591,6 +709,8 @@ services:
       - gluetun-8
       - gluetun-9
       - gluetun-10
+      - gluetun-11
+      - gluetun-12
       - ytdlp-1
       - ytdlp-2
       - ytdlp-3
@@ -601,6 +721,8 @@ services:
       - ytdlp-8
       - ytdlp-9
       - ytdlp-10
+      - ytdlp-11
+      - ytdlp-12
       - redis
     restart: unless-stopped
     networks:

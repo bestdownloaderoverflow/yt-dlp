@@ -225,6 +225,7 @@ func (d *Delivery) DownloadToFile(
 	var total int64
 	refreshAttempts := 0
 	const maxRefreshAttempts = 3
+	const maxRetriesPerChunk = 3
 
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
@@ -244,16 +245,100 @@ func (d *Delivery) DownloadToFile(
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 		}
 
-		resp, err := client.Do(req)
-		if err != nil {
-			if ctx.Err() != nil {
-				return plan, ctx.Err()
+		// Inner retry loop for transient network errors during request/read/copy.
+		var (
+			resp          *http.Response
+			copyErr       error
+			n             int64
+			shouldRefresh bool
+			lastStatus    int
+		)
+		for attempt := 0; attempt < maxRetriesPerChunk; attempt++ {
+			// Send request
+			resp, err = client.Do(req)
+			if err != nil {
+				if ctx.Err() != nil {
+					return plan, ctx.Err()
+				}
+				if attempt == maxRetriesPerChunk-1 {
+					return plan, fmt.Errorf("upstream request failed at offset %d: %w", read, err)
+				}
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
 			}
-			return plan, err
+
+			// Check for 403 with refresh capability - not a retry, trigger refresh.
+			if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
+				shouldRefresh = true
+				break
+			}
+
+			// Handle range not satisfiable (end of file or invalid range)
+			if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+				_ = resp.Body.Close()
+				if total > 0 && read >= total {
+					return plan, nil
+				}
+				return plan, fmt.Errorf("range not satisfiable at %d/%d", read, total)
+			}
+
+			// Handle non-success non-partial status codes
+			if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+				bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+				_ = resp.Body.Close()
+				return plan, fmt.Errorf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
+			}
+
+			lastStatus = resp.StatusCode
+
+			// Track total size from partial content response
+			if resp.StatusCode == http.StatusPartialContent {
+				if total <= 0 {
+					if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
+						total = t
+					} else if cl := parsePositiveInt64(resp.Header.Get("Content-Length")); cl > 0 {
+						total = read + cl
+					}
+				}
+			} else if read > 0 {
+				// Server sent 200 OK when we expected a range - some CDNs do this.
+				// Seek back to start, truncate, and restart from beginning.
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					_, _ = io.Copy(io.Discard, resp.Body)
+					_ = resp.Body.Close()
+					return plan, err
+				}
+				if err := f.Truncate(0); err != nil {
+					_, _ = io.Copy(io.Discard, resp.Body)
+					_ = resp.Body.Close()
+					return plan, err
+				}
+				read = 0
+				total = parsePositiveInt64(resp.Header.Get("Content-Length"))
+			}
+
+			// Copy the data
+			n, copyErr = copyBuffer(f, resp.Body)
+			_ = resp.Body.Close()
+			resp = nil
+
+			if copyErr != nil {
+				if ctx.Err() != nil {
+					return plan, ctx.Err()
+				}
+				if attempt == maxRetriesPerChunk-1 {
+					return plan, fmt.Errorf("copy failed at offset %d after %d attempts: %w", read, maxRetriesPerChunk, copyErr)
+				}
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+
+			// Success
+			break
 		}
 
-		if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
-			_, _ = io.Copy(io.Discard, resp.Body)
+		// Handle refresh request (403) after breaking from retry loop
+		if shouldRefresh {
 			_ = resp.Body.Close()
 			refreshedPlan, refreshErr := onRefresh()
 			if refreshErr != nil {
@@ -271,55 +356,13 @@ func (d *Delivery) DownloadToFile(
 			continue
 		}
 
-		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
-			_, _ = io.Copy(io.Discard, resp.Body)
+		if resp != nil {
 			_ = resp.Body.Close()
-			if total > 0 && read >= total {
-				return plan, nil
-			}
-			return plan, fmt.Errorf("range not satisfiable at %d/%d", read, total)
 		}
 
-		if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-			bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			_ = resp.Body.Close()
-			return plan, fmt.Errorf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
-		}
-
-		if resp.StatusCode == http.StatusPartialContent {
-			if total <= 0 {
-				if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
-					total = t
-				} else if cl := parsePositiveInt64(resp.Header.Get("Content-Length")); cl > 0 {
-					total = read + cl
-				}
-			}
-		} else if read > 0 {
-			if _, err := f.Seek(0, io.SeekStart); err != nil {
-				_, _ = io.Copy(io.Discard, resp.Body)
-				_ = resp.Body.Close()
-				return plan, err
-			}
-			if err := f.Truncate(0); err != nil {
-				_, _ = io.Copy(io.Discard, resp.Body)
-				_ = resp.Body.Close()
-				return plan, err
-			}
-			read = 0
-			total = parsePositiveInt64(resp.Header.Get("Content-Length"))
-		}
-
-		n, copyErr := copyBuffer(f, resp.Body)
-		_ = resp.Body.Close()
-		if copyErr != nil {
-			if ctx.Err() != nil {
-				return plan, ctx.Err()
-			}
-			return plan, copyErr
-		}
 		read += n
 
-		if resp.StatusCode == http.StatusOK {
+		if lastStatus == http.StatusOK {
 			return plan, nil
 		}
 		if total > 0 && read >= total {
@@ -355,14 +398,14 @@ func (d *Delivery) DownloadToWriter(
 	}
 
 	currentPlan := map[string]any{
-		"direct_url":       plan.DirectURL,
-		"request_headers":  plan.RequestHeaders,
-		"response_headers": plan.ResponseHeaders,
-		"media_type":       plan.MediaType,
-		"can_refresh":      plan.CanRefresh,
-		"platform":         plan.Platform,
-		"ffmpeg_audio_url": plan.FFmpegAudioURL,
-		"photo_urls":       []string{plan.DirectURL},
+		"direct_url":        plan.DirectURL,
+		"request_headers":   plan.RequestHeaders,
+		"response_headers":  plan.ResponseHeaders,
+		"media_type":        plan.MediaType,
+		"can_refresh":       plan.CanRefresh,
+		"platform":          plan.Platform,
+		"ffmpeg_audio_url":  plan.FFmpegAudioURL,
+		"photo_urls":        []string{plan.DirectURL},
 	}
 	currentURL, currentHeaders := selector(currentPlan)
 	currentHeaders = sanitizeRequestHeaders(currentHeaders)
@@ -374,6 +417,7 @@ func (d *Delivery) DownloadToWriter(
 	var total int64
 	refreshAttempts := 0
 	const maxRefreshAttempts = 3
+	const maxRetriesPerChunk = 3
 
 	for {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
@@ -393,16 +437,88 @@ func (d *Delivery) DownloadToWriter(
 			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 		}
 
-		resp, err := client.Do(req)
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
+		// Inner retry loop for transient network errors during request/read/copy.
+		var (
+			resp         *http.Response
+			copyErr      error
+			n            int64
+			shouldRefresh bool
+		)
+		for attempt := 0; attempt < maxRetriesPerChunk; attempt++ {
+			// Send request
+			resp, err = client.Do(req)
+			if err != nil {
+				if ctx.Err() != nil || isClientAbortError(err) {
+					return err
+				}
+				if attempt == maxRetriesPerChunk-1 {
+					return fmt.Errorf("upstream request failed at offset %d: %w", read, err)
+				}
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
 			}
-			return err
+
+			// Check for 403 with refresh capability - not a retry, trigger refresh.
+			if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
+				shouldRefresh = true
+				break
+			}
+
+			// Handle range not satisfiable (end of file or invalid range)
+			if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+				_ = resp.Body.Close()
+				if total > 0 && read >= total {
+					return nil
+				}
+				return fmt.Errorf("range not satisfiable at %d/%d", read, total)
+			}
+
+			// Handle non-success non-partial status codes
+			if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+				bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+				_ = resp.Body.Close()
+				return fmt.Errorf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
+			}
+
+			// Track total size from partial content response
+			if resp.StatusCode == http.StatusPartialContent {
+				if total <= 0 {
+					if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
+						total = t
+					} else if cl := parsePositiveInt64(resp.Header.Get("Content-Length")); cl > 0 {
+						total = read + cl
+					}
+				}
+			} else if read > 0 {
+				// Server sent 200 OK when we expected a range.
+				// For pipe-based streaming (DownloadToWriter), we cannot reset.
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				return fmt.Errorf("upstream ignored resume range at offset %d", read)
+			}
+
+			// Copy the data
+			n, copyErr = copyBuffer(dst, resp.Body)
+			_ = resp.Body.Close()
+			resp = nil
+
+			if copyErr != nil {
+				if ctx.Err() != nil || isClientAbortError(copyErr) {
+					return copyErr
+				}
+				if attempt == maxRetriesPerChunk-1 {
+					return fmt.Errorf("copy failed at offset %d after %d attempts: %w", read, maxRetriesPerChunk, copyErr)
+				}
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+
+			// Success
+			break
 		}
 
-		if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
-			_, _ = io.Copy(io.Discard, resp.Body)
+		// Handle refresh request (403) after breaking from retry loop
+		if shouldRefresh {
 			_ = resp.Body.Close()
 			refreshedPlan, refreshErr := onRefresh()
 			if refreshErr != nil {
@@ -420,52 +536,18 @@ func (d *Delivery) DownloadToWriter(
 			continue
 		}
 
-		if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			if total > 0 && read >= total {
-				return nil
-			}
-			return fmt.Errorf("range not satisfiable at %d/%d", read, total)
-		}
-
-		if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
-			bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
-		}
-
-		if resp.StatusCode == http.StatusPartialContent {
-			if total <= 0 {
-				if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
-					total = t
-				} else if cl := parsePositiveInt64(resp.Header.Get("Content-Length")); cl > 0 {
-					total = read + cl
-				}
-			}
-		} else if read > 0 {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			_ = resp.Body.Close()
-			return fmt.Errorf("upstream ignored resume range at offset %d", read)
-		}
-
-		n, copyErr := copyBuffer(dst, resp.Body)
-		_ = resp.Body.Close()
-		if copyErr != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return copyErr
-		}
+		// If we exhausted retries without success, the error was already returned above.
+		// This point should only be reached on success.
 		read += n
 
-		if resp.StatusCode == http.StatusOK {
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+
+		if n <= 0 {
 			return nil
 		}
 		if total > 0 && read >= total {
-			return nil
-		}
-		if n <= 0 {
 			return nil
 		}
 	}

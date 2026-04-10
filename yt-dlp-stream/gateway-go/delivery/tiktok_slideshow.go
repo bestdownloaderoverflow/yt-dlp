@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,7 +12,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// slideshowFFmpegTimeout bounds how long a single slideshow encode may run
+// before it is killed. Keeps stuck/slow encodes from being reaped by the
+// kernel OOM killer (which is what produced "signal: killed" in logs).
+const slideshowFFmpegTimeout = 90 * time.Second
 
 // StreamTikTokSlideshow renders and streams a TikTok photo slideshow as MP4.
 func (d *Delivery) StreamTikTokSlideshow(
@@ -20,6 +27,19 @@ func (d *Delivery) StreamTikTokSlideshow(
 	plan DeliveryPlan,
 	onRefresh func() (DeliveryPlan, error),
 ) {
+	release, ok := d.tryAcquireSlideshowSlot()
+	if !ok {
+		if d.Config.DegradedRetryAfter > 0 {
+			w.Header().Set("Retry-After", strconv.Itoa(d.Config.DegradedRetryAfter))
+		}
+		WriteJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error":  "Slideshow renderer busy",
+			"detail": "Please retry in a few seconds",
+		})
+		return
+	}
+	defer release()
+
 	currentPlan := plan
 	for attempt := 0; attempt < 2; attempt++ {
 		outputPath, mediaType, responseHeaders, tempDir, statusCode, err := d.renderTikTokSlideshow(r.Context(), currentPlan)
@@ -147,12 +167,14 @@ func (d *Delivery) renderTikTokSlideshow(ctx context.Context, plan DeliveryPlan)
 			"-pix_fmt", "yuv420p",
 			"-fps_mode", "cfr",
 			"-c:v", "libx264",
-			"-preset", "medium",
-			"-crf", "23",
+			"-preset", "ultrafast",
+			"-tune", "stillimage",
+			"-crf", "28",
 			"-b:v", "320k",
 			"-maxrate", "360k",
 			"-bufsize", "720k",
 			"-threads", "1",
+			"-max_muxing_queue_size", "1024",
 			"-c:a", "aac",
 			"-b:a", "128k",
 			outputPath,
@@ -164,19 +186,33 @@ func (d *Delivery) renderTikTokSlideshow(ctx context.Context, plan DeliveryPlan)
 			"-pix_fmt", "yuv420p",
 			"-fps_mode", "cfr",
 			"-c:v", "libx264",
-			"-preset", "medium",
-			"-crf", "23",
+			"-preset", "ultrafast",
+			"-tune", "stillimage",
+			"-crf", "28",
 			"-b:v", "320k",
 			"-maxrate", "360k",
 			"-bufsize", "720k",
 			"-threads", "1",
+			"-max_muxing_queue_size", "1024",
 			outputPath,
 		)
 	}
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
+	ffCtx, cancelFF := context.WithTimeout(ctx, slideshowFFmpegTimeout)
+	defer cancelFF()
+	cmd := exec.CommandContext(ffCtx, "ffmpeg", ffmpegArgs...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		detail := strings.TrimSpace(string(out))
+		if errors.Is(ffCtx.Err(), context.DeadlineExceeded) {
+			if detail == "" {
+				detail = fmt.Sprintf("timed out after %s", slideshowFFmpegTimeout)
+			}
+			log.Printf("slideshow ffmpeg timeout after %s, out=%s", slideshowFFmpegTimeout, detail)
+			return "", "", nil, tempDir, http.StatusGatewayTimeout, fmt.Errorf("ffmpeg timed out after %s", slideshowFFmpegTimeout)
+		}
+		if detail == "" {
+			detail = err.Error()
+		}
 		log.Printf("slideshow ffmpeg error: %v, out=%s", err, detail)
 		return "", "", nil, tempDir, http.StatusBadGateway, fmt.Errorf("ffmpeg failed: %s", detail)
 	}

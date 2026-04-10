@@ -1,3 +1,12 @@
+x-ytdlp-worker-limits: &ytdlp_worker_limits
+  mem_limit: 512m
+  memswap_limit: 512m
+
+x-gateway-limits: &gateway_limits
+  mem_limit: 1g
+  memswap_limit: 1g
+  cpus: 2.0
+
 services:
   gluetun-1:
     image: qmcgaw/gluetun:v3.41.1
@@ -34,6 +43,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-1:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -92,6 +102,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-2:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -150,6 +161,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-3:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -208,6 +220,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-4:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -266,6 +279,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-5:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -324,6 +338,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-6:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -382,6 +397,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-7:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -440,6 +456,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-8:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -498,6 +515,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-9:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -556,6 +574,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-10:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -615,6 +634,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-11:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -674,6 +694,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-12:
+    <<: *ytdlp_worker_limits
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -709,6 +730,7 @@ services:
         ipv4_address: 172.30.0.250
 
   gateway-warp:
+    <<: *gateway_limits
     build:
       context: .
       dockerfile: gateway-go/Dockerfile
@@ -738,32 +760,34 @@ services:
       - DEGRADED_TIMEOUT_SECONDS=30
       - RESTART_STABILIZE_SECONDS=5
       - UNHEALTHY_RESTART_THRESHOLD=6
+      - TIKTOK_SLIDESHOW_MAX_CONCURRENCY=1
     depends_on:
-      - gluetun-1
-      - gluetun-2
-      - gluetun-3
-      - gluetun-4
-      - gluetun-5
-      - gluetun-6
-      - gluetun-7
-      - gluetun-8
-      - gluetun-9
-      - gluetun-10
-      - gluetun-11
-      - gluetun-12
-      - ytdlp-1
-      - ytdlp-2
-      - ytdlp-3
-      - ytdlp-4
-      - ytdlp-5
-      - ytdlp-6
-      - ytdlp-7
-      - ytdlp-8
-      - ytdlp-9
-      - ytdlp-10
-      - ytdlp-11
-      - ytdlp-12
-      - redis
+      redis:
+        condition: service_started
+      ytdlp-1:
+        condition: service_healthy
+      ytdlp-2:
+        condition: service_healthy
+      ytdlp-3:
+        condition: service_healthy
+      ytdlp-4:
+        condition: service_healthy
+      ytdlp-5:
+        condition: service_healthy
+      ytdlp-6:
+        condition: service_healthy
+      ytdlp-7:
+        condition: service_healthy
+      ytdlp-8:
+        condition: service_healthy
+      ytdlp-9:
+        condition: service_healthy
+      ytdlp-10:
+        condition: service_healthy
+      ytdlp-11:
+        condition: service_healthy
+      ytdlp-12:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - ytdlp-warp-network

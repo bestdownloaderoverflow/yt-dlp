@@ -35,6 +35,7 @@ type Config struct {
 	DrainPollIntervalMs       int
 	RestartStabilizeSeconds   int
 	UnhealthyRestartThreshold int
+	SlideshowMaxConcurrency   int
 }
 
 func LoadConfig() Config {
@@ -67,6 +68,7 @@ func LoadConfig() Config {
 		DrainPollIntervalMs:       envInt("DRAIN_POLL_INTERVAL_MS", 500),
 		RestartStabilizeSeconds:   envInt("RESTART_STABILIZE_SECONDS", 2),
 		UnhealthyRestartThreshold: envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
+		SlideshowMaxConcurrency:   envInt("TIKTOK_SLIDESHOW_MAX_CONCURRENCY", 1),
 	}
 }
 

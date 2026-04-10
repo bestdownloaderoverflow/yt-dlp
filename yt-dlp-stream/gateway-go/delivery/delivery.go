@@ -42,14 +42,34 @@ type Delivery struct {
 	Worker       WorkerLookup
 	BaseCl       *http.Client
 	proxyClients sync.Map // map[string]*http.Client keyed by proxy URL
+	slideshowSem chan struct{}
 }
 
 type DeliveryConfig struct {
-	DegradedRetryAfter int
+	DegradedRetryAfter      int
+	SlideshowMaxConcurrency int
 }
 
 func New(cfg DeliveryConfig, baseCl *http.Client, worker WorkerLookup) *Delivery {
-	return &Delivery{Config: cfg, BaseCl: baseCl, Worker: worker}
+	d := &Delivery{Config: cfg, BaseCl: baseCl, Worker: worker}
+	if cfg.SlideshowMaxConcurrency > 0 {
+		d.slideshowSem = make(chan struct{}, cfg.SlideshowMaxConcurrency)
+	}
+	return d
+}
+
+func (d *Delivery) tryAcquireSlideshowSlot() (func(), bool) {
+	if d.slideshowSem == nil {
+		return func() {}, true
+	}
+	select {
+	case d.slideshowSem <- struct{}{}:
+		return func() {
+			<-d.slideshowSem
+		}, true
+	default:
+		return nil, false
+	}
 }
 
 func (d *Delivery) mediaHTTPClient(workerID string) *http.Client {
@@ -117,7 +137,13 @@ func isClientAbortError(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "broken pipe") ||
 		strings.Contains(msg, "connection reset by peer") ||
-		strings.Contains(msg, "context canceled")
+		strings.Contains(msg, "context canceled") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "unexpected eof") ||
+		strings.Contains(msg, "http2: server sent goaway") ||
+		strings.Contains(msg, "client disconnected") ||
+		strings.Contains(msg, "tls: error decoding message") ||
+		strings.Contains(msg, "stream closed")
 }
 
 func CopyHeader(dst, src http.Header, skip map[string]bool) {

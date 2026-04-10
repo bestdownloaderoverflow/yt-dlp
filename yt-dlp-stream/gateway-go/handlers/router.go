@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"math/rand"
@@ -248,16 +249,39 @@ func (h *Handlers) getPreferredOrHealthyWorker(preferredWorkerID string) *regist
 }
 
 func (h *Handlers) selectExtractorWorker(preferred string, requireHealthy bool) string {
+	return h.selectExtractorWorkerAvoiding(preferred, requireHealthy, nil)
+}
+
+// selectExtractorWorkerAvoiding behaves like selectExtractorWorker but skips
+// any worker IDs present in the `exclude` set. Used by retry/failover paths
+// so that a worker that just returned a network error isn't immediately
+// re-tried.
+func (h *Handlers) selectExtractorWorkerAvoiding(preferred string, requireHealthy bool, exclude map[string]bool) string {
 	if h.Extractor == nil {
 		return ""
 	}
-	if preferred != "" && h.Extractor.HasWorker(preferred) {
+	isExcluded := func(id string) bool {
+		return exclude != nil && exclude[id]
+	}
+	if preferred != "" && !isExcluded(preferred) && h.Extractor.HasWorker(preferred) {
 		if !requireHealthy {
 			return preferred
 		}
 		if pw := h.Registry.GetWorker(preferred); h.isWorkerAcceptingRequests(pw) {
 			return preferred
 		}
+	}
+	filter := func(ids []string) []string {
+		if exclude == nil {
+			return ids
+		}
+		out := make([]string, 0, len(ids))
+		for _, id := range ids {
+			if !isExcluded(id) {
+				out = append(out, id)
+			}
+		}
+		return out
 	}
 	if requireHealthy {
 		healthy := h.Registry.GetHealthyWorkers(nil)
@@ -267,6 +291,7 @@ func (h *Handlers) selectExtractorWorker(preferred string, requireHealthy bool) 
 				candidates = append(candidates, worker.ID)
 			}
 		}
+		candidates = filter(candidates)
 		if len(candidates) > 0 {
 			return h.pickLeastLoadedExtractorWorker(candidates)
 		}
@@ -278,10 +303,14 @@ func (h *Handlers) selectExtractorWorker(preferred string, requireHealthy bool) 
 			candidates = append(candidates, workerID)
 		}
 	}
+	candidates = filter(candidates)
 	if len(candidates) > 0 {
 		return h.pickLeastLoadedExtractorWorker(candidates)
 	}
-	return h.Extractor.PickWorker("")
+	if exclude == nil {
+		return h.Extractor.PickWorker("")
+	}
+	return ""
 }
 
 func (h *Handlers) pickLeastLoadedExtractorWorker(candidates []string) string {
@@ -672,12 +701,19 @@ func isClientAbortError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if strings.Contains(err.Error(), "broken pipe") ||
-		strings.Contains(err.Error(), "connection reset by peer") ||
-		strings.Contains(err.Error(), "context canceled") {
+	if errors.Is(err, context.Canceled) || errors.Is(err, net.ErrClosed) {
 		return true
 	}
-	return false
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection reset by peer") ||
+		strings.Contains(msg, "context canceled") ||
+		strings.Contains(msg, "use of closed network connection") ||
+		strings.Contains(msg, "unexpected eof") ||
+		strings.Contains(msg, "http2: server sent goaway") ||
+		strings.Contains(msg, "client disconnected") ||
+		strings.Contains(msg, "tls: error decoding message") ||
+		strings.Contains(msg, "stream closed")
 }
 
 func copyHeader(dst, src http.Header, skip map[string]bool) {

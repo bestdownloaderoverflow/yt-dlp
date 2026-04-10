@@ -69,7 +69,8 @@ func main() {
 
 	// Delivery engine (streaming orchestration in Go).
 	del := delivery.New(delivery.DeliveryConfig{
-		DegradedRetryAfter: cfg.DegradedRetryAfter,
+		DegradedRetryAfter:      cfg.DegradedRetryAfter,
+		SlideshowMaxConcurrency: cfg.SlideshowMaxConcurrency,
 	}, client, deliveryWorkerLookup{reg})
 
 	// Purge stale proxy connections before each container restart so that

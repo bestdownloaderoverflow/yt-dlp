@@ -69,6 +69,13 @@ class YoutubeDLManager:
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
+            # Fail fast when VPN/upstream is slow so the Go gateway can
+            # retry on a different worker within its own IPC timeout
+            # window instead of blocking for 90s on a stuck request.
+            "socket_timeout": 25,
+            "retries": 2,
+            "fragment_retries": 2,
+            "extractor_retries": 2,
         }
         if proxy:
             opts["proxy"] = proxy

@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,6 +14,29 @@ import (
 
 	"gateway-go/delivery"
 )
+
+// isIPCNetworkError reports whether an IPC call failure is a network-level
+// issue (timeout, refused, EOF) worth retrying on a different worker.
+// Semantic errors (rpcError) are not passed here and should never be retried.
+func isIPCNetworkError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "unexpected eof")
+}
 
 // handleRoot returns status JSON.
 func (h *Handlers) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +101,7 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 	proxy := strings.TrimSpace(r.URL.Query().Get("proxy"))
 	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
 	preferred := extractWorkerID(r.URL.Query().Get("key"), h.Config.WorkerCount)
-	workerID := h.selectExtractorWorker(preferred, true)
+	workerID := h.selectExtractorWorker(preferred, false)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
@@ -164,7 +190,7 @@ func (h *Handlers) handleDownloadViaExtractorIPC(w http.ResponseWriter, r *http.
 	}
 	download := utilsParseBool(r.URL.Query().Get("download"), true)
 	preferred := extractWorkerID(key, h.Config.WorkerCount)
-	workerID := h.selectExtractorWorker(preferred, false)
+	workerID := h.selectExtractorWorker(preferred, true)
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
@@ -416,14 +442,32 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "URL is required"})
 		return
 	}
+	const maxAttempts = 3
+	tried := make(map[string]bool, maxAttempts)
 	workerID := h.selectExtractorWorker("", true)
-	if workerID == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
-		return
+	var (
+		result map[string]any
+		rpcErr *IPCError
+		err    error
+	)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if workerID == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+			return
+		}
+		result, rpcErr, err = h.Extractor.TikTok(workerID, payload.URL, payload.Proxy, payload.Impersonate)
+		if err == nil {
+			break
+		}
+		if !isIPCNetworkError(err) {
+			break
+		}
+		log.Printf("[extractor:%s] tiktok ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
+		h.Registry.RecordProbe(workerID, false)
+		tried[workerID] = true
+		workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 	}
-	result, rpcErr, err := h.Extractor.TikTok(workerID, payload.URL, payload.Proxy, payload.Impersonate)
 	if err != nil {
-		log.Printf("[extractor:%s] tiktok ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}
@@ -458,14 +502,34 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 	}
 	download := utilsParseBool(r.URL.Query().Get("download"), true)
 	preferred := extractWorkerID(key, h.Config.WorkerCount)
-	workerID := h.selectExtractorWorker(preferred, false)
-	if workerID == "" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
-		return
+
+	const maxAttempts = 3
+	tried := make(map[string]bool, maxAttempts)
+	workerID := h.selectExtractorWorker(preferred, true)
+	var (
+		planRaw map[string]any
+		rpcErr  *IPCError
+		err     error
+	)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if workerID == "" {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+			return
+		}
+		planRaw, rpcErr, err = h.Extractor.TikTokDownloadPrepare(workerID, key, download)
+		if err == nil {
+			break
+		}
+		if !isIPCNetworkError(err) {
+			break
+		}
+		log.Printf("[extractor:%s] tiktok download prepare ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
+		h.Registry.RecordProbe(workerID, false)
+		tried[workerID] = true
+		// Session state lives in shared Redis, so any healthy worker can take over.
+		workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 	}
-	planRaw, rpcErr, err := h.Extractor.TikTokDownloadPrepare(workerID, key, download)
 	if err != nil {
-		log.Printf("[extractor:%s] tiktok download prepare ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}

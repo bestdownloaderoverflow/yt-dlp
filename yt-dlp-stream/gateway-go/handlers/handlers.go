@@ -39,6 +39,36 @@ func isIPCNetworkError(err error) bool {
 		strings.Contains(msg, "unexpected eof")
 }
 
+func ipcErrorType(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "timeout"
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "eof"
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused"):
+		return "conn_refused"
+	case strings.Contains(msg, "connection reset"):
+		return "conn_reset"
+	case strings.Contains(msg, "broken pipe"):
+		return "broken_pipe"
+	case strings.Contains(msg, "i/o timeout"):
+		return "timeout"
+	case strings.Contains(msg, "no such host"):
+		return "dns"
+	case strings.Contains(msg, "unexpected eof"):
+		return "eof"
+	default:
+		return "network"
+	}
+}
+
 // handleRoot returns status JSON.
 func (h *Handlers) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -469,7 +499,7 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 			break
 		}
 		log.Printf("[extractor:%s] tiktok ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
-		h.Registry.RecordProbe(workerID, false)
+		metrics.IncIPCError(workerID, "tiktok", ipcErrorType(err))
 		tried[workerID] = true
 		workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 	}
@@ -530,7 +560,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 			break
 		}
 		log.Printf("[extractor:%s] tiktok download prepare ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
-		h.Registry.RecordProbe(workerID, false)
+		metrics.IncIPCError(workerID, "tiktok_download_prepare", ipcErrorType(err))
 		tried[workerID] = true
 		// Session state lives in shared Redis, so any healthy worker can take over.
 		workerID = h.selectExtractorWorkerAvoiding("", true, tried)

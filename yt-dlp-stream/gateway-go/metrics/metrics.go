@@ -57,6 +57,14 @@ var (
 		[]string{"worker_id", "reason_code", "success"},
 	)
 
+	WorkerIPCErrorsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "worker_ipc_errors_total",
+			Help: "Total number of extractor IPC errors by worker and endpoint",
+		},
+		[]string{"worker_id", "endpoint", "error_type"},
+	)
+
 	GatewayWorkersTotal = prometheus.NewGauge(
 		prometheus.GaugeOpts{
 			Name: "gateway_workers_total",
@@ -81,6 +89,7 @@ func Register() {
 		WorkerActiveRequests,
 		WorkerRestartDuration,
 		WorkerRestartReasonsTotal,
+		WorkerIPCErrorsTotal,
 		GatewayWorkersTotal,
 		GatewayHealthyWorkers,
 	)
@@ -114,6 +123,11 @@ func ObserveRestartDuration(workerID string, success bool, durationSeconds float
 // IncRestartReason increments the worker restart reason counter.
 func IncRestartReason(workerID string, reasonCode string, success bool) {
 	WorkerRestartReasonsTotal.WithLabelValues(workerID, reasonCode, boolToString(success)).Inc()
+}
+
+// IncIPCError increments the worker extractor IPC error counter.
+func IncIPCError(workerID string, endpoint string, errorType string) {
+	WorkerIPCErrorsTotal.WithLabelValues(workerID, endpoint, errorType).Inc()
 }
 
 // SetGatewayWorkers sets the gateway_workers_total gauge.

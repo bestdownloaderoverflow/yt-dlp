@@ -50,6 +50,7 @@ cookies/*.txt
 
 # Go binary
 gateway-go/gateway-go
+gateway-go/gateway
 
 # Gluetun VPN data
 gluetun/data*/

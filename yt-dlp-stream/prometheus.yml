@@ -1,0 +1,32 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'yt-dlp-warp'
+    environment: 'production'
+
+scrape_configs:
+  # Gateway-warp metrics
+  - job_name: 'gateway-warp'
+    static_configs:
+      - targets: ['ytdlp-gateway-warp:9111']
+        labels:
+          service: 'gateway'
+          instance: 'gateway-warp'
+    metrics_path: /metrics
+    scheme: http
+
+  # Redis metrics (optional - jika redis-exporter diinstal)
+  # - job_name: 'redis'
+  #   static_configs:
+  #     - targets: ['redis-exporter:9121']
+
+rule_files:
+  # alerting rules (opsional)
+  # - 'alerts.yml'
+
+alerting:
+  alertmanagers:
+    # - static_configs:
+    #     - targets:
+    #       - 'alertmanager:9093'

@@ -36,6 +36,7 @@ type Config struct {
 	RestartStabilizeSeconds   int
 	UnhealthyRestartThreshold int
 	SlideshowMaxConcurrency   int
+	RedisURL                  string
 }
 
 func LoadConfig() Config {
@@ -69,6 +70,7 @@ func LoadConfig() Config {
 		RestartStabilizeSeconds:   envInt("RESTART_STABILIZE_SECONDS", 2),
 		UnhealthyRestartThreshold: envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
 		SlideshowMaxConcurrency:   envInt("TIKTOK_SLIDESHOW_MAX_CONCURRENCY", 1),
+		RedisURL:                  getenvDefault("REDIS_URL", "redis://172.30.0.250:6379/0"),
 	}
 }
 

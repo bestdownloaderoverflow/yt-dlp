@@ -28,6 +28,14 @@ type proxyResult struct {
 	wroteDirect   bool
 }
 
+const (
+	restartReasonUnknown       = "unknown"
+	restartReasonProbeFailure  = "probe_failure"
+	restartReasonRateLimit     = "rate_limit"
+	restartReasonUptime        = "uptime"
+	restartReasonHealthMonitor = "health_monitor"
+)
+
 type IPCError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -61,6 +69,7 @@ type Handlers struct {
 
 	restartTasksMu sync.Mutex
 	restartTasks   map[string]context.CancelFunc
+	restartReasons map[string]string
 	ctx            context.Context
 	cancel         context.CancelFunc
 	startedAt      time.Time
@@ -69,18 +78,19 @@ type Handlers struct {
 func New(cfg utils.Config, reg *registry.WorkerRegistry, rotator *registry.VPNRotator, ext Extractor, del *delivery.Delivery, client *http.Client) *Handlers {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Handlers{
-		Config:       cfg,
-		Registry:     reg,
-		Rotator:      rotator,
-		Extractor:    ext,
-		Delivery:     del,
-		Client:       client,
-		RLFetch:      utils.NewSlidingWindowRateLimiter(cfg.GatewayRLFetchLimit, cfg.GatewayRLWindowSeconds),
-		RLDownload:   utils.NewSlidingWindowRateLimiter(cfg.GatewayRLDownloadLimit, cfg.GatewayRLWindowSeconds),
-		restartTasks: map[string]context.CancelFunc{},
-		ctx:          ctx,
-		cancel:       cancel,
-		startedAt:    time.Now(),
+		Config:         cfg,
+		Registry:       reg,
+		Rotator:        rotator,
+		Extractor:      ext,
+		Delivery:       del,
+		Client:         client,
+		RLFetch:        utils.NewSlidingWindowRateLimiter(cfg.GatewayRLFetchLimit, cfg.GatewayRLWindowSeconds),
+		RLDownload:     utils.NewSlidingWindowRateLimiter(cfg.GatewayRLDownloadLimit, cfg.GatewayRLWindowSeconds),
+		restartTasks:   map[string]context.CancelFunc{},
+		restartReasons: map[string]string{},
+		ctx:            ctx,
+		cancel:         cancel,
+		startedAt:      time.Now(),
 	}
 }
 
@@ -115,6 +125,8 @@ func (h *Handlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleTikTokDownload(w, r)
 	case "/health":
 		h.handleHealth(w, r)
+	case "/metrics":
+		h.handleMetrics(w, r)
 	case "/tunnel":
 		h.handleTunnel(w, r)
 	default:
@@ -354,15 +366,58 @@ func (h *Handlers) pickLeastLoadedExtractorWorker(candidates []string) string {
 	return candidates[rand.Intn(len(candidates))]
 }
 
+func normalizeRestartReasonCode(reasonCode string) string {
+	code := strings.TrimSpace(strings.ToLower(reasonCode))
+	if code == "" {
+		return restartReasonUnknown
+	}
+	return code
+}
+
+func restartReasonPriority(reasonCode string) int {
+	switch normalizeRestartReasonCode(reasonCode) {
+	case restartReasonRateLimit:
+		return 3
+	case restartReasonProbeFailure:
+		return 2
+	case restartReasonHealthMonitor:
+		return 2
+	case restartReasonUptime:
+		return 1
+	default:
+		return 0
+	}
+}
+
 func (h *Handlers) scheduleWorkerRestart(workerID string, rateLimited bool) {
-	h.Registry.OpenCircuit(workerID)
+	reasonCode := restartReasonProbeFailure
 	if rateLimited {
-		h.Registry.MarkRateLimited(workerID)
-	} else {
-		h.Registry.MarkFailure(workerID)
+		reasonCode = restartReasonRateLimit
+	}
+	h.scheduleWorkerRestartWithReason(workerID, reasonCode, true)
+}
+
+func (h *Handlers) scheduleWorkerRestartWithReason(workerID string, reasonCode string, markFailure bool) {
+	reasonCode = normalizeRestartReasonCode(reasonCode)
+	h.Registry.OpenCircuit(workerID)
+	if markFailure {
+		if reasonCode == restartReasonRateLimit {
+			h.Registry.MarkRateLimited(workerID)
+		} else {
+			h.Registry.MarkFailure(workerID)
+		}
 	}
 	scheduled := h.Registry.ScheduleRestart(workerID)
+	h.restartTasksMu.Lock()
+	if existing := h.restartReasons[workerID]; existing == "" || restartReasonPriority(reasonCode) > restartReasonPriority(existing) {
+		h.restartReasons[workerID] = reasonCode
+	}
+	h.restartTasksMu.Unlock()
 	if !scheduled {
+		if !h.ensureRestartTask(workerID, false) {
+			return
+		}
+		log.Printf("[%s] restart scheduled while already pending; reason=%s", workerID, reasonCode)
 		return
 	}
 	if !h.ensureRestartTask(workerID, true) {
@@ -370,14 +425,17 @@ func (h *Handlers) scheduleWorkerRestart(workerID string, rateLimited bool) {
 	}
 }
 
-func queueRestartCandidate(queued map[string]bool, workerID string, rateLimited bool) {
+func queueRestartCandidate(queued map[string]string, workerID string, reasonCode string) {
+	reasonCode = normalizeRestartReasonCode(reasonCode)
 	prev := queued[workerID]
-	queued[workerID] = prev || rateLimited
+	if prev == "" || restartReasonPriority(reasonCode) > restartReasonPriority(prev) {
+		queued[workerID] = reasonCode
+	}
 }
 
-func (h *Handlers) flushQueuedRestarts(queued map[string]bool) {
-	for workerID, rateLimited := range queued {
-		h.scheduleWorkerRestart(workerID, rateLimited)
+func (h *Handlers) flushQueuedRestarts(queued map[string]string) {
+	for workerID, reasonCode := range queued {
+		h.scheduleWorkerRestartWithReason(workerID, reasonCode, true)
 	}
 }
 
@@ -394,15 +452,17 @@ func (h *Handlers) ensureRestartTask(workerID string, logBlocked bool) bool {
 	if _, exists := h.restartTasks[workerID]; exists {
 		return false
 	}
+	reasonCode := normalizeRestartReasonCode(h.restartReasons[workerID])
 	ctx, cancel := context.WithCancel(h.ctx)
 	h.restartTasks[workerID] = cancel
 	go func() {
 		defer func() {
 			h.restartTasksMu.Lock()
 			delete(h.restartTasks, workerID)
+			delete(h.restartReasons, workerID)
 			h.restartTasksMu.Unlock()
 		}()
-		_ = h.Rotator.RestartWorker(ctx, workerID)
+		_ = h.Rotator.RestartWorker(ctx, workerID, reasonCode)
 	}()
 	return true
 }
@@ -538,7 +598,7 @@ func (h *Handlers) handleResponse(w http.ResponseWriter, resp *http.Response, wo
 
 func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID string, strictPreferred bool) {
 	tried := map[string]bool{}
-	queued := map[string]bool{}
+	queued := map[string]string{}
 	var body []byte
 	if method == http.MethodPost {
 		read, err := io.ReadAll(r.Body)
@@ -585,10 +645,10 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 		if result.shouldRestart {
 			if result.isRateLimit {
 				log.Printf("[%s] rate limit detected, rotating VPN...", worker.ID)
-				queueRestartCandidate(queued, worker.ID, true)
+				queueRestartCandidate(queued, worker.ID, restartReasonRateLimit)
 			} else {
 				log.Printf("[%s] retryable failure, scheduling restart", worker.ID)
-				queueRestartCandidate(queued, worker.ID, false)
+				queueRestartCandidate(queued, worker.ID, restartReasonProbeFailure)
 			}
 		} else {
 			log.Printf("[%s] retryable client-side failure; failover without restart", worker.ID)
@@ -608,7 +668,7 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 
 func (h *Handlers) proxyWithRotation(w http.ResponseWriter, r *http.Request, path string) {
 	tried := map[string]bool{}
-	queued := map[string]bool{}
+	queued := map[string]string{}
 	for attempt := 0; attempt < h.Config.MaxRetries; attempt++ {
 		workers := h.Registry.GetHealthyWorkers(tried)
 		if len(workers) == 0 {
@@ -631,10 +691,10 @@ func (h *Handlers) proxyWithRotation(w http.ResponseWriter, r *http.Request, pat
 		if result.shouldRestart {
 			if result.isRateLimit {
 				log.Printf("[%s] rate limit on stream, rotating...", worker.ID)
-				queueRestartCandidate(queued, worker.ID, true)
+				queueRestartCandidate(queued, worker.ID, restartReasonRateLimit)
 			} else {
 				log.Printf("[%s] stream failure, scheduling restart", worker.ID)
-				queueRestartCandidate(queued, worker.ID, false)
+				queueRestartCandidate(queued, worker.ID, restartReasonProbeFailure)
 			}
 		} else {
 			log.Printf("[%s] retryable client-side stream failure; failover without restart", worker.ID)
@@ -783,7 +843,7 @@ func (h *Handlers) UptimeChecker() {
 					}
 					if h.Registry.IsWorkerIdle(wid) {
 						log.Printf("[uptime] restarting %s after 24h", wid)
-						_ = h.Registry.ScheduleRestart(wid)
+						h.scheduleWorkerRestartWithReason(wid, restartReasonUptime, false)
 					}
 				}()
 			}
@@ -823,7 +883,7 @@ func (h *Handlers) HealthMonitor() {
 					h.Registry.RecordProbe(worker.ID, h.healthCheckWorker(worker))
 					if h.Registry.ShouldRestartUnhealthy(worker.ID) {
 						log.Printf("[%s] unhealthy for %d consecutive probes; scheduling restart", worker.ID, h.Config.UnhealthyRestartThreshold)
-						_ = h.Registry.ScheduleRestart(worker.ID)
+						h.scheduleWorkerRestartWithReason(worker.ID, restartReasonHealthMonitor, false)
 					}
 				}()
 			}

@@ -8,7 +8,11 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
+
+	"gateway-go/metrics"
+	"gateway-go/utils"
 )
 
 type RotatorConfig struct {
@@ -24,10 +28,12 @@ type RotatorConfig struct {
 type PreRestartHook func(workerID string)
 
 type VPNRotator struct {
-	registry       *WorkerRegistry
-	cfg            RotatorConfig
-	healthCl       *http.Client
-	preRestartHook PreRestartHook
+	registry         *WorkerRegistry
+	cfg              RotatorConfig
+	healthCl         *http.Client
+	preRestartHook   PreRestartHook
+	restartStartTime map[string]time.Time // tracked per worker restart
+	mu               sync.Mutex
 }
 
 func NewVPNRotator(registry *WorkerRegistry, cfg RotatorConfig) *VPNRotator {
@@ -36,9 +42,10 @@ func NewVPNRotator(registry *WorkerRegistry, cfg RotatorConfig) *VPNRotator {
 		timeout = 1000
 	}
 	return &VPNRotator{
-		registry: registry,
-		cfg:      cfg,
-		healthCl: &http.Client{Timeout: time.Duration(timeout) * time.Millisecond},
+		registry:         registry,
+		cfg:              cfg,
+		healthCl:         &http.Client{Timeout: time.Duration(timeout) * time.Millisecond},
+		restartStartTime: make(map[string]time.Time),
 	}
 }
 
@@ -51,7 +58,6 @@ func (v *VPNRotator) HealthCheck(workerID string) bool {
 	if worker == nil {
 		return false
 	}
-
 
 	addr := fmt.Sprintf("%s:%d", worker.Host, worker.APIPort)
 	timeout := v.healthCl.Timeout
@@ -102,7 +108,20 @@ func (v *VPNRotator) WaitForDrain(ctx context.Context, workerID string) bool {
 	}
 }
 
-func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
+func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string, reasonCode string) bool {
+	// Record restart start time
+	startTime := time.Now()
+	v.mu.Lock()
+	v.restartStartTime[workerID] = startTime
+	v.mu.Unlock()
+
+	defer func() {
+		// Clear start time after completion
+		v.mu.Lock()
+		delete(v.restartStartTime, workerID)
+		v.mu.Unlock()
+	}()
+
 	drained := v.WaitForDrain(ctx, workerID)
 	if !drained {
 		log.Printf("[%s] drain timeout reached; forcing container restart", workerID)
@@ -123,10 +142,13 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	if err := v.restartContainer(ctx, gluetun); err != nil {
 		log.Printf("[%s] restart error: %v", workerID, err)
 		v.registry.MarkRestarted(workerID, false)
+		v.recordRestartLog(workerID, false, startTime, reasonCode)
 		return false
 	}
 	select {
 	case <-ctx.Done():
+		v.registry.MarkRestarted(workerID, false)
+		v.recordRestartLog(workerID, false, startTime, reasonCode)
 		return false
 	case <-time.After(10 * time.Second):
 	}
@@ -141,10 +163,13 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 	if err := v.restartContainer(ctx, ytdlp); err != nil {
 		log.Printf("[%s] restart error: %v", workerID, err)
 		v.registry.MarkRestarted(workerID, false)
+		v.recordRestartLog(workerID, false, startTime, reasonCode)
 		return false
 	}
 	select {
 	case <-ctx.Done():
+		v.registry.MarkRestarted(workerID, false)
+		v.recordRestartLog(workerID, false, startTime, reasonCode)
 		return false
 	case <-time.After(5 * time.Second):
 	}
@@ -157,6 +182,8 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 		}
 		select {
 		case <-ctx.Done():
+			v.registry.MarkRestarted(workerID, false)
+			v.recordRestartLog(workerID, false, startTime, reasonCode)
 			return false
 		case <-time.After(5 * time.Second):
 		}
@@ -169,15 +196,19 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string) bool {
 		}
 		select {
 		case <-ctx.Done():
+			v.registry.MarkRestarted(workerID, false)
+			v.recordRestartLog(workerID, false, startTime, reasonCode)
 			return false
 		case <-time.After(stabilize):
 		}
 		v.registry.MarkRestarted(workerID, true)
+		v.recordRestartLog(workerID, true, startTime, reasonCode)
 		return true
 	}
 
 	log.Printf("[%s] health check failed after restart", workerID)
 	v.registry.MarkRestarted(workerID, false)
+	v.recordRestartLog(workerID, false, startTime, reasonCode)
 	return false
 }
 
@@ -191,4 +222,37 @@ func (v *VPNRotator) restartContainer(ctx context.Context, container string) err
 		return fmt.Errorf("docker restart %s failed: %v (%s)", container, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// recordRestartLog persists a restart event to Redis and emits metrics.
+func (v *VPNRotator) recordRestartLog(workerID string, success bool, startTime time.Time, reasonCode string) {
+	if strings.TrimSpace(reasonCode) == "" {
+		reasonCode = "unknown"
+	}
+	duration := time.Since(startTime)
+	durationMs := duration.Milliseconds()
+
+	// Log structured event
+	if success {
+		log.Printf("[%s] restart complete: success=true duration_ms=%d", workerID, durationMs)
+	} else {
+		log.Printf("[%s] restart failed: success=false duration_ms=%d", workerID, durationMs)
+	}
+
+	// Metrics
+	metrics.ObserveRestartDuration(workerID, success, duration.Seconds())
+	metrics.IncRestartReason(workerID, reasonCode, success)
+
+	// Redis persistence (fire-and-forget)
+	worker := v.registry.GetWorker(workerID)
+	entry := utils.RestartLogEntry{
+		WorkerID:        workerID,
+		Success:         success,
+		DurationMs:      durationMs,
+		ProbeFailures:   worker.ProbeFailures,
+		RestartFailures: worker.RestartFailures,
+		Quarantine:      !worker.QuarantineUntil.IsZero() && time.Now().Before(worker.QuarantineUntil),
+		ReasonCode:      reasonCode,
+	}
+	_ = utils.LogRestart(entry) // ignore error — Redis best-effort
 }

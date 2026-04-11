@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"sync"
 	"time"
+
+	"gateway-go/metrics"
 )
 
 const uptimeRestartInterval = 24 * time.Hour
@@ -137,6 +139,7 @@ func (r *WorkerRegistry) MarkRateLimited(workerID string) {
 		w.LastRateLimit = time.Now()
 		w.Failures++
 		log.Printf("[%s] marked as rate limited", workerID)
+		metrics.IncFailure(workerID, "rate_limit")
 	}
 }
 
@@ -151,6 +154,7 @@ func (r *WorkerRegistry) MarkFailure(workerID string) {
 		if !w.Restarting && !w.RestartScheduled && !w.BreakerOpen {
 			log.Printf("[%s] marked as failed (failures=%d)", workerID, w.Failures)
 		}
+		metrics.IncFailure(workerID, "probe")
 	}
 }
 
@@ -223,6 +227,8 @@ func (r *WorkerRegistry) MarkRestarted(workerID string, success bool) {
 		w.RestartEvents = nil
 		w.BreakerOpen = false
 		log.Printf("[%s] restarted successfully", workerID)
+		metrics.IncRestart(workerID, true)
+		metrics.SetHealth(workerID, true)
 		return
 	}
 
@@ -264,6 +270,8 @@ func (r *WorkerRegistry) MarkRestarted(workerID string, success bool) {
 	w.RestartScheduled = true
 	w.BreakerOpen = true
 	log.Printf("[%s] restart failed; retry after %ds", workerID, delay)
+	metrics.IncRestart(workerID, false)
+	metrics.SetHealth(workerID, false)
 }
 
 func (r *WorkerRegistry) OpenCircuit(workerID string) {
@@ -301,6 +309,7 @@ func (r *WorkerRegistry) SetHealthy(workerID string, healthy bool) {
 			w.BreakerOpen = false
 			w.DegradedUntil = time.Time{}
 		}
+		metrics.SetHealth(workerID, healthy)
 	}
 }
 
@@ -326,6 +335,7 @@ func (r *WorkerRegistry) RecordProbe(workerID string, healthy bool) {
 		w.Healthy = true
 		w.BreakerOpen = false
 		w.DegradedUntil = time.Time{}
+		metrics.SetHealth(workerID, true)
 		return
 	}
 
@@ -335,6 +345,8 @@ func (r *WorkerRegistry) RecordProbe(workerID string, healthy bool) {
 			log.Printf("[%s] marked unhealthy after %d consecutive failed probes", workerID, w.ProbeFailures)
 		}
 		w.Healthy = false
+		metrics.IncFailure(workerID, "probe")
+		metrics.SetHealth(workerID, false)
 	}
 }
 
@@ -375,6 +387,7 @@ func (r *WorkerRegistry) IncrementActive(workerID string) {
 	defer r.mu.Unlock()
 	if w := r.getWorkerUnlocked(workerID); w != nil {
 		w.ActiveRequests++
+		metrics.SetActiveRequests(workerID, w.ActiveRequests)
 	}
 }
 
@@ -383,6 +396,7 @@ func (r *WorkerRegistry) DecrementActive(workerID string) {
 	defer r.mu.Unlock()
 	if w := r.getWorkerUnlocked(workerID); w != nil && w.ActiveRequests > 0 {
 		w.ActiveRequests--
+		metrics.SetActiveRequests(workerID, w.ActiveRequests)
 	}
 }
 
@@ -421,5 +435,14 @@ func (r *WorkerRegistry) WorkersSnapshot() []Worker {
 	for _, w := range r.workers {
 		out = append(out, *w)
 	}
+	// Update aggregate metrics
+	metrics.SetGatewayWorkers(len(r.workers))
+	healthyCount := 0
+	for _, w := range r.workers {
+		if w.Healthy && !w.Restarting && !w.RestartScheduled && !w.BreakerOpen {
+			healthyCount++
+		}
+	}
+	metrics.SetGatewayHealthyWorkers(healthyCount)
 	return out
 }

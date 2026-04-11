@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"gateway-go/delivery"
+	"gateway-go/metrics"
 )
 
 // isIPCNetworkError reports whether an IPC call failure is a network-level
@@ -75,6 +76,11 @@ func (h *Handlers) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		status = "healthy"
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": status, "workers": rows})
+}
+
+// handleMetrics exposes Prometheus metrics.
+func (h *Handlers) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	metrics.ServeHTTP(w, r)
 }
 
 // handleFetch routes to IPC or proxy.

@@ -11,12 +11,21 @@ import (
 
 	"gateway-go/delivery"
 	"gateway-go/handlers"
+	"gateway-go/metrics"
 	"gateway-go/registry"
 	"gateway-go/utils"
 )
 
 func main() {
 	cfg := utils.LoadConfig()
+
+	// Initialize Prometheus metrics registry
+	metrics.Register()
+
+	// Initialize Redis-backed restart log (best-effort, non-fatal if Redis unavailable)
+	if err := utils.InitRedis(cfg.RedisURL); err != nil {
+		log.Printf("WARNING: restart log Redis unavailable: %v", err)
+	}
 
 	// Base HTTP client for upstream media requests.
 	baseTransport := &http.Transport{

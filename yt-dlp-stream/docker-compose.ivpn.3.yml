@@ -1,0 +1,358 @@
+services:
+  gluetun-1:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-1
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8001:8000"
+      - "9487:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=ivpn
+      - VPN_TYPE=wireguard
+      - IPV6=on
+      - WIREGUARD_PRIVATE_KEY=8OhkBg0OEL1rODzpMBsPlKK4d4Uemm0ZrjA3TH411Vo=
+      - WIREGUARD_ADDRESSES=172.30.68.226/32,fd00:4956:504e:ffff::ac1e:44e2/128
+      - SERVER_CITIES=Tokyo
+      - DNS_ADDRESS=172.16.0.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data1:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-ivpn-network:
+        aliases:
+          - gluetun-1
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-1:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-1
+    network_mode: "service:gluetun-1"
+    depends_on:
+      - gluetun-1
+      - redis
+    environment:
+      - WORKER_ID=w1
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  gluetun-2:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-2
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8002:8000"
+      - "9488:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=ivpn
+      - VPN_TYPE=wireguard
+      - IPV6=on
+      - WIREGUARD_PRIVATE_KEY=8OhkBg0OEL1rODzpMBsPlKK4d4Uemm0ZrjA3TH411Vo=
+      - WIREGUARD_ADDRESSES=172.30.68.226/32,fd00:4956:504e:ffff::ac1e:44e2/128
+      - SERVER_CITIES=Kuala Lumpur
+      - DNS_ADDRESS=172.16.0.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data2:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-ivpn-network:
+        aliases:
+          - gluetun-2
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-2:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-2
+    network_mode: "service:gluetun-2"
+    depends_on:
+      - gluetun-2
+      - redis
+    environment:
+      - WORKER_ID=w2
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  gluetun-3:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-3
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8003:8000"
+      - "9489:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=ivpn
+      - VPN_TYPE=wireguard
+      - IPV6=on
+      - WIREGUARD_PRIVATE_KEY=8OhkBg0OEL1rODzpMBsPlKK4d4Uemm0ZrjA3TH411Vo=
+      - WIREGUARD_ADDRESSES=172.30.68.226/32,fd00:4956:504e:ffff::ac1e:44e2/128
+      - SERVER_CITIES=Singapore
+      - DNS_ADDRESS=172.16.0.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data3:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-ivpn-network:
+        aliases:
+          - gluetun-3
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-3:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-3
+    network_mode: "service:gluetun-3"
+    depends_on:
+      - gluetun-3
+      - redis
+    environment:
+      - WORKER_ID=w3
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  gluetun-4:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-4
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8004:8000"
+      - "9490:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=ivpn
+      - VPN_TYPE=wireguard
+      - IPV6=on
+      - WIREGUARD_PRIVATE_KEY=OJrsTlMTDxYKbogfffDzULgK5vZNoTR4CbHc2cpYZlY=
+      - WIREGUARD_ADDRESSES=172.19.163.227/32,fd00:4956:504e:ffff::ac13:a3e3/128
+      - SERVER_CITIES=Hong Kong
+      - DNS_ADDRESS=172.16.0.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data4:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-ivpn-network:
+        aliases:
+          - gluetun-4
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-4:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-4
+    network_mode: "service:gluetun-4"
+    depends_on:
+      - gluetun-4
+      - redis
+    environment:
+      - WORKER_ID=w4
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  gluetun-5:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-5
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8005:8000"
+      - "9491:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=ivpn
+      - VPN_TYPE=wireguard
+      - IPV6=on
+      - WIREGUARD_PRIVATE_KEY=+CfoMs00oy2QChz/P24/sJe0prvJFGu1SDJxuH4DGn8=
+      - WIREGUARD_ADDRESSES=172.26.189.218/32,fd00:4956:504e:ffff::ac1a:bdda/128
+      - SERVER_CITIES=Taipei
+      - DNS_ADDRESS=172.16.0.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data5:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-ivpn-network:
+        aliases:
+          - gluetun-5
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-5:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-5
+    network_mode: "service:gluetun-5"
+    depends_on:
+      - gluetun-5
+      - redis
+    environment:
+      - WORKER_ID=w5
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ytdlp-redis
+    volumes:
+      - redis-data:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    networks:
+      ytdlp-ivpn-network:
+        ipv4_address: 172.30.0.250
+
+  gateway-ivpn:
+    build:
+      context: .
+      dockerfile: gateway-go/Dockerfile
+    container_name: ytdlp-gateway-ivpn
+    ports:
+      - "9111:9111"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - GATEWAY_PORT=9111
+      - WORKER_COUNT=5
+      - EXTRACTOR_IPC_ENABLED=true
+      - YOUTUBE_FETCH_IPV6_ONLY=true
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - MAX_RETRIES=3
+      - HEALTH_CHECK_TIMEOUT_MS=15000
+      - HEALTH_MONITOR_INTERVAL_MS=5000
+      - HEALTH_FAILURE_THRESHOLD=3
+      - RATE_LIMIT_COOLDOWN=300
+      - DRAIN_POLL_INTERVAL_MS=350
+      - DRAIN_TIMEOUT_SECONDS=120
+      - RESTART_BACKOFF_BASE=10
+      - RESTART_BACKOFF_MAX=90
+      - RESTART_BACKOFF_JITTER=2
+      - DEGRADED_RETRY_AFTER=5
+      - DEGRADED_TIMEOUT_SECONDS=30
+      - RESTART_STABILIZE_SECONDS=5
+      - UNHEALTHY_RESTART_THRESHOLD=6
+    depends_on:
+      - gluetun-1
+      - gluetun-2
+      - gluetun-3
+      - gluetun-4
+      - gluetun-5
+      - ytdlp-1
+      - ytdlp-2
+      - ytdlp-3
+      - ytdlp-4
+      - ytdlp-5
+      - redis
+    restart: unless-stopped
+    networks:
+      - ytdlp-ivpn-network
+
+networks:
+  ytdlp-ivpn-network:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+        - subnet: fd00:30::/64
+
+volumes:
+  redis-data:

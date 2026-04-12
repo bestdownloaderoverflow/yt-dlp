@@ -141,8 +141,8 @@ func (e *extractorAdapter) ExtractInfo(wid, url, proxy, impersonate string) (map
 	r, err, network := e.pool.ExtractInfo(wid, url, proxy, impersonate)
 	return r, wrapIPCErr(err), network
 }
-func (e *extractorAdapter) Fetch(wid, url, proxy, impersonate string) (map[string]any, *handlers.IPCError, error) {
-	r, err, network := e.pool.Fetch(wid, url, proxy, impersonate)
+func (e *extractorAdapter) Fetch(wid, url, proxy, impersonate string, forceIPv6 bool) (map[string]any, *handlers.IPCError, error) {
+	r, err, network := e.pool.Fetch(wid, url, proxy, impersonate, forceIPv6)
 	return r, wrapIPCErr(err), network
 }
 func (e *extractorAdapter) TikTok(wid, url, proxy, impersonate string) (map[string]any, *handlers.IPCError, error) {

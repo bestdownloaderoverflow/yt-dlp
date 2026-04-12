@@ -137,13 +137,16 @@ func (p *ExtractorPool) ExtractInfo(workerID, url, proxy, impersonate string) (m
 	return p.call(workerID, "extract_info", params)
 }
 
-func (p *ExtractorPool) Fetch(workerID, url, proxy, impersonate string) (map[string]any, *ipcError, error) {
+func (p *ExtractorPool) Fetch(workerID, url, proxy, impersonate string, forceIPv6 bool) (map[string]any, *ipcError, error) {
 	params := map[string]any{"url": url}
 	if proxy != "" {
 		params["proxy"] = proxy
 	}
 	if impersonate != "" {
 		params["impersonate"] = impersonate
+	}
+	if forceIPv6 {
+		params["force_ipv6"] = true
 	}
 	return p.call(workerID, "fetch", params)
 }

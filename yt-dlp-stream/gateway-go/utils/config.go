@@ -10,6 +10,9 @@ type Config struct {
 	GatewayPort               int
 	WorkerCount               int
 	ExtractorIPCEnabled       bool
+	YouTubeFetchIPv6Only      bool
+	YouTubeFetchWorker        string
+	YouTubeFetchWorkers       []string
 	ExtractorPythonBin        string
 	ExtractorWorkerPath       string
 	ExtractorTimeoutMs        int
@@ -40,10 +43,19 @@ type Config struct {
 }
 
 func LoadConfig() Config {
+	youtubeFetchWorker := strings.ToLower(strings.TrimSpace(getenvDefault("YOUTUBE_FETCH_WORKER", "")))
+	youtubeFetchWorkers := parseWorkerList(getenvDefault("YOUTUBE_FETCH_WORKERS", ""))
+	if len(youtubeFetchWorkers) == 0 && youtubeFetchWorker != "" {
+		youtubeFetchWorkers = []string{youtubeFetchWorker}
+	}
+
 	return Config{
 		GatewayPort:               envInt("GATEWAY_PORT", 9111),
 		WorkerCount:               envInt("WORKER_COUNT", 3),
 		ExtractorIPCEnabled:       envBool("EXTRACTOR_IPC_ENABLED", false),
+		YouTubeFetchIPv6Only:      envBool("YOUTUBE_FETCH_IPV6_ONLY", false),
+		YouTubeFetchWorker:        youtubeFetchWorker,
+		YouTubeFetchWorkers:       youtubeFetchWorkers,
 		ExtractorPythonBin:        getenvDefault("EXTRACTOR_PYTHON_BIN", "python3"),
 		ExtractorWorkerPath:       getenvDefault("EXTRACTOR_WORKER_PATH", "../extractor/worker_daemon.py"),
 		ExtractorTimeoutMs:        envInt("EXTRACTOR_TIMEOUT_MS", 45000),
@@ -106,6 +118,27 @@ func getenvDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func parseWorkerList(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	seen := make(map[string]struct{}, len(parts))
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		w := strings.ToLower(strings.TrimSpace(part))
+		if w == "" {
+			continue
+		}
+		if _, ok := seen[w]; ok {
+			continue
+		}
+		seen[w] = struct{}{}
+		out = append(out, w)
+	}
+	return out
 }
 
 func ParseBoolQuery(raw string, fallback bool) bool {

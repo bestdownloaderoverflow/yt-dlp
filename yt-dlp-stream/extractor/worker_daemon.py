@@ -249,7 +249,13 @@ def _fetch(params: Dict[str, Any]) -> Dict[str, Any]:
 
     proxy = params.get("proxy")
     impersonate = params.get("impersonate")
-    info = ydl_manager.extract_info(url, proxy=proxy, impersonate=impersonate)
+    force_ipv6 = bool(params.get("force_ipv6", False))
+    info = ydl_manager.extract_info(
+        url,
+        proxy=proxy,
+        impersonate=impersonate,
+        force_ipv6=force_ipv6,
+    )
     if not info:
         raise ValueError("Could not extract video info")
 

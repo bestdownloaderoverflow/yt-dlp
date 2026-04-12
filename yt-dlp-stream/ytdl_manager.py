@@ -62,8 +62,13 @@ class YoutubeDLManager:
         self._cleanup_interval = 3600  # Cleanup every hour
         self._last_cleanup = time.time()
 
+    @staticmethod
+    def _build_opts_key(proxy: Optional[str], impersonate: Optional[str], force_ipv6: bool) -> str:
+        return f"{proxy or 'none'}:{impersonate or 'none'}:{'v6' if force_ipv6 else 'default'}"
+
     def _create_ydl(self, proxy: Optional[str] = None,
-                    impersonate: Optional[str] = None) -> yt_dlp.YoutubeDL:
+                    impersonate: Optional[str] = None,
+                    force_ipv6: bool = False) -> yt_dlp.YoutubeDL:
         """Create new YoutubeDL instance dengan given options."""
         opts = {
             "quiet": True,
@@ -79,6 +84,9 @@ class YoutubeDLManager:
         }
         if proxy:
             opts["proxy"] = proxy
+        if force_ipv6:
+            # Force outbound socket bind to IPv6 family only.
+            opts["source_address"] = "::"
         if impersonate:
             target_str = impersonate if isinstance(impersonate, str) else str(impersonate)
             with YoutubeDLManager._impersonate_cache_lock:
@@ -155,14 +163,15 @@ class YoutubeDLManager:
             self._periodic_cleanup_locked()
 
     def _get_ydl(self, proxy: Optional[str] = None,
-                 impersonate: Optional[str] = None) -> yt_dlp.YoutubeDL:
+                 impersonate: Optional[str] = None,
+                 force_ipv6: bool = False) -> yt_dlp.YoutubeDL:
         """
         Get existing atau create new YoutubeDL instance per config.
 
         CRITICAL: Setiap config punya instance sendiri, jadi CookieJar
         tidak di-reset. Ini memastikan session integrity preserved.
         """
-        opts_key = f"{proxy or 'none'}:{impersonate or 'none'}"
+        opts_key = self._build_opts_key(proxy, impersonate, force_ipv6)
 
         with self._global_lock:
             # Periodic cleanup
@@ -174,7 +183,7 @@ class YoutubeDLManager:
                     self._locks[opts_key] = threading.Lock()
 
                 self._ydl_instances[opts_key] = {
-                    'instance': self._create_ydl(proxy, impersonate),
+                    'instance': self._create_ydl(proxy, impersonate, force_ipv6),
                     'created': time.time(),
                     'last_used': time.time(),
                 }
@@ -190,17 +199,18 @@ class YoutubeDLManager:
             return self._ydl_instances[opts_key]['instance']
 
     def extract_info(self, url: str, proxy: Optional[str] = None,
-                     impersonate: Optional[str] = None) -> Dict:
+                     impersonate: Optional[str] = None,
+                     force_ipv6: bool = False) -> Dict:
         """
         Thread-safe extract_info dengan session integrity.
 
         Locking diperlukan karena yt_dlp tidak thread-safe.
         Setiap config punya lock sendiri untuk better concurrency.
         """
-        opts_key = f"{proxy or 'none'}:{impersonate or 'none'}"
+        opts_key = self._build_opts_key(proxy, impersonate, force_ipv6)
 
         # Get ydl instance (creates if needed)
-        ydl = self._get_ydl(proxy, impersonate)
+        ydl = self._get_ydl(proxy, impersonate, force_ipv6)
 
         # Lock per-instance, bukan global
         with self._locks[opts_key]:
@@ -219,8 +229,8 @@ class YoutubeDLManager:
                         proxy: Optional[str] = None,
                         impersonate: Optional[str] = None) -> List[Dict]:
         """Resolve format string menggunakan yt_dlp's format selector."""
-        opts_key = f"{proxy or 'none'}:{impersonate or 'none'}"
-        ydl = self._get_ydl(proxy, impersonate)
+        opts_key = self._build_opts_key(proxy, impersonate, False)
+        ydl = self._get_ydl(proxy, impersonate, False)
 
         with self._locks[opts_key]:
             try:
@@ -254,8 +264,8 @@ class YoutubeDLManager:
 
         Ini yang memastikan session cookies dikirim dengan request.
         """
-        opts_key = f"{proxy or 'none'}:{impersonate or 'none'}"
-        ydl = self._get_ydl(proxy, impersonate)
+        opts_key = self._build_opts_key(proxy, impersonate, False)
+        ydl = self._get_ydl(proxy, impersonate, False)
 
         with self._locks[opts_key]:
             try:
@@ -269,8 +279,8 @@ class YoutubeDLManager:
     def get_cookiejar(self, proxy: Optional[str] = None,
                       impersonate: Optional[str] = None):
         """Access cookiejar untuk debugging/monitoring."""
-        opts_key = f"{proxy or 'none'}:{impersonate or 'none'}"
-        ydl = self._get_ydl(proxy, impersonate)
+        opts_key = self._build_opts_key(proxy, impersonate, False)
+        ydl = self._get_ydl(proxy, impersonate, False)
 
         with self._locks[opts_key]:
             return ydl.cookiejar

@@ -44,7 +44,7 @@ type IPCError struct {
 
 type Extractor interface {
 	ExtractInfo(workerID, url, proxy, impersonate string) (map[string]any, *IPCError, error)
-	Fetch(workerID, url, proxy, impersonate string) (map[string]any, *IPCError, error)
+	Fetch(workerID, url, proxy, impersonate string, forceIPv6 bool) (map[string]any, *IPCError, error)
 	TikTok(workerID, url, proxy, impersonate string) (map[string]any, *IPCError, error)
 	TikTokDownloadPrepare(workerID, key string, download bool) (map[string]any, *IPCError, error)
 	TikTokDownloadRefresh(workerID, key string, download bool) (map[string]any, *IPCError, error)

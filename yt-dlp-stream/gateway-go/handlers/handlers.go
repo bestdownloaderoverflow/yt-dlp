@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -137,12 +138,37 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 	proxy := strings.TrimSpace(r.URL.Query().Get("proxy"))
 	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
 	preferred := extractWorkerID(r.URL.Query().Get("key"), h.Config.WorkerCount)
-	workerID := h.selectExtractorWorker(preferred, false)
+	isYouTube := isYouTubeURL(url)
+	forceIPv6 := h.Config.YouTubeFetchIPv6Only && isYouTube
+
+	workerID := ""
+	if forceIPv6 && len(h.Config.YouTubeFetchWorkers) > 0 {
+		eligible := make([]string, 0, len(h.Config.YouTubeFetchWorkers))
+		for _, configuredWorker := range h.Config.YouTubeFetchWorkers {
+			if !h.Extractor.HasWorker(configuredWorker) {
+				continue
+			}
+			candidate := h.Registry.GetWorker(configuredWorker)
+			if h.isWorkerAcceptingRequests(candidate) {
+				eligible = append(eligible, configuredWorker)
+			}
+		}
+		if len(eligible) == 0 {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error":  "YouTube IPv6 worker unavailable",
+				"detail": "No healthy worker available in configured YouTube IPv6 pool",
+			})
+			return
+		}
+		workerID = h.pickLeastLoadedExtractorWorker(eligible)
+	} else {
+		workerID = h.selectExtractorWorker(preferred, false)
+	}
 	if workerID == "" {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
-	result, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate)
+	result, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate, forceIPv6)
 	if err != nil {
 		log.Printf("[extractor:%s] fetch ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -353,7 +379,7 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
-	fetchResult, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate)
+	fetchResult, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate, false)
 	if err != nil {
 		log.Printf("[extractor:%s] stream fetch ipc error: %v", workerID, err)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -441,6 +467,20 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		return
 	}
 	h.Delivery.StreamDirect(w, r, workerID, plan, refreshFn)
+}
+
+func isYouTubeURL(rawURL string) bool {
+	parsed, err := neturl.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		lower := strings.ToLower(rawURL)
+		return strings.Contains(lower, "youtube.com") || strings.Contains(lower, "youtu.be")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return host == "youtube.com" ||
+		host == "www.youtube.com" ||
+		host == "m.youtube.com" ||
+		host == "music.youtube.com" ||
+		host == "youtu.be"
 }
 
 // handleTikTok POST endpoint

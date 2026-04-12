@@ -121,6 +121,16 @@ def _detect_content_type(info: Dict[str, Any]) -> str:
     return "video"
 
 
+def _extract_source(info: Dict[str, Any], platform: str) -> Optional[str]:
+    """Return extraction source marker for observability."""
+    if platform in {"tiktok", "douyin"}:
+        src = info.get("__tiktok_extract_source")
+        if isinstance(src, str) and src:
+            return src
+        return "web"
+    return None
+
+
 def _get_available_qualities(formats: list) -> list:
     heights = set()
     for fmt in formats:
@@ -267,6 +277,7 @@ def _fetch(params: Dict[str, Any]) -> Dict[str, Any]:
     response = {
         "type": content_type,
         "platform": platform,
+        "extract_source": _extract_source(info, platform),
         "id": info.get("id"),
         "title": info.get("title"),
         "uploader": info.get("uploader"),
@@ -654,6 +665,7 @@ def _tiktok(params: Dict[str, Any]) -> Dict[str, Any]:
             audio_format = next((f for f in formats if f.get("format_id") == "audio"), None)
             return {
                 "status": "picker",
+                "extract_source": _extract_source(info, "tiktok"),
                 "title": info.get("title") or info.get("fulltitle", ""),
                 "description": info.get("description") or info.get("title", ""),
                 "statistics": statistics,
@@ -677,6 +689,7 @@ def _tiktok(params: Dict[str, Any]) -> Dict[str, Any]:
         )
         return {
             "status": "tunnel",
+            "extract_source": _extract_source(info, "tiktok"),
             "title": info.get("title") or info.get("fulltitle", ""),
             "description": info.get("description") or info.get("title", ""),
             "statistics": statistics,

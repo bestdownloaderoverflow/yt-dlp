@@ -60,6 +60,7 @@ class TikTokStatistics(BaseModel):
 class TikTokVideoResponse(BaseModel):
     """Response for TikTok video."""
     status: str = "tunnel"
+    extract_source: Optional[str] = None
     title: str = ""
     description: str = ""
     statistics: TikTokStatistics
@@ -75,6 +76,7 @@ class TikTokVideoResponse(BaseModel):
 class TikTokPhotoResponse(BaseModel):
     """Response for TikTok photo slideshow."""
     status: str = "picker"
+    extract_source: Optional[str] = None
     title: str = ""
     description: str = ""
     statistics: TikTokStatistics
@@ -153,6 +155,13 @@ def is_photo_content(info: dict) -> bool:
         f.get("format_id", "").startswith("image-")
         for f in formats
     )
+
+
+def get_extract_source(info: dict) -> Optional[str]:
+    src = info.get("__tiktok_extract_source")
+    if isinstance(src, str) and src:
+        return src
+    return "web"
 
 
 def extract_author_info(info: dict) -> TikTokAuthor:
@@ -565,6 +574,7 @@ async def process_tiktok(
 
             return TikTokPhotoResponse(
                 status="picker",
+                extract_source=get_extract_source(info),
                 title=info.get("title") or info.get("fulltitle", ""),
                 description=info.get("description") or info.get("title", ""),
                 statistics=statistics,
@@ -593,6 +603,7 @@ async def process_tiktok(
 
             return TikTokVideoResponse(
                 status="tunnel",
+                extract_source=get_extract_source(info),
                 title=info.get("title") or info.get("fulltitle", ""),
                 description=info.get("description") or info.get("title", ""),
                 statistics=statistics,

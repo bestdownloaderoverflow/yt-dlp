@@ -560,6 +560,7 @@ class TikTokBaseIE(InfoExtractor):
                 is_private='Private' in labels,
                 needs_subscription='Friends only' in labels,
                 is_unlisted='Followers only' in labels),
+            '__tiktok_extract_source': 'app',
             '_format_sort_fields': ('quality', 'codec', 'size', 'br'),
         }
 
@@ -730,6 +731,7 @@ class TikTokBaseIE(InfoExtractor):
                 for cover_id in ('thumbnail', 'cover', 'dynamicCover', 'originCover')
                 for cover_url in traverse_obj(aweme_detail, ((None, 'video'), cover_id, {url_or_none}))
             ],
+            '__tiktok_extract_source': 'web',
         }
 
 

@@ -19,6 +19,16 @@ AUDIO_FORMAT = "bestaudio[ext=m4a]/bestaudio/best"
 DIRECT_PROXY_PLATFORMS = {"twitter", "x"}
 
 
+def get_extract_source(info: dict, platform: str) -> Optional[str]:
+    """Return extraction source marker for observability."""
+    if platform in {"tiktok", "douyin"}:
+        src = info.get("__tiktok_extract_source")
+        if isinstance(src, str) and src:
+            return src
+        return "web"
+    return None
+
+
 def detect_content_type(info: dict) -> str:
     """Detect if content is video, photos, or playlist."""
     if info.get("_type") == "playlist":
@@ -229,6 +239,7 @@ async def fetch(
         response = {
             "type": content_type,
             "platform": platform,
+            "extract_source": get_extract_source(info, platform),
             "id": info.get("id"),
             "title": info.get("title"),
             "uploader": info.get("uploader"),

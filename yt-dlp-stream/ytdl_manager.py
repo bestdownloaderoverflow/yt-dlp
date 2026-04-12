@@ -10,12 +10,19 @@ Key improvements:
 import threading
 import logging
 import time
+import os
+import random
 from typing import Optional, Dict, Any, List
 from collections import OrderedDict
 import yt_dlp
 from yt_dlp.networking.impersonate import ImpersonateTarget
 
 logger = logging.getLogger("uvicorn.error")
+
+
+def _default_tiktok_device_id() -> str:
+    """Return a stable process-level random TikTok-like device id (19 digits)."""
+    return str(random.randint(7250000000000000000, 7325099899999994577))
 
 
 def _check_impersonate_available(target: str) -> bool:
@@ -61,6 +68,28 @@ class YoutubeDLManager:
         self._max_instances = 10  # LRU cache size
         self._cleanup_interval = 3600  # Cleanup every hour
         self._last_cleanup = time.time()
+        self._tiktok_device_id = os.getenv("TIKTOK_DEVICE_ID", _default_tiktok_device_id()).strip()
+        self._tiktok_app_name = os.getenv("TIKTOK_APP_NAME", "trill").strip() or "trill"
+        self._tiktok_app_version = os.getenv("TIKTOK_APP_VERSION", "34.1.2").strip() or "34.1.2"
+        self._tiktok_manifest_app_version = (
+            os.getenv("TIKTOK_MANIFEST_APP_VERSION", "2023401020").strip() or "2023401020"
+        )
+        self._tiktok_aid = os.getenv("TIKTOK_AID", "1180").strip() or "1180"
+        # Optional full override (single value or comma-separated values).
+        self._tiktok_app_info_override = os.getenv("TIKTOK_APP_INFO", "").strip()
+
+    def _build_tiktok_app_info_list(self) -> List[str]:
+        if self._tiktok_app_info_override:
+            return [v.strip() for v in self._tiktok_app_info_override.split(",") if v.strip()]
+        return [
+            (
+                f"{self._tiktok_device_id}/"
+                f"{self._tiktok_app_name}/"
+                f"{self._tiktok_app_version}/"
+                f"{self._tiktok_manifest_app_version}/"
+                f"{self._tiktok_aid}"
+            )
+        ]
 
     @staticmethod
     def _build_opts_key(proxy: Optional[str], impersonate: Optional[str], force_ipv6: bool) -> str:
@@ -81,6 +110,15 @@ class YoutubeDLManager:
             "retries": 2,
             "fragment_retries": 2,
             "extractor_retries": 2,
+            # Force TikTok extractor to try mobile API first.
+            # If mobile API path fails, yt-dlp TikTok extractor already
+            # falls back to web extraction automatically.
+            "extractor_args": {
+                "tiktok": {
+                    "app_info": self._build_tiktok_app_info_list(),
+                    "device_id": [self._tiktok_device_id],
+                }
+            },
         }
         if proxy:
             opts["proxy"] = proxy

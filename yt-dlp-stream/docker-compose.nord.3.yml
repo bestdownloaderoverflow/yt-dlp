@@ -12,7 +12,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=nordvpn
       - VPN_TYPE=wireguard
-      - IPV6=on
+      - IPV6=off
       - WIREGUARD_PRIVATE_KEY=JgKkogTMmm4xkf/J6mg2GAUINICvLTWVhaWfANPfid8=
       - SERVER_COUNTRIES=Indonesia
       - WIREGUARD_MTU=1280
@@ -68,7 +68,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=nordvpn
       - VPN_TYPE=wireguard
-      - IPV6=on
+      - IPV6=off
       - WIREGUARD_PRIVATE_KEY=JgKkogTMmm4xkf/J6mg2GAUINICvLTWVhaWfANPfid8=
       - SERVER_COUNTRIES=Taiwan
       - WIREGUARD_MTU=1280
@@ -124,7 +124,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=nordvpn
       - VPN_TYPE=wireguard
-      - IPV6=on
+      - IPV6=off
       - WIREGUARD_PRIVATE_KEY=JgKkogTMmm4xkf/J6mg2GAUINICvLTWVhaWfANPfid8=
       - SERVER_COUNTRIES=Singapore
       - WIREGUARD_MTU=1280
@@ -191,7 +191,7 @@ services:
       - GATEWAY_PORT=9111
       - WORKER_COUNT=3
       - EXTRACTOR_IPC_ENABLED=true
-      - YOUTUBE_FETCH_IPV6_ONLY=true
+      - YOUTUBE_FETCH_IPV6_ONLY=false
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
       - MAX_RETRIES=3
       - HEALTH_CHECK_TIMEOUT_MS=15000

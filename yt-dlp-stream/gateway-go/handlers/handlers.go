@@ -71,6 +71,28 @@ func ipcErrorType(err error) string {
 	}
 }
 
+// isRetryableTikTokRPCError marks transient TikTok semantic failures that are
+// worth retrying on another worker/IP (same URL, different VPN exit).
+func isRetryableTikTokRPCError(rpcErr *IPCError) bool {
+	if rpcErr == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(rpcErr.Message))
+	code := strings.ToLower(strings.TrimSpace(rpcErr.Code))
+	switch {
+	case strings.Contains(msg, "unexpected response from webpage request"):
+		return true
+	case strings.Contains(msg, "verify you are human"),
+		strings.Contains(msg, "captcha"),
+		strings.Contains(msg, "challenge"):
+		return true
+	case strings.Contains(msg, "try again later"),
+		strings.Contains(msg, "temporarily unavailable"):
+		return true
+	}
+	return rpcErr.Status >= 500 && (code == "internal_error" || code == "download_error")
+}
+
 func isYouTubePlatform(platform string) bool {
 	switch strings.ToLower(strings.TrimSpace(platform)) {
 	case "youtube", "youtube:tab", "youtube:shorts":
@@ -567,16 +589,29 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 			return
 		}
 		result, rpcErr, err = h.Extractor.TikTok(workerID, payload.URL, payload.Proxy, payload.Impersonate)
+		if err != nil {
+			if !isIPCNetworkError(err) {
+				break
+			}
+			log.Printf("[extractor:%s] tiktok ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
+			metrics.IncIPCError(workerID, "tiktok", ipcErrorType(err))
+			tried[workerID] = true
+			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
+			continue
+		}
+		if rpcErr != nil && isRetryableTikTokRPCError(rpcErr) {
+			log.Printf(
+				"[extractor:%s] tiktok rpc retryable error (attempt %d/%d): %s",
+				workerID, attempt+1, maxAttempts, rpcErr.Message,
+			)
+			tried[workerID] = true
+			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
+			rpcErr = nil
+			continue
+		}
 		if err == nil {
 			break
 		}
-		if !isIPCNetworkError(err) {
-			break
-		}
-		log.Printf("[extractor:%s] tiktok ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
-		metrics.IncIPCError(workerID, "tiktok", ipcErrorType(err))
-		tried[workerID] = true
-		workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
@@ -628,17 +663,30 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 			return
 		}
 		planRaw, rpcErr, err = h.Extractor.TikTokDownloadPrepare(workerID, key, download)
+		if err != nil {
+			if !isIPCNetworkError(err) {
+				break
+			}
+			log.Printf("[extractor:%s] tiktok download prepare ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
+			metrics.IncIPCError(workerID, "tiktok_download_prepare", ipcErrorType(err))
+			tried[workerID] = true
+			// Session state lives in shared Redis, so any healthy worker can take over.
+			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
+			continue
+		}
+		if rpcErr != nil && isRetryableTikTokRPCError(rpcErr) {
+			log.Printf(
+				"[extractor:%s] tiktok download prepare retryable error (attempt %d/%d): %s",
+				workerID, attempt+1, maxAttempts, rpcErr.Message,
+			)
+			tried[workerID] = true
+			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
+			rpcErr = nil
+			continue
+		}
 		if err == nil {
 			break
 		}
-		if !isIPCNetworkError(err) {
-			break
-		}
-		log.Printf("[extractor:%s] tiktok download prepare ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
-		metrics.IncIPCError(workerID, "tiktok_download_prepare", ipcErrorType(err))
-		tried[workerID] = true
-		// Session state lives in shared Redis, so any healthy worker can take over.
-		workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 	}
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})

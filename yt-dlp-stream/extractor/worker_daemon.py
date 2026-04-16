@@ -977,15 +977,14 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
         session.filesize = fmt.get("filesize") or fmt.get("filesize_approx")
         protocol = fmt.get("protocol")
         delivery = plan_delivery(resolved)
-        # Keep old behavior: mp3 is transcoded output.
-        # use_worker_mp3 signals the gateway to run ffmpeg inside the worker
-        # container (1 VPN hop) instead of at the gateway (2 VPN hops).
+        # Keep MP3 as transcoded output, but let the gateway perform the
+        # download/transcode so VPN is only used during extraction.
         return {
             "protocol": protocol,
             "delivery_mode": delivery.mode,
             "needs_ffmpeg": True,
             "ffmpeg_audio_only": True,
-            "use_worker_mp3": True,
+            "use_worker_mp3": False,
         }
 
     if content_type == "video":

@@ -63,10 +63,11 @@ func (d *Delivery) StreamChunked(
 		"platform":         plan.Platform,
 		"ffmpeg_audio_url": plan.FFmpegAudioURL,
 		"photo_urls":       []string{plan.DirectURL},
+		"bypass_proxy":     plan.BypassProxy,
 	}
 	read := int64(0)
 	headersSent := false
-	mediaClient := d.mediaHTTPClient(workerID)
+	mediaClient := d.mediaHTTPClientForPlan(workerID, currentPlan)
 	refreshAttempts := 0
 	const maxRefreshAttempts = 10
 	const maxRetriesPerChunk = 3

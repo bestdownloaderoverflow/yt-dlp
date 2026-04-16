@@ -20,6 +20,13 @@ from yt_dlp.networking.impersonate import ImpersonateTarget
 logger = logging.getLogger("uvicorn.error")
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _default_tiktok_device_id() -> str:
     """Return a stable process-level random TikTok-like device id (19 digits)."""
     return str(random.randint(7250000000000000000, 7325099899999994577))
@@ -103,6 +110,9 @@ class YoutubeDLManager:
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
+            # Keep single-video behavior for watch URLs containing list/start_radio.
+            # Can be overridden with YTDLP_NO_PLAYLIST=false.
+            "noplaylist": _env_bool("YTDLP_NO_PLAYLIST", True),
             # Fail fast when VPN/upstream is slow so the Go gateway can
             # retry on a different worker within its own IPC timeout
             # window instead of blocking for 90s on a stuck request.

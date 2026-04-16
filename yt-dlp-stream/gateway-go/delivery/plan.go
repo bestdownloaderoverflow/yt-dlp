@@ -67,6 +67,7 @@ type DeliveryPlan struct {
 	FallbackProxy     bool     // Whether fallback proxy was needed
 	Key               string   // Session key for refresh
 	UseWorkerMP3      bool     // Run MP3 transcode inside worker container
+	BypassProxy       bool     // Skip worker proxy; use direct connection
 }
 
 // ResolveDeliveryMode decides which delivery mode to use based on the plan and route.
@@ -239,6 +240,9 @@ func PickStreamDownloadKey(fetchResult map[string]any, path, quality string) str
 }
 
 func shouldBypassWorkerProxy(plan map[string]any) bool {
+	if plan["bypass_proxy"] == true {
+		return true
+	}
 	platform := strings.ToLower(strings.TrimSpace(anyString(plan["platform"])))
 	if platform == "tiktok" || platform == "douyin" {
 		return true
@@ -325,6 +329,7 @@ func planToMap(p DeliveryPlan) map[string]any {
 		"fallback_proxy":         p.FallbackProxy,
 		"key":                    p.Key,
 		"use_worker_mp3":         p.UseWorkerMP3,
+		"bypass_proxy":           p.BypassProxy,
 	}
 }
 

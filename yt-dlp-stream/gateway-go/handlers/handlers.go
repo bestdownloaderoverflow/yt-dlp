@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +69,32 @@ func ipcErrorType(err error) string {
 	default:
 		return "network"
 	}
+}
+
+func isYouTubePlatform(platform string) bool {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "youtube", "youtube:tab", "youtube:shorts":
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handlers) maybePreferDirectYouTube(
+	ctx context.Context,
+	workerID string,
+	plan delivery.DeliveryPlan,
+) delivery.DeliveryPlan {
+	if !isYouTubePlatform(plan.Platform) {
+		return plan
+	}
+
+	plan.BypassProxy = true
+	if err := h.Delivery.ProbeDirectAccess(ctx, plan); err != nil {
+		log.Printf("[%s] youtube direct preflight failed (%v); falling back to worker proxy", workerID, err)
+		plan.BypassProxy = false
+	}
+	return plan
 }
 
 // handleRoot returns status JSON.
@@ -272,6 +299,7 @@ func (h *Handlers) handleDownloadViaExtractorIPC(w http.ResponseWriter, r *http.
 		return
 	}
 	plan := delivery.ParseDeliveryPlan(planRaw)
+	plan = h.maybePreferDirectYouTube(r.Context(), workerID, plan)
 	refreshFn := func() (delivery.DeliveryPlan, error) {
 		np, rpcErr, err := h.Extractor.DownloadRefresh(workerID, key, download)
 		if err != nil {
@@ -280,7 +308,9 @@ func (h *Handlers) handleDownloadViaExtractorIPC(w http.ResponseWriter, r *http.
 		if rpcErr != nil {
 			return delivery.DeliveryPlan{}, fmt.Errorf("extractor rpc error (%s): %s", rpcErr.Code, rpcErr.Message)
 		}
-		return delivery.ParseDeliveryPlan(np), nil
+		refreshedPlan := delivery.ParseDeliveryPlan(np)
+		refreshedPlan.BypassProxy = plan.BypassProxy
+		return refreshedPlan, nil
 	}
 
 	if plan.NeedsFFmpeg {
@@ -369,7 +399,9 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 			ResponseHeaders: respHeaders,
 			MediaType:       "audio/mp4",
 			CanRefresh:      false,
+			Platform:        "youtube",
 		}
+		plan = h.maybePreferDirectYouTube(r.Context(), workerID, plan)
 		h.Delivery.StreamDirect(w, r, workerID, plan, nil)
 		return
 	}
@@ -421,6 +453,7 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		return
 	}
 	plan := delivery.ParseDeliveryPlan(planRaw)
+	plan = h.maybePreferDirectYouTube(r.Context(), workerID, plan)
 	refreshFn := func() (delivery.DeliveryPlan, error) {
 		np, rpcErr, err := h.Extractor.DownloadRefresh(workerID, key, download)
 		if err != nil {
@@ -429,7 +462,9 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		if rpcErr != nil {
 			return delivery.DeliveryPlan{}, fmt.Errorf("extractor rpc error (%s): %s", rpcErr.Code, rpcErr.Message)
 		}
-		return delivery.ParseDeliveryPlan(np), nil
+		refreshedPlan := delivery.ParseDeliveryPlan(np)
+		refreshedPlan.BypassProxy = plan.BypassProxy
+		return refreshedPlan, nil
 	}
 
 	if plan.NeedsFFmpeg {

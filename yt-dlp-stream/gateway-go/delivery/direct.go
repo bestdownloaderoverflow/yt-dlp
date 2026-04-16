@@ -38,6 +38,7 @@ func (d *Delivery) StreamDirect(
 		"platform":         plan.Platform,
 		"ffmpeg_audio_url": plan.FFmpegAudioURL,
 		"photo_urls":       plan.PhotoURLs,
+		"bypass_proxy":     plan.BypassProxy,
 	}
 	currentReqHeaders := plan.RequestHeaders
 	currentRespHeaders := plan.ResponseHeaders

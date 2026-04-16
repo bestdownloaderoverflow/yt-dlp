@@ -54,6 +54,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=auto
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -112,6 +113,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=auto
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -170,6 +172,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=auto
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 

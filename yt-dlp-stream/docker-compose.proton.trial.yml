@@ -311,7 +311,7 @@ services:
       dockerfile: gateway-go/Dockerfile
     container_name: ytdlp-gateway-proton-trial
     ports:
-      - "9121:9111"
+      - "9111:9111"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:

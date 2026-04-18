@@ -213,41 +213,41 @@ def extract_format_headers(
     # Merge headers (format headers override global)
     headers = {**global_headers, **fmt_headers}
 
-    # Extract cookies using cookiejar directly (like serverpy)
+    # Always prefer calc_headers first: it can return __ydl_headers attached
+    # during extract_info(), preserving CookieJar/session affinity for pooled
+    # ydl instances.
     cookies = None
-    fmt_url = fmt.get("url") or url
+    try:
+        calc_headers = ydl_manager.calc_headers(
+            fmt,
+            load_cookies=True,
+            proxy=proxy,
+            impersonate=impersonate,
+        )
+        cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
+        # Add other headers from calc_headers
+        for k, v in calc_headers.items():
+            if k.lower() not in ("cookie", "accept-encoding"):
+                headers[k] = v
+    except Exception as e:
+        logger.debug(f"Could not calc_headers: {e}")
 
-    if fmt_url:
-        try:
-            # Try to get cookies from ydl_manager's cookiejar
-            cookiejar = ydl_manager.get_cookiejar(
-                proxy=proxy,
-                impersonate=impersonate,
-            )
-            if cookiejar and hasattr(cookiejar, 'get_cookie_header'):
-                cookie_header = cookiejar.get_cookie_header(fmt_url)
-                if cookie_header:
-                    cookies = cookie_header
-                    logger.debug(f"Extracted cookies for {fmt_url[:50]}...")
-        except Exception as e:
-            logger.debug(f"Could not extract cookies from cookiejar: {e}")
-
-    # Fallback to calc_headers if no cookies from cookiejar
+    # Legacy fallback: best-effort cookiejar lookup when calc_headers has no cookie.
     if not cookies:
-        try:
-            calc_headers = ydl_manager.calc_headers(
-                fmt,
-                load_cookies=True,
-                proxy=proxy,
-                impersonate=impersonate,
-            )
-            cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
-            # Add other headers from calc_headers
-            for k, v in calc_headers.items():
-                if k.lower() not in ("cookie", "accept-encoding"):
-                    headers[k] = v
-        except Exception as e:
-            logger.debug(f"Could not calc_headers: {e}")
+        fmt_url = fmt.get("url") or url
+        if fmt_url:
+            try:
+                cookiejar = ydl_manager.get_cookiejar(
+                    proxy=proxy,
+                    impersonate=impersonate,
+                )
+                if cookiejar and hasattr(cookiejar, 'get_cookie_header'):
+                    cookie_header = cookiejar.get_cookie_header(fmt_url)
+                    if cookie_header:
+                        cookies = cookie_header
+                        logger.debug(f"Extracted cookies for {fmt_url[:50]}...")
+            except Exception as e:
+                logger.debug(f"Could not extract cookies from cookiejar: {e}")
 
     # Clean up headers for httpx
     safe_headers = {

@@ -380,32 +380,34 @@ def _extract_format_headers(
     fmt_headers = fmt.get("http_headers", {})
     headers = {**global_headers, **fmt_headers}
 
+    # Prefer calc_headers first to preserve slot/session affinity through
+    # pre-attached __ydl_headers when ydl pooling is enabled.
     cookies = None
-    fmt_url = fmt.get("url") or url
-    if fmt_url:
-        try:
-            cookiejar = ydl_manager.get_cookiejar(proxy=proxy, impersonate=impersonate)
-            if cookiejar and hasattr(cookiejar, "get_cookie_header"):
-                cookie_header = cookiejar.get_cookie_header(fmt_url)
-                if cookie_header:
-                    cookies = cookie_header
-        except Exception:
-            pass
+    try:
+        calc_headers = ydl_manager.calc_headers(
+            fmt,
+            load_cookies=True,
+            proxy=proxy,
+            impersonate=impersonate,
+        )
+        cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
+        for k, v in calc_headers.items():
+            if k.lower() not in ("cookie", "accept-encoding"):
+                headers[k] = v
+    except Exception:
+        pass
 
     if not cookies:
-        try:
-            calc_headers = ydl_manager.calc_headers(
-                fmt,
-                load_cookies=True,
-                proxy=proxy,
-                impersonate=impersonate,
-            )
-            cookies = calc_headers.get("Cookie") or calc_headers.get("cookie")
-            for k, v in calc_headers.items():
-                if k.lower() not in ("cookie", "accept-encoding"):
-                    headers[k] = v
-        except Exception:
-            pass
+        fmt_url = fmt.get("url") or url
+        if fmt_url:
+            try:
+                cookiejar = ydl_manager.get_cookiejar(proxy=proxy, impersonate=impersonate)
+                if cookiejar and hasattr(cookiejar, "get_cookie_header"):
+                    cookie_header = cookiejar.get_cookie_header(fmt_url)
+                    if cookie_header:
+                        cookies = cookie_header
+            except Exception:
+                pass
 
     safe_headers = {
         k: v for k, v in headers.items()

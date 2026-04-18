@@ -370,14 +370,31 @@ class YoutubeDLManager:
                 self._request_count += 1
             try:
                 info = ydl.extract_info(url, download=False)
-                if isinstance(info, dict) and info.get("url"):
-                    info["http_headers"] = self._build_outbound_headers_locked(ydl, info)
+                # Attach cookie-aware headers from THIS instance to every format so
+                # that calc_headers() callers don't need to re-acquire a (possibly
+                # different) slot.  Without this, round-robin pooling causes a
+                # different CookieJar to be used for the Cookie header, breaking
+                # TikTok CDN requests that validate tt_chain_token per-session.
+                if isinstance(info, dict):
+                    self._attach_headers_locked(ydl, info)
                 return info
             except Exception as e:
                 logger.error(f"extract_info failed for {url}: {e}")
                 raise
         finally:
             self._release_ydl_slot(slot_key)
+
+    @staticmethod
+    def _attach_headers_locked(ydl: yt_dlp.YoutubeDL, info: Dict) -> None:
+        """Attach pre-computed cookie headers to info dict and all its formats."""
+        formats = info.get("formats")
+        if formats:
+            for fmt in formats:
+                if fmt.get("url"):
+                    fmt["__ydl_headers"] = YoutubeDLManager._build_outbound_headers_locked(ydl, fmt)
+        if info.get("url"):
+            info["__ydl_headers"] = YoutubeDLManager._build_outbound_headers_locked(ydl, info)
+            info["http_headers"] = info["__ydl_headers"]
 
     def resolve_formats(self, info: Dict, format_str: str,
                         proxy: Optional[str] = None,
@@ -417,7 +434,12 @@ class YoutubeDLManager:
         Calculate headers termasuk cookies dari CookieJar.
 
         Ini yang memastikan session cookies dikirim dengan request.
+        Jika info_dict sudah punya __ydl_headers (di-attach saat extract_info),
+        langsung return itu supaya cookie dari instance yang sama dipakai.
         """
+        if load_cookies and "__ydl_headers" in info_dict:
+            return dict(info_dict["__ydl_headers"])
+
         slot_key, ydl = self._acquire_ydl_slot(proxy, impersonate, False)
         try:
             try:

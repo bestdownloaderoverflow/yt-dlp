@@ -57,7 +57,7 @@ services:
       - WORKER_ID=w1
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -116,7 +116,7 @@ services:
       - WORKER_ID=w2
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -175,7 +175,7 @@ services:
       - WORKER_ID=w3
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -234,7 +234,7 @@ services:
       - WORKER_ID=w4
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -258,11 +258,9 @@ services:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=COw4LkpWcV4VIgih8RD3l5VEu+MHZaSFUs7F7hi/8GM=
-      - WIREGUARD_PUBLIC_KEY=MsgCxkI8hLSpeEh9ttQjx7FT9Hu/R3WEUyF0YomZlCE=
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - DNS_ADDRESS=10.2.0.1
-      - SERVER_COUNTRIES=Singapore
-      - SERVER_CITIES=Singapore
+      - SERVER_COUNTRIES=Taiwan
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -293,7 +291,7 @@ services:
       - WORKER_ID=w5
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -317,11 +315,9 @@ services:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
       - WIREGUARD_PRIVATE_KEY=+D9vSlPvgd2o2pJjhPo17LzER/h0Y6fBWcZbT2DTGVk=
-      - WIREGUARD_PUBLIC_KEY=7FslkahrdLwGbv4QSX5Cft5CtQLmBUlpWC382SSF7Hw=
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - DNS_ADDRESS=10.2.0.1
-      - SERVER_COUNTRIES=Japan
-      - SERVER_CITIES=Tokyo
+      - SERVER_COUNTRIES=Hong Kong
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -352,7 +348,7 @@ services:
       - WORKER_ID=w6
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -373,14 +369,15 @@ services:
       - "8007:8000"
       - "9493:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=cD9YrTwZMN0s1PbLZlQLDiuWFxYN1YHO6qNjY2lDoUc=
-      - WIREGUARD_PUBLIC_KEY=0YPlw7E2YLT8xRYgY5KCX6tXRlIhM3D0Fa7MPL+DAXw=
-      - WIREGUARD_ADDRESSES=10.2.0.2/32
-      - DNS_ADDRESS=10.2.0.1
-      - SERVER_COUNTRIES=Japan
-      - SERVER_CITIES=Tokyo
+      - SERVER_COUNTRIES=Indonesia
+      - IPV6=off
+      - WIREGUARD_PRIVATE_KEY=qK0sW4cgEoqrY+auL7nlAjDDYsOpPInkCA+b64yQQXg=
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - WIREGUARD_PUBLIC_KEY=qyghLDfpfyparp0M52OVcmhKckayOvbRO2DDLkgJqyk=
+      - DNS_ADDRESS=162.252.172.57
+      - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -411,7 +408,7 @@ services:
       - WORKER_ID=w7
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -432,14 +429,15 @@ services:
       - "8008:8000"
       - "9494:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=yOxs42eDRiYwJ9H/ETpOMVa1JnlwQRfHOHiFLG8kElo=
-      - WIREGUARD_PUBLIC_KEY=jodLwKl2kl5scwLUIZQYGoKBsqTRAtv6ltsofBc6WD4=
-      - WIREGUARD_ADDRESSES=10.2.0.2/32
-      - DNS_ADDRESS=10.2.0.1
-      - SERVER_COUNTRIES=Taiwan
-      - SERVER_CITIES=Taipei
+      - SERVER_COUNTRIES=Indonesia
+      - IPV6=off
+      - WIREGUARD_PRIVATE_KEY=4C8v24OVC8Pf/JKn3AQYDVrBcyv6v0lxFK9UyPQoPlo=
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - WIREGUARD_PUBLIC_KEY=qyghLDfpfyparp0M52OVcmhKckayOvbRO2DDLkgJqyk=
+      - DNS_ADDRESS=162.252.172.57
+      - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -470,7 +468,7 @@ services:
       - WORKER_ID=w8
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -491,14 +489,15 @@ services:
       - "8009:8000"
       - "9495:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=iO9F7/E/aIAjiti/7xXXNuFWbpx4GBv2j8Ki+pXXqkc=
-      - WIREGUARD_PUBLIC_KEY=NfKOMtk2fuDycbQXv36yk5mfdgDA8/8SN6amCdFrKxQ=
-      - WIREGUARD_ADDRESSES=10.2.0.2/32
-      - DNS_ADDRESS=10.2.0.1
-      - SERVER_COUNTRIES=Vietnam
-      - SERVER_CITIES=Hanoi
+      - SERVER_COUNTRIES=Singapore
+      - IPV6=off
+      - WIREGUARD_PRIVATE_KEY=aNY1C2I2Yf825GyQZsFYCfFyary/UmQmQSyx+R1qlVQ=
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
+      - DNS_ADDRESS=162.252.172.57
+      - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -529,7 +528,7 @@ services:
       - WORKER_ID=w9
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -550,14 +549,15 @@ services:
       - "8010:8000"
       - "9496:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=protonvpn
+      - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=uPO07utJmnzc6tnIxE/iGY6DC5zsLuS7jTSl7ZLpd3U=
-      - WIREGUARD_PUBLIC_KEY=Trt8stfmQTk/VTzR3jx3SSAIi0SSOSDOTtMln9bd4jY=
-      - WIREGUARD_ADDRESSES=10.2.0.2/32
-      - DNS_ADDRESS=10.2.0.1
-      - SERVER_COUNTRIES=Australia
-      - SERVER_CITIES=Sydney
+      - SERVER_COUNTRIES=Singapore
+      - IPV6=off
+      - WIREGUARD_PRIVATE_KEY=eM/CPrdN1PEyHtoxEE6U4By9kvCMzebLn0bfPcGqLlE=
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
+      - DNS_ADDRESS=162.252.172.57
+      - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -588,7 +588,7 @@ services:
       - WORKER_ID=w10
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -609,14 +609,14 @@ services:
       - "8011:8000"
       - "9497:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=custom
+      - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=2Fxrep3b6xWpp3zLPFqCQvqugT9nBXnIWqBkLg9qNWo=
-      - WIREGUARD_ADDRESSES=172.16.0.2/32
-      - WIREGUARD_ENDPOINT_IP=162.159.192.1
-      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-      - WIREGUARD_ENDPOINT_PORT=2408
-      - DNS_ADDRESS=1.1.1.1
+      - SERVER_COUNTRIES=Vietnam
+      - IPV6=off
+      - WIREGUARD_PRIVATE_KEY=+PLv2aytTl2E0aVE2L5sa0jZ5R13y8FRLCdwNf6VyUc=
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - WIREGUARD_PUBLIC_KEY=Mioou38fh5H+3LWMpitLOWT3JaDGg2gXxqjl2eXkPFU=
+      - DNS_ADDRESS=162.252.172.57
       - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
@@ -648,7 +648,7 @@ services:
       - WORKER_ID=w11
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -669,14 +669,14 @@ services:
       - "8012:8000"
       - "9498:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=custom
+      - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=2Fxrep3b6xWpp3zLPFqCQvqugT9nBXnIWqBkLg9qNWo=
-      - WIREGUARD_ADDRESSES=172.16.0.2/32
-      - WIREGUARD_ENDPOINT_IP=162.159.192.1
-      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-      - WIREGUARD_ENDPOINT_PORT=2408
-      - DNS_ADDRESS=1.1.1.1
+      - SERVER_COUNTRIES=Vietnam
+      - IPV6=off
+      - WIREGUARD_PRIVATE_KEY=ADUTRMEDrDN1nhGbYQsb6emkjHy6/igp/a5jywEoFVw=
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - WIREGUARD_PUBLIC_KEY=Mioou38fh5H+3LWMpitLOWT3JaDGg2gXxqjl2eXkPFU=
+      - DNS_ADDRESS=162.252.172.57
       - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
@@ -708,7 +708,127 @@ services:
       - WORKER_ID=w12
       - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
       - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  gluetun-13:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-13
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8013:8000"
+      - "9499:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=2Fxrep3b6xWpp3zLPFqCQvqugT9nBXnIWqBkLg9qNWo=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data13:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-13
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-13:
+    <<: *ytdlp_worker_limits
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-13
+    network_mode: "service:gluetun-13"
+    depends_on:
+      - gluetun-13
+      - redis
+    environment:
+      - WORKER_ID=w13
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  gluetun-14:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-14
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8014:8000"
+      - "9500:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=2Fxrep3b6xWpp3zLPFqCQvqugT9nBXnIWqBkLg9qNWo=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data14:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-14
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-14:
+    <<: *ytdlp_worker_limits
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-14
+    network_mode: "service:gluetun-14"
+    depends_on:
+      - gluetun-14
+      - redis
+    environment:
+      - WORKER_ID=w14
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
@@ -741,10 +861,9 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - GATEWAY_PORT=9111
-      - WORKER_COUNT=12
+      - WORKER_COUNT=14
       - EXTRACTOR_IPC_ENABLED=true
       - EXTRACTOR_TIMEOUT_MS=90000
-      - MAX_WORKER_IPC_CONCURRENCY=2
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
       - MAX_RETRIES=3
       - HEALTH_CHECK_TIMEOUT_MS=15000
@@ -787,6 +906,10 @@ services:
       ytdlp-11:
         condition: service_healthy
       ytdlp-12:
+        condition: service_healthy
+      ytdlp-13:
+        condition: service_healthy
+      ytdlp-14:
         condition: service_healthy
     restart: unless-stopped
     networks:

@@ -118,6 +118,31 @@ def validate_tiktok_url(url: str) -> str:
     if not parsed.netloc or not is_tiktok_url(normalized):
         raise HTTPException(status_code=400, detail="Only TikTok and Douyin URLs are supported")
 
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").lower()
+
+    # Accept only content/post URLs and short links. Reject static pages such as /hk/about.
+    is_post_path = (
+        "/video/" in path
+        or "/photo/" in path
+        or path.startswith("/t/")
+        or path.startswith("/v/")
+        or path.startswith("/embed/")
+    )
+    is_shortlink_host = (
+        host.startswith("vm.tiktok.com")
+        or host.startswith("vt.tiktok.com")
+        or host.startswith("v.douyin.com")
+    )
+    if not is_post_path and not (is_shortlink_host and path not in {"", "/"}):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "TikTok URL must point to a video/photo post (e.g. /@user/video/<id>), "
+                "not site pages like /about"
+            ),
+        )
+
     return normalized
 
 

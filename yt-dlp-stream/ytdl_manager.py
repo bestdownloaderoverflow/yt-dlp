@@ -12,6 +12,7 @@ import logging
 import time
 import os
 import random
+import shutil
 from typing import Optional, Dict, Any, List
 from collections import OrderedDict
 try:
@@ -62,6 +63,47 @@ def _total_memory_bytes() -> int:
 def _default_tiktok_device_id() -> str:
     """Return a stable process-level random TikTok-like device id (19 digits)."""
     return str(random.randint(7250000000000000000, 7325099899999994577))
+
+
+def _default_js_runtime_config() -> Dict[str, Dict[str, str]]:
+    deno_path = shutil.which("deno")
+    if deno_path:
+        return {"deno": {"path": deno_path}}
+    return {"deno": {}}
+
+
+def _env_js_runtimes() -> Dict[str, Dict[str, str]]:
+    """
+    Parse YTDLP_JS_RUNTIMES into yt-dlp API format:
+    runtime[:path],runtime2[:path2]
+    """
+    raw = os.getenv("YTDLP_JS_RUNTIMES")
+    if not raw or not raw.strip():
+        return _default_js_runtime_config()
+
+    runtimes: Dict[str, Dict[str, str]] = {}
+    for part in raw.split(","):
+        token = part.strip()
+        if not token:
+            continue
+
+        name, path = (token.split(":", 1) + [""])[:2]
+        name = name.strip().lower()
+        path = path.strip()
+        if not name:
+            continue
+
+        cfg: Dict[str, str] = {}
+        if path:
+            cfg["path"] = path
+        elif name == "deno":
+            deno_path = shutil.which("deno")
+            if deno_path:
+                cfg["path"] = deno_path
+
+        runtimes[name] = cfg
+
+    return runtimes or _default_js_runtime_config()
 
 
 def _check_impersonate_available(target: str) -> bool:
@@ -119,10 +161,18 @@ class YoutubeDLManager:
         self._tiktok_aid = os.getenv("TIKTOK_AID", "1180").strip() or "1180"
         # Optional full override (single value or comma-separated values).
         self._tiktok_app_info_override = os.getenv("TIKTOK_APP_INFO", "").strip()
+        self._js_runtimes = _env_js_runtimes()
         logger.info(
             "YoutubeDL manager parallelism enabled: per_key=%d total_max_instances=%d",
             self._parallel_per_key,
             self._max_instances,
+        )
+        logger.info(
+            "yt-dlp JS runtimes configured: %s",
+            ", ".join(
+                f"{name}:{cfg.get('path')}" if cfg.get("path") else name
+                for name, cfg in self._js_runtimes.items()
+            ),
         )
 
     def _detect_parallel_per_key(self) -> int:
@@ -161,6 +211,7 @@ class YoutubeDLManager:
             "quiet": True,
             "no_warnings": True,
             "skip_download": True,
+            "js_runtimes": {name: dict(cfg) for name, cfg in self._js_runtimes.items()},
             # Keep single-video behavior for watch URLs containing list/start_radio.
             # Can be overridden with YTDLP_NO_PLAYLIST=false.
             "noplaylist": _env_bool("YTDLP_NO_PLAYLIST", True),

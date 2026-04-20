@@ -1007,7 +1007,7 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
             "delivery_mode": delivery.mode,
             "needs_ffmpeg": True,
             "ffmpeg_audio_only": True,
-            "use_worker_mp3": False,
+            "use_worker_mp3": True,
         }
 
     if content_type == "video":

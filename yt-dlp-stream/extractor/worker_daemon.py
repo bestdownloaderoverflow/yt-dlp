@@ -754,6 +754,25 @@ def _safe_author(name: Optional[str]) -> str:
     return cleaned or "tiktok"
 
 
+def _safe_filename_component(value: Optional[str], fallback: str) -> str:
+    """
+    Keep readable Unicode filename while removing path/control-unsafe chars.
+    """
+    base = (value or "").strip()
+    if not base:
+        base = fallback
+
+    unsafe_chars = set('<>:"/\\|?*')
+    cleaned = "".join("_" if (c in unsafe_chars or ord(c) < 32) else c for c in base)
+    cleaned = " ".join(cleaned.split()).strip(" .")
+    return cleaned or fallback
+
+
+def _is_youtube_platform(platform: Optional[str]) -> bool:
+    value = (platform or "").strip().lower()
+    return value in {"youtube", "youtube:tab", "youtube:shorts"}
+
+
 def _build_disposition_header(filename: str, download: bool) -> str:
     from urllib.parse import quote
 
@@ -775,8 +794,12 @@ def _build_stream_plan_from_session(session: Any, download: bool) -> Dict[str, A
     if content_type == "slideshow":
         from core.config import estimate_video_size
 
-        author = _safe_author(getattr(session, "author", None))
-        filename = f"{author}_slideshow.mp4"
+        author_part = _safe_author(getattr(session, "author", None))
+        if _is_youtube_platform(platform):
+            base_part = _safe_filename_component(getattr(session, "title", None), "slideshow")
+        else:
+            base_part = author_part
+        filename = f"{base_part}_slideshow.mp4"
         response_headers = {
             "Content-Disposition": _build_disposition_header(filename, download),
             "X-Accel-Buffering": "no",
@@ -816,20 +839,24 @@ def _build_stream_plan_from_session(session: Any, download: bool) -> Dict[str, A
     if cookies:
         safe_headers["Cookie"] = cookies
 
-    author = _safe_author(getattr(session, "author", None))
+    author_part = _safe_author(getattr(session, "author", None))
+    if _is_youtube_platform(platform):
+        base_part = _safe_filename_component(getattr(session, "title", None), "download")
+    else:
+        base_part = author_part
     quality = getattr(session, "quality", None) or "video"
     photo_index = getattr(session, "photo_index", None) or 1
 
     media_type = "application/octet-stream"
-    filename = f"{author}.bin"
+    filename = f"{base_part}.bin"
     if content_type == "video":
-        filename = f"{author}_{quality}.mp4"
+        filename = f"{base_part}_{quality}.mp4"
         media_type = "video/mp4"
     elif content_type == "photo":
-        filename = f"{author}_photo_{photo_index}.jpg"
+        filename = f"{base_part}_photo_{photo_index}.jpg"
         media_type = "image/jpeg"
     elif content_type == "mp3":
-        filename = f"{author}.mp3"
+        filename = f"{base_part}.mp3"
         media_type = "audio/mpeg"
 
     response_headers = {

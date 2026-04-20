@@ -12,7 +12,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Germany
+      - SERVER_COUNTRIES=Indonesia
       - IPV6=off
       - WIREGUARD_PRIVATE_KEY=4D07oJGFyDyogUzpqF+BIDiVKq39C7CksEp9Gr3h41E=
       - WIREGUARD_ADDRESSES=10.14.0.2/16

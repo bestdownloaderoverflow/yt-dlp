@@ -72,7 +72,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Taiwan
+      - SERVER_COUNTRIES=Singapore
       - IPV6=off
       - WIREGUARD_PRIVATE_KEY=uPQm9ihtvjwyTXnGuZuYtKFTy4G9SWl6hAFfIalTMnE=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
@@ -132,7 +132,7 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Hong Kong
+      - SERVER_COUNTRIES=Singapore
       - IPV6=off
       - WIREGUARD_PRIVATE_KEY=uPQm9ihtvjwyTXnGuZuYtKFTy4G9SWl6hAFfIalTMnE=
       - WIREGUARD_ADDRESSES=10.14.0.2/16

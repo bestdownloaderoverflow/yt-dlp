@@ -21,8 +21,8 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=+KYNiYgkmPrhL/Wq2SgI7Yo/16VXLBaMLo7lVawr5nY=
-      - WIREGUARD_PUBLIC_KEY=xlyjovIxX3vLWzcB9jUrYRpniIi8cpsrwES97HS3JRM=
+      - WIREGUARD_PRIVATE_KEY=gAv06XRCi8V+kmc6PGRKr0IZekW5k6zSZPE3gfGd7kw=
+      - WIREGUARD_PUBLIC_KEY=FLN2u1Tt5XV+uB1K1j6nkvgDZ2XKDnd6uT8BHPpQ0Cw=
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - DNS_ADDRESS=10.2.0.1
       - SERVER_COUNTRIES=Indonesia
@@ -80,8 +80,8 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=8J4bzOh2uy/Eq2lthA8+LLpKcGHJg7t+40s6DcRlfm4=
-      - WIREGUARD_PUBLIC_KEY=n1CXZzndn2AZaB60AqCCm1ksR0aZQoL6FGwk7UgI9xc=
+      - WIREGUARD_PRIVATE_KEY=aJ5ZSZFamsNDBBD71j4KL+o4e0lR5YxdxmSL57tg/lw=
+      - WIREGUARD_PUBLIC_KEY=FLN2u1Tt5XV+uB1K1j6nkvgDZ2XKDnd6uT8BHPpQ0Cw=
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - DNS_ADDRESS=10.2.0.1
       - SERVER_COUNTRIES=Indonesia
@@ -139,8 +139,8 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=iDaFeSe4qMsk1R8nOgckAnjnpbnS9Rv4myNsYzUk6GA=
-      - WIREGUARD_PUBLIC_KEY=rKXFNhvVY+l4GE0STa1u3Yn/2hptVI6Dms/brS341zg=
+      - WIREGUARD_PRIVATE_KEY=SOGzZWyXzZM1VkiMGDTm7Jx1mBhTeUcI+7x/DZSitm0=
+      - WIREGUARD_PUBLIC_KEY=Me3qnzjHiizKdeTdwhnKoMBQQMoOK4mQgOkIb3XNMUo=
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - DNS_ADDRESS=10.2.0.1
       - SERVER_COUNTRIES=Singapore
@@ -198,8 +198,8 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=MKwGL8k4sCx2JeU/NzyVdH4Z/blRHRw/MCKp3NEewXU=
-      - WIREGUARD_PUBLIC_KEY=MsgCxkI8hLSpeEh9ttQjx7FT9Hu/R3WEUyF0YomZlCE=
+      - WIREGUARD_PRIVATE_KEY=YPYz8WknyL2SvVfBVggGkghbW9GIlMDkmBu62J9THVM=
+      - WIREGUARD_PUBLIC_KEY=WFvkM9OCh1IFqlTgxy/mxcw/PRVxKS9T9JxkMxi+yiI=
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - DNS_ADDRESS=10.2.0.1
       - SERVER_COUNTRIES=Singapore
@@ -257,10 +257,11 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=COw4LkpWcV4VIgih8RD3l5VEu+MHZaSFUs7F7hi/8GM=
+      - WIREGUARD_PRIVATE_KEY=CIgHVLaK4/Pe6WzpnSsx7vm59dagkqzFjazn1QvPSFM=
+      - WIREGUARD_PUBLIC_KEY=NfKOMtk2fuDycbQXv36yk5mfdgDA8/8SN6amCdFrKxQ=
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - DNS_ADDRESS=10.2.0.1
-      - SERVER_COUNTRIES=Taiwan
+      - SERVER_COUNTRIES=Vietnam
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
@@ -314,10 +315,11 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=protonvpn
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=+D9vSlPvgd2o2pJjhPo17LzER/h0Y6fBWcZbT2DTGVk=
+      - WIREGUARD_PRIVATE_KEY=gDTKP1At5T3bnWkKscn2ZC/TAvcUdfYFZobhsVCtmFE=
+      - WIREGUARD_PUBLIC_KEY=NfKOMtk2fuDycbQXv36yk5mfdgDA8/8SN6amCdFrKxQ=
       - WIREGUARD_ADDRESSES=10.2.0.2/32
       - DNS_ADDRESS=10.2.0.1
-      - SERVER_COUNTRIES=Hong Kong
+      - SERVER_COUNTRIES=Vietnam
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
       - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"

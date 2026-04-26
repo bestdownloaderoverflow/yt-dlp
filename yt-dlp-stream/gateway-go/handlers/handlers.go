@@ -119,6 +119,14 @@ func (h *Handlers) maybePreferDirectYouTube(
 	return plan
 }
 
+func (h *Handlers) recordExtractFailure(endpoint string, failureType string) {
+	metrics.IncExtractFailure(endpoint, failureType)
+}
+
+func (h *Handlers) recordFailover(path string, reason string) {
+	metrics.IncFailover(path, reason)
+}
+
 // handleRoot returns status JSON.
 func (h *Handlers) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -214,16 +222,19 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 		workerID = h.selectExtractorWorker(preferred, false)
 	}
 	if workerID == "" {
+		h.recordExtractFailure("fetch", "no_worker")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
 	result, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate, forceIPv6)
 	if err != nil {
 		log.Printf("[extractor:%s] fetch ipc error: %v", workerID, err)
+		h.recordExtractFailure("fetch", "ipc_error")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}
 	if rpcErr != nil {
+		h.recordExtractFailure("fetch", "rpc_error")
 		status := rpcErr.Status
 		if status < 400 || status > 599 {
 			status = http.StatusBadRequest
@@ -257,16 +268,19 @@ func (h *Handlers) handleInfoViaExtractorIPC(w http.ResponseWriter, r *http.Requ
 	preferred := extractWorkerID(r.URL.Query().Get("key"), h.Config.WorkerCount)
 	workerID := h.selectExtractorWorker(preferred, true)
 	if workerID == "" {
+		h.recordExtractFailure("info", "no_worker")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
 	result, rpcErr, err := h.Extractor.ExtractInfo(workerID, url, proxy, impersonate)
 	if err != nil {
 		log.Printf("[extractor:%s] ipc error: %v", workerID, err)
+		h.recordExtractFailure("info", "ipc_error")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}
 	if rpcErr != nil {
+		h.recordExtractFailure("info", "rpc_error")
 		status := rpcErr.Status
 		if status < 400 || status > 599 {
 			status = http.StatusBadRequest
@@ -303,16 +317,19 @@ func (h *Handlers) handleDownloadViaExtractorIPC(w http.ResponseWriter, r *http.
 	preferred := extractWorkerID(key, h.Config.WorkerCount)
 	workerID := h.selectExtractorWorker(preferred, true)
 	if workerID == "" {
+		h.recordExtractFailure("download_prepare", "no_worker")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
 	planRaw, rpcErr, err := h.Extractor.DownloadPrepare(workerID, key, download)
 	if err != nil {
 		log.Printf("[extractor:%s] download prepare ipc error: %v", workerID, err)
+		h.recordExtractFailure("download_prepare", "ipc_error")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}
 	if rpcErr != nil {
+		h.recordExtractFailure("download_prepare", "rpc_error")
 		status := rpcErr.Status
 		if status < 400 || status > 599 {
 			status = http.StatusBadRequest
@@ -379,16 +396,19 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 	if r.URL.Path == "/stream/m4a" {
 		workerID := h.selectExtractorWorker("", true)
 		if workerID == "" {
+			h.recordExtractFailure("stream_m4a_resolve", "no_worker")
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 			return
 		}
 		resolved, rpcErr, err := h.Extractor.ResolveFormats(workerID, url, "bestaudio[ext=m4a]/bestaudio", proxy, impersonate)
 		if err != nil {
 			log.Printf("[extractor:%s] stream m4a resolve ipc error: %v", workerID, err)
+			h.recordExtractFailure("stream_m4a_resolve", "ipc_error")
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 			return
 		}
 		if rpcErr != nil {
+			h.recordExtractFailure("stream_m4a_resolve", "rpc_error")
 			status := rpcErr.Status
 			if status < 400 || status > 599 {
 				status = http.StatusBadRequest
@@ -398,12 +418,14 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		}
 		formatsAny, _ := resolved["formats"].([]any)
 		if len(formatsAny) == 0 {
+			h.recordExtractFailure("stream_m4a_resolve", "empty_formats")
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "No resolved audio formats"})
 			return
 		}
 		fmt0, _ := formatsAny[0].(map[string]any)
 		directURL, _ := fmt0["url"].(string)
 		if strings.TrimSpace(directURL) == "" {
+			h.recordExtractFailure("stream_m4a_resolve", "invalid_url")
 			writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid resolved audio URL"})
 			return
 		}
@@ -430,16 +452,19 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 
 	workerID := h.selectExtractorWorker("", true)
 	if workerID == "" {
+		h.recordExtractFailure("stream_fetch", "no_worker")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
 	fetchResult, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate, false)
 	if err != nil {
 		log.Printf("[extractor:%s] stream fetch ipc error: %v", workerID, err)
+		h.recordExtractFailure("stream_fetch", "ipc_error")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}
 	if rpcErr != nil {
+		h.recordExtractFailure("stream_fetch", "rpc_error")
 		status := rpcErr.Status
 		if status < 400 || status > 599 {
 			status = http.StatusBadRequest
@@ -450,6 +475,7 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 
 	key := delivery.PickStreamDownloadKey(fetchResult, r.URL.Path, r.URL.Query().Get("quality"))
 	if key == "" {
+		h.recordExtractFailure("stream_fetch", "missing_key")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Unable to resolve stream key from fetch result"})
 		return
 	}
@@ -457,16 +483,19 @@ func (h *Handlers) handleStreamViaExtractorIPC(w http.ResponseWriter, r *http.Re
 	preferred := extractWorkerID(key, h.Config.WorkerCount)
 	workerID = h.selectExtractorWorker(preferred, false)
 	if workerID == "" {
+		h.recordExtractFailure("stream_download_prepare", "no_worker")
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 		return
 	}
 	planRaw, rpcErr, err := h.Extractor.DownloadPrepare(workerID, key, download)
 	if err != nil {
 		log.Printf("[extractor:%s] stream download prepare ipc error: %v", workerID, err)
+		h.recordExtractFailure("stream_download_prepare", "ipc_error")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}
 	if rpcErr != nil {
+		h.recordExtractFailure("stream_download_prepare", "rpc_error")
 		status := rpcErr.Status
 		if status < 400 || status > 599 {
 			status = http.StatusBadRequest
@@ -585,6 +614,7 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 	)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if workerID == "" {
+			h.recordExtractFailure("tiktok", "no_worker")
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 			return
 		}
@@ -596,6 +626,7 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 			log.Printf("[extractor:%s] tiktok ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
 			metrics.IncIPCError(workerID, "tiktok", ipcErrorType(err))
 			tried[workerID] = true
+			h.recordFailover("/tiktok", "ipc_network")
 			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 			continue
 		}
@@ -605,6 +636,7 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 				workerID, attempt+1, maxAttempts, rpcErr.Message,
 			)
 			tried[workerID] = true
+			h.recordFailover("/tiktok", "rpc_retryable")
 			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 			rpcErr = nil
 			continue
@@ -614,10 +646,12 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		}
 	}
 	if err != nil {
+		h.recordExtractFailure("tiktok", "ipc_error")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}
 	if rpcErr != nil {
+		h.recordExtractFailure("tiktok", "rpc_error")
 		status := rpcErr.Status
 		if status < 400 || status > 599 {
 			status = http.StatusBadRequest
@@ -659,6 +693,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 	)
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if workerID == "" {
+			h.recordExtractFailure("tiktok_download_prepare", "no_worker")
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 			return
 		}
@@ -671,6 +706,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 			metrics.IncIPCError(workerID, "tiktok_download_prepare", ipcErrorType(err))
 			tried[workerID] = true
 			// Session state lives in shared Redis, so any healthy worker can take over.
+			h.recordFailover("/tiktok/download", "ipc_network")
 			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 			continue
 		}
@@ -680,6 +716,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 				workerID, attempt+1, maxAttempts, rpcErr.Message,
 			)
 			tried[workerID] = true
+			h.recordFailover("/tiktok/download", "rpc_retryable")
 			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
 			rpcErr = nil
 			continue
@@ -689,10 +726,12 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 		}
 	}
 	if err != nil {
+		h.recordExtractFailure("tiktok_download_prepare", "ipc_error")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Extractor IPC failure", "detail": err.Error()})
 		return
 	}
 	if rpcErr != nil {
+		h.recordExtractFailure("tiktok_download_prepare", "rpc_error")
 		status := rpcErr.Status
 		if status < 400 || status > 599 {
 			status = http.StatusBadRequest
@@ -703,6 +742,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 	plan := delivery.ParseDeliveryPlan(planRaw)
 
 	if plan.FallbackProxy {
+		h.recordExtractFailure("tiktok_download_prepare", "fallback_proxy_not_allowed")
 		writeJSON(w, http.StatusBadGateway, map[string]string{
 			"error":  "fallback_proxy_not_allowed",
 			"detail": "EXTRACTOR_IPC_ENABLED=true requires full IPC mode",
@@ -726,6 +766,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 
 	// Direct URL stream with refresh
 	if plan.DirectURL == "" {
+		h.recordExtractFailure("tiktok_download_prepare", "invalid_plan")
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
 		return
 	}
@@ -848,5 +889,6 @@ func (h *Handlers) streamWorkerMP3WithFailover(
 		return true
 	}
 	log.Printf("[mp3:%s] worker stream failed: %v", workerID, err)
+	h.recordFailover("/stream/mp3", "worker_to_gateway")
 	return false
 }

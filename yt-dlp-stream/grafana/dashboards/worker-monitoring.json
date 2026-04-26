@@ -767,13 +767,13 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(rate(worker_restarts_total[5m])) by (worker_id)",
-          "legendFormat": "{{worker_id}}",
+          "expr": "sum(increase(worker_restarts_total[$__range]))",
+          "legendFormat": "",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Total Restarts (Rate 5m)",
+      "title": "Total Restarts ($__range)",
       "type": "stat"
     },
     {
@@ -833,13 +833,13 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(rate(worker_failures_total[5m])) by (worker_id)",
-          "legendFormat": "{{worker_id}}",
+          "expr": "sum(increase(gateway_extract_failures_total[$__range]))",
+          "legendFormat": "",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Total Failures (Rate 5m)",
+      "title": "Total Extract Failures ($__range)",
       "type": "stat"
     },
     {
@@ -891,13 +891,13 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(worker_restarts_total) by (success)",
-          "legendFormat": "success={{success}}",
+          "expr": "sum(increase(gateway_failovers_total[$__range]))",
+          "legendFormat": "",
           "range": false,
           "refId": "A"
         }
       ],
-      "title": "Total Restarts (All Time)",
+      "title": "Total Failovers ($__range)",
       "type": "stat"
     },
     {

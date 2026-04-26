@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"gateway-go/delivery"
+	"gateway-go/metrics"
 	"gateway-go/registry"
 	"gateway-go/utils"
 )
@@ -642,6 +643,17 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 		if result.wroteDirect {
 			return
 		}
+		if attempt < h.Config.MaxRetries-1 {
+			reason := "retryable"
+			if result.shouldRestart {
+				if result.isRateLimit {
+					reason = "rate_limit"
+				} else {
+					reason = "restart_probe"
+				}
+			}
+			metrics.IncFailover(path, reason)
+		}
 		if result.shouldRestart {
 			if result.isRateLimit {
 				log.Printf("[%s] rate limit detected, rotating VPN...", worker.ID)
@@ -687,6 +699,17 @@ func (h *Handlers) proxyWithRotation(w http.ResponseWriter, r *http.Request, pat
 		}
 		if result.wroteDirect {
 			return
+		}
+		if attempt < h.Config.MaxRetries-1 {
+			reason := "retryable"
+			if result.shouldRestart {
+				if result.isRateLimit {
+					reason = "rate_limit"
+				} else {
+					reason = "restart_probe"
+				}
+			}
+			metrics.IncFailover(path, reason)
 		}
 		if result.shouldRestart {
 			if result.isRateLimit {

@@ -88,6 +88,8 @@ func NewWorkerRegistry(cfg Config) *WorkerRegistry {
 		metrics.WorkerRestartsTotal.WithLabelValues(workerID, "false").Add(0)
 		metrics.WorkerFailuresTotal.WithLabelValues(workerID, "probe").Add(0)
 		metrics.WorkerFailuresTotal.WithLabelValues(workerID, "rate_limit").Add(0)
+		metrics.WorkerRestartDuration.WithLabelValues(workerID, "true")
+		metrics.WorkerRestartDuration.WithLabelValues(workerID, "false")
 	}
 	metrics.SetGatewayWorkers(cfg.WorkerCount)
 	metrics.SetGatewayHealthyWorkers(0)

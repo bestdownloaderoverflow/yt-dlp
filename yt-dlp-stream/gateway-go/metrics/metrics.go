@@ -81,6 +81,14 @@ var (
 		[]string{"endpoint", "failure_type", "reason_code"},
 	)
 
+	GatewayExtractFailureCategoriesTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "gateway_extract_failure_categories_total",
+			Help: "Total number of failed extract operations by normalized reason category",
+		},
+		[]string{"endpoint", "failure_type", "reason_category"},
+	)
+
 	GatewayFailoversTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "gateway_failovers_total",
@@ -116,6 +124,7 @@ func Register() {
 		WorkerIPCErrorsTotal,
 		GatewayExtractFailuresTotal,
 		GatewayExtractFailureReasonsTotal,
+		GatewayExtractFailureCategoriesTotal,
 		GatewayFailoversTotal,
 		GatewayWorkersTotal,
 		GatewayHealthyWorkers,
@@ -165,6 +174,11 @@ func IncExtractFailure(endpoint string, failureType string) {
 // IncExtractFailureReason increments gateway_extract_failure_reasons_total.
 func IncExtractFailureReason(endpoint string, failureType string, reasonCode string) {
 	GatewayExtractFailureReasonsTotal.WithLabelValues(endpoint, failureType, reasonCode).Inc()
+}
+
+// IncExtractFailureCategory increments gateway_extract_failure_categories_total.
+func IncExtractFailureCategory(endpoint string, failureType string, reasonCategory string) {
+	GatewayExtractFailureCategoriesTotal.WithLabelValues(endpoint, failureType, reasonCategory).Inc()
 }
 
 // IncFailover increments gateway_failovers_total.

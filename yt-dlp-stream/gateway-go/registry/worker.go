@@ -83,13 +83,12 @@ func NewWorkerRegistry(cfg Config) *WorkerRegistry {
 		// Pre-initialize per-worker time series so dashboards show 0 instead of "No data"
 		// before the first restart/failure event occurs.
 		metrics.SetHealth(workerID, false)
-		metrics.SetActiveRequests(workerID, 0)
 		metrics.WorkerRestartsTotal.WithLabelValues(workerID, "true").Add(0)
 		metrics.WorkerRestartsTotal.WithLabelValues(workerID, "false").Add(0)
 		metrics.WorkerFailuresTotal.WithLabelValues(workerID, "probe").Add(0)
 		metrics.WorkerFailuresTotal.WithLabelValues(workerID, "rate_limit").Add(0)
-		metrics.WorkerRestartDuration.WithLabelValues(workerID, "true")
-		metrics.WorkerRestartDuration.WithLabelValues(workerID, "false")
+		metrics.WorkerRestartReasonsTotal.WithLabelValues(workerID, "unknown", "true").Add(0)
+		metrics.WorkerRestartReasonsTotal.WithLabelValues(workerID, "unknown", "false").Add(0)
 	}
 	metrics.SetGatewayWorkers(cfg.WorkerCount)
 	metrics.SetGatewayHealthyWorkers(0)
@@ -400,7 +399,6 @@ func (r *WorkerRegistry) IncrementActive(workerID string) {
 	defer r.mu.Unlock()
 	if w := r.getWorkerUnlocked(workerID); w != nil {
 		w.ActiveRequests++
-		metrics.SetActiveRequests(workerID, w.ActiveRequests)
 	}
 }
 
@@ -409,7 +407,6 @@ func (r *WorkerRegistry) DecrementActive(workerID string) {
 	defer r.mu.Unlock()
 	if w := r.getWorkerUnlocked(workerID); w != nil && w.ActiveRequests > 0 {
 		w.ActiveRequests--
-		metrics.SetActiveRequests(workerID, w.ActiveRequests)
 	}
 }
 

@@ -32,37 +32,12 @@ var (
 		[]string{"worker_id"},
 	)
 
-	WorkerActiveRequests = prometheus.NewGaugeVec(
-		prometheus.GaugeOpts{
-			Name: "worker_active_requests",
-			Help: "Current number of active requests per worker",
-		},
-		[]string{"worker_id"},
-	)
-
-	WorkerRestartDuration = prometheus.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Name:    "worker_restart_duration_seconds",
-			Help:    "Duration of worker restart operations in seconds",
-			Buckets: prometheus.ExponentialBuckets(1, 2, 8), // 1, 2, 4, 8, 16, 32, 64, 128 seconds
-		},
-		[]string{"worker_id", "success"},
-	)
-
 	WorkerRestartReasonsTotal = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "worker_restart_reasons_total",
 			Help: "Total number of worker restart attempts by reason",
 		},
 		[]string{"worker_id", "reason_code", "success"},
-	)
-
-	WorkerIPCErrorsTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "worker_ipc_errors_total",
-			Help: "Total number of extractor IPC errors by worker and endpoint",
-		},
-		[]string{"worker_id", "endpoint", "error_type"},
 	)
 
 	GatewayExtractFailuresTotal = prometheus.NewCounterVec(
@@ -79,14 +54,6 @@ var (
 			Help: "Total number of failed extract operations by normalized reason code",
 		},
 		[]string{"endpoint", "failure_type", "reason_code"},
-	)
-
-	GatewayExtractFailureCategoriesTotal = prometheus.NewCounterVec(
-		prometheus.CounterOpts{
-			Name: "gateway_extract_failure_categories_total",
-			Help: "Total number of failed extract operations by normalized reason category",
-		},
-		[]string{"endpoint", "failure_type", "reason_category"},
 	)
 
 	GatewayFailoversTotal = prometheus.NewCounterVec(
@@ -118,13 +85,9 @@ func Register() {
 		WorkerRestartsTotal,
 		WorkerFailuresTotal,
 		WorkerHealthy,
-		WorkerActiveRequests,
-		WorkerRestartDuration,
 		WorkerRestartReasonsTotal,
-		WorkerIPCErrorsTotal,
 		GatewayExtractFailuresTotal,
 		GatewayExtractFailureReasonsTotal,
-		GatewayExtractFailureCategoriesTotal,
 		GatewayFailoversTotal,
 		GatewayWorkersTotal,
 		GatewayHealthyWorkers,
@@ -146,24 +109,9 @@ func SetHealth(workerID string, healthy bool) {
 	WorkerHealthy.WithLabelValues(workerID).Set(boolToFloat(healthy))
 }
 
-// SetActiveRequests sets the worker_active_requests gauge.
-func SetActiveRequests(workerID string, count int) {
-	WorkerActiveRequests.WithLabelValues(workerID).Set(float64(count))
-}
-
-// ObserveRestartDuration observes the restart duration histogram.
-func ObserveRestartDuration(workerID string, success bool, durationSeconds float64) {
-	WorkerRestartDuration.WithLabelValues(workerID, boolToString(success)).Observe(durationSeconds)
-}
-
 // IncRestartReason increments the worker restart reason counter.
 func IncRestartReason(workerID string, reasonCode string, success bool) {
 	WorkerRestartReasonsTotal.WithLabelValues(workerID, reasonCode, boolToString(success)).Inc()
-}
-
-// IncIPCError increments the worker extractor IPC error counter.
-func IncIPCError(workerID string, endpoint string, errorType string) {
-	WorkerIPCErrorsTotal.WithLabelValues(workerID, endpoint, errorType).Inc()
 }
 
 // IncExtractFailure increments gateway_extract_failures_total.
@@ -174,11 +122,6 @@ func IncExtractFailure(endpoint string, failureType string) {
 // IncExtractFailureReason increments gateway_extract_failure_reasons_total.
 func IncExtractFailureReason(endpoint string, failureType string, reasonCode string) {
 	GatewayExtractFailureReasonsTotal.WithLabelValues(endpoint, failureType, reasonCode).Inc()
-}
-
-// IncExtractFailureCategory increments gateway_extract_failure_categories_total.
-func IncExtractFailureCategory(endpoint string, failureType string, reasonCategory string) {
-	GatewayExtractFailureCategoriesTotal.WithLabelValues(endpoint, failureType, reasonCategory).Inc()
 }
 
 // IncFailover increments gateway_failovers_total.

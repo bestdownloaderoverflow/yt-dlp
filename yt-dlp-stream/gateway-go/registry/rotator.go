@@ -240,7 +240,6 @@ func (v *VPNRotator) recordRestartLog(workerID string, success bool, startTime t
 	}
 
 	// Metrics
-	metrics.ObserveRestartDuration(workerID, success, duration.Seconds())
 	metrics.IncRestartReason(workerID, reasonCode, success)
 
 	// Redis persistence (fire-and-forget)

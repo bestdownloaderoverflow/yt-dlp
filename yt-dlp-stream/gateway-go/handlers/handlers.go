@@ -123,7 +123,6 @@ func (h *Handlers) recordExtractFailure(endpoint string, failureType string) {
 	metrics.IncExtractFailure(endpoint, failureType)
 	reasonCode := normalizeReasonCode(failureType)
 	metrics.IncExtractFailureReason(endpoint, failureType, reasonCode)
-	metrics.IncExtractFailureCategory(endpoint, failureType, classifyExtractReason(failureType, reasonCode))
 }
 
 func (h *Handlers) recordFailover(path string, reason string) {
@@ -134,7 +133,6 @@ func (h *Handlers) recordExtractFailureWithReason(endpoint string, failureType s
 	reasonCode = normalizeReasonCode(reasonCode)
 	metrics.IncExtractFailure(endpoint, failureType)
 	metrics.IncExtractFailureReason(endpoint, failureType, reasonCode)
-	metrics.IncExtractFailureCategory(endpoint, failureType, classifyExtractReason(failureType, reasonCode))
 }
 
 func normalizeReasonCode(reason string) string {
@@ -160,66 +158,6 @@ func normalizeReasonCode(reason string) string {
 		normalized = normalized[:maxLen]
 	}
 	return normalized
-}
-
-func classifyExtractReason(failureType string, reasonCode string) string {
-	ft := normalizeReasonCode(failureType)
-	rc := normalizeReasonCode(reasonCode)
-
-	switch ft {
-	case "no_worker":
-		return "worker_unavailable"
-	case "missing_key":
-		return "response_missing_key"
-	case "invalid_url":
-		return "response_invalid_url"
-	case "invalid_plan":
-		return "response_invalid_plan"
-	case "empty_formats":
-		return "response_empty_formats"
-	case "fallback_proxy_not_allowed":
-		return "policy_blocked"
-	}
-
-	if ft == "ipc_error" {
-		switch rc {
-		case "timeout":
-			return "ipc_timeout"
-		case "dns":
-			return "ipc_dns_error"
-		case "conn_refused", "conn_reset", "broken_pipe", "eof", "network":
-			return "ipc_network_error"
-		default:
-			return "ipc_other_error"
-		}
-	}
-
-	if ft == "rpc_error" {
-		if strings.Contains(rc, "rate") || strings.Contains(rc, "too_many") || strings.Contains(rc, "429") {
-			return "upstream_rate_limited"
-		}
-		if strings.Contains(rc, "geo") || strings.Contains(rc, "region") || strings.Contains(rc, "country") {
-			return "upstream_geo_blocked"
-		}
-		if strings.Contains(rc, "captcha") || strings.Contains(rc, "challenge") || strings.Contains(rc, "verify") {
-			return "upstream_bot_challenge"
-		}
-		if strings.Contains(rc, "login") || strings.Contains(rc, "auth") || strings.Contains(rc, "private") || strings.Contains(rc, "forbidden") {
-			return "upstream_auth_required"
-		}
-		if strings.Contains(rc, "unsupported") {
-			return "unsupported_source"
-		}
-		if strings.Contains(rc, "not_found") || strings.Contains(rc, "unavailable") {
-			return "upstream_not_found_or_unavailable"
-		}
-		if rc == "download_error" || rc == "internal_error" {
-			return "upstream_runtime_error"
-		}
-		return "upstream_other_rpc_error"
-	}
-
-	return "other_extract_failure"
 }
 
 // handleRoot returns status JSON.
@@ -719,7 +657,6 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 				break
 			}
 			log.Printf("[extractor:%s] tiktok ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
-			metrics.IncIPCError(workerID, "tiktok", ipcErrorType(err))
 			tried[workerID] = true
 			h.recordFailover("/tiktok", "ipc_network")
 			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
@@ -798,7 +735,6 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 				break
 			}
 			log.Printf("[extractor:%s] tiktok download prepare ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
-			metrics.IncIPCError(workerID, "tiktok_download_prepare", ipcErrorType(err))
 			tried[workerID] = true
 			// Session state lives in shared Redis, so any healthy worker can take over.
 			h.recordFailover("/tiktok/download", "ipc_network")

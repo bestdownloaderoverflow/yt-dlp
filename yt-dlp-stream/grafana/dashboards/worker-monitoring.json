@@ -83,7 +83,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "worker_healthy",
+          "expr": "worker_healthy{worker_id=~\"$worker_id\"}",
           "legendFormat": "{{worker_id}}",
           "range": false,
           "refId": "A"
@@ -170,7 +170,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "rate(worker_restarts_total[5m])",
+          "expr": "rate(worker_restarts_total{worker_id=~\"$worker_id\"}[5m])",
           "legendFormat": "{{worker_id}} ({{success}})",
           "range": false,
           "refId": "A"
@@ -257,7 +257,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "rate(worker_failures_total[5m])",
+          "expr": "rate(worker_failures_total{worker_id=~\"$worker_id\"}[5m])",
           "legendFormat": "{{worker_id}} ({{type}})",
           "range": false,
           "refId": "A"
@@ -343,7 +343,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "worker_active_requests",
+          "expr": "worker_active_requests{worker_id=~\"$worker_id\"}",
           "legendFormat": "{{worker_id}}",
           "range": false,
           "refId": "A"
@@ -415,7 +415,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(worker_healthy) > 0",
+          "expr": "sum(worker_healthy{worker_id=~\"$worker_id\"}) > 0",
           "legendFormat": "",
           "range": false,
           "refId": "A"
@@ -664,7 +664,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "histogram_quantile(0.95, sum by (le, success) (rate(worker_restart_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, success) (rate(worker_restart_duration_seconds_bucket{worker_id=~\"$worker_id\"}[5m])))",
           "legendFormat": "{{success}}",
           "range": false,
           "refId": "A"
@@ -767,7 +767,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(increase(worker_restarts_total[$__range]))",
+          "expr": "sum(increase(worker_restarts_total{worker_id=~\"$worker_id\"}[$__range])) or vector(0)",
           "legendFormat": "",
           "range": false,
           "refId": "A"
@@ -833,7 +833,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(increase(gateway_extract_failures_total[$__range]))",
+          "expr": "sum(increase(gateway_extract_failures_total[$__range])) or vector(0)",
           "legendFormat": "",
           "range": false,
           "refId": "A"
@@ -891,7 +891,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(increase(gateway_failovers_total[$__range]))",
+          "expr": "sum(increase(gateway_failovers_total[$__range])) or vector(0)",
           "legendFormat": "",
           "range": false,
           "refId": "A"
@@ -978,7 +978,7 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(worker_restarts_total) by (worker_id)",
+          "expr": "sum(worker_restarts_total{worker_id=~\"$worker_id\"}) by (worker_id)",
           "legendFormat": "{{worker_id}}",
           "range": false,
           "refId": "A"
@@ -1065,13 +1065,99 @@
         {
           "datasource": "Prometheus",
           "editorMode": "code",
-          "expr": "sum(worker_failures_total) by (worker_id)",
+          "expr": "sum(worker_failures_total{worker_id=~\"$worker_id\"}) by (worker_id)",
           "legendFormat": "{{worker_id}}",
           "range": false,
           "refId": "A"
         }
       ],
       "title": "Cumulative Failures per Worker",
+      "type": "timeseries"
+    },
+    {
+      "datasource": "Prometheus",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "hideFrom": {
+              "tooltip": false,
+              "viz": false,
+              "legend": false
+            },
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "normal"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 12,
+        "y": 20
+      },
+      "id": 14,
+      "options": {
+        "legend": {
+          "calcs": [
+            "sum",
+            "max",
+            "lastNotNull"
+          ],
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "editorMode": "code",
+          "expr": "topk(12, sum by (reason_code) (increase(gateway_extract_failure_reasons_total[$__range])))",
+          "legendFormat": "{{reason_code}}",
+          "range": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Extract Failure Reasons ($__range)",
       "type": "timeseries"
     }
   ],

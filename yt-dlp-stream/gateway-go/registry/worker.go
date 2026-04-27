@@ -70,8 +70,9 @@ func NewWorkerRegistry(cfg Config) *WorkerRegistry {
 	now := time.Now()
 	workers := make([]*Worker, 0, cfg.WorkerCount)
 	for i := 1; i <= cfg.WorkerCount; i++ {
+		workerID := fmt.Sprintf("w%d", i)
 		workers = append(workers, &Worker{
-			ID:          fmt.Sprintf("w%d", i),
+			ID:          workerID,
 			Host:        fmt.Sprintf("gluetun-%d", i),
 			APIPort:     9487,
 			ProxyPort:   8888,
@@ -79,7 +80,17 @@ func NewWorkerRegistry(cfg Config) *WorkerRegistry {
 			Healthy:     false,
 			StartedAt:   now,
 		})
+		// Pre-initialize per-worker time series so dashboards show 0 instead of "No data"
+		// before the first restart/failure event occurs.
+		metrics.SetHealth(workerID, false)
+		metrics.SetActiveRequests(workerID, 0)
+		metrics.WorkerRestartsTotal.WithLabelValues(workerID, "true").Add(0)
+		metrics.WorkerRestartsTotal.WithLabelValues(workerID, "false").Add(0)
+		metrics.WorkerFailuresTotal.WithLabelValues(workerID, "probe").Add(0)
+		metrics.WorkerFailuresTotal.WithLabelValues(workerID, "rate_limit").Add(0)
 	}
+	metrics.SetGatewayWorkers(cfg.WorkerCount)
+	metrics.SetGatewayHealthyWorkers(0)
 	log.Printf("initialized %d workers", cfg.WorkerCount)
 	return &WorkerRegistry{workers: workers, cfg: cfg}
 }

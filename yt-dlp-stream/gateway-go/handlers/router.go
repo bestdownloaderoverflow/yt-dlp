@@ -265,6 +265,14 @@ func (h *Handlers) selectExtractorWorker(preferred string, requireHealthy bool) 
 	return h.selectExtractorWorkerAvoiding(preferred, requireHealthy, nil)
 }
 
+func (h *Handlers) extractorWorkerBelowCapacity(workerID string) bool {
+	maxConcurrency := h.Config.MaxWorkerIPCConcurrency
+	if maxConcurrency <= 0 {
+		return true
+	}
+	return h.Extractor.InFlight(workerID) < maxConcurrency
+}
+
 // selectExtractorWorkerAvoiding behaves like selectExtractorWorker but skips
 // any worker IDs present in the `exclude` set. Used by retry/failover paths
 // so that a worker that just returned a network error isn't immediately
@@ -277,10 +285,12 @@ func (h *Handlers) selectExtractorWorkerAvoiding(preferred string, requireHealth
 		return exclude != nil && exclude[id]
 	}
 	if preferred != "" && !isExcluded(preferred) && h.Extractor.HasWorker(preferred) {
-		if !requireHealthy {
+		if !h.extractorWorkerBelowCapacity(preferred) {
+			// Continue to the shared pool instead of queueing behind a saturated
+			// key-bound worker. Session state is stored in Redis.
+		} else if !requireHealthy {
 			return preferred
-		}
-		if pw := h.Registry.GetWorker(preferred); h.isWorkerAcceptingRequests(pw) {
+		} else if pw := h.Registry.GetWorker(preferred); h.isWorkerAcceptingRequests(pw) {
 			return preferred
 		}
 	}
@@ -333,21 +343,12 @@ func (h *Handlers) pickLeastLoadedExtractorWorker(candidates []string) string {
 	maxConcurrency := h.Config.MaxWorkerIPCConcurrency
 	bestLoad := int(^uint(0) >> 1)
 	best := make([]string, 0, len(candidates))
-	busyBestLoad := int(^uint(0) >> 1)
-	busyBest := make([]string, 0, len(candidates))
 	for _, workerID := range candidates {
 		load := h.Extractor.InFlight(workerID)
 		if load < 0 {
 			load = 0
 		}
 		if maxConcurrency > 0 && load >= maxConcurrency {
-			switch {
-			case load < busyBestLoad:
-				busyBestLoad = load
-				busyBest = []string{workerID}
-			case load == busyBestLoad:
-				busyBest = append(busyBest, workerID)
-			}
 			continue
 		}
 		switch {
@@ -361,8 +362,8 @@ func (h *Handlers) pickLeastLoadedExtractorWorker(candidates []string) string {
 	if len(best) > 0 {
 		return best[rand.Intn(len(best))]
 	}
-	if len(busyBest) > 0 {
-		return busyBest[rand.Intn(len(busyBest))]
+	if maxConcurrency > 0 {
+		return ""
 	}
 	return candidates[rand.Intn(len(candidates))]
 }

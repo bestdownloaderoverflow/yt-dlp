@@ -36,7 +36,7 @@ func (l *SlidingWindowRateLimiter) Check(key string) (bool, int) {
 		q = q[idx:]
 	}
 	if len(q) == 0 {
-		delete(l.events, key)
+		l.events[key] = []time.Time{now}
 		return true, 0
 	}
 	if len(q) >= l.limit {

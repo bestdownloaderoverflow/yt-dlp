@@ -64,6 +64,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -123,6 +124,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -182,6 +184,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -241,6 +244,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -301,6 +305,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -361,6 +366,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -421,6 +427,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -481,6 +488,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -541,6 +549,7 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -601,6 +610,68 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  gluetun-11:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-11
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8011:8000"
+      - "9497:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=surfshark
+      - VPN_TYPE=wireguard
+      - SERVER_COUNTRIES=Vietnam
+      - IPV6=off
+      - WIREGUARD_PRIVATE_KEY=ADUTRMEDrDN1nhGbYQsb6emkjHy6/igp/a5jywEoFVw=
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - WIREGUARD_PUBLIC_KEY=Mioou38fh5H+3LWMpitLOWT3JaDGg2gXxqjl2eXkPFU=
+      - DNS_ADDRESS=162.252.172.57
+      - WIREGUARD_MTU=1280
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data11:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-warp-network:
+        aliases:
+          - gluetun-11
+    extra_hosts:
+      - "host.docker.internal:172.17.0.1"
+
+  ytdlp-11:
+    <<: *ytdlp_worker_limits
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-11
+    network_mode: "service:gluetun-11"
+    depends_on:
+      - gluetun-11
+      - redis
+    environment:
+      - WORKER_ID=w11
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.0.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -627,11 +698,12 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - GATEWAY_PORT=9111
-      - WORKER_COUNT=10
+      - WORKER_COUNT=11
       - EXTRACTOR_IPC_ENABLED=true
-      - EXTRACTOR_TIMEOUT_MS=90000
+      - EXTRACTOR_TIMEOUT_MS=15000
+      - MAX_WORKER_IPC_CONCURRENCY=2
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - MAX_RETRIES=3
+      - MAX_RETRIES=2
       - HEALTH_CHECK_TIMEOUT_MS=15000
       - HEALTH_MONITOR_INTERVAL_MS=5000
       - HEALTH_FAILURE_THRESHOLD=3
@@ -668,6 +740,8 @@ services:
       ytdlp-9:
         condition: service_healthy
       ytdlp-10:
+        condition: service_healthy
+      ytdlp-11:
         condition: service_healthy
     restart: unless-stopped
     networks:

@@ -16,7 +16,6 @@ type Config struct {
 	ExtractorPythonBin        string
 	ExtractorWorkerPath       string
 	ExtractorTimeoutMs        int
-	MaxWorkerIPCConcurrency   int
 	DegradedTimeoutSeconds    int
 	GluetunPassword           string
 	MaxRetries                int
@@ -38,7 +37,6 @@ type Config struct {
 	DrainPollIntervalMs       int
 	RestartStabilizeSeconds   int
 	UnhealthyRestartThreshold int
-	SlideshowMaxConcurrency   int
 	RedisURL                  string
 }
 
@@ -59,7 +57,6 @@ func LoadConfig() Config {
 		ExtractorPythonBin:        getenvDefault("EXTRACTOR_PYTHON_BIN", "python3"),
 		ExtractorWorkerPath:       getenvDefault("EXTRACTOR_WORKER_PATH", "../extractor/worker_daemon.py"),
 		ExtractorTimeoutMs:        envInt("EXTRACTOR_TIMEOUT_MS", 45000),
-		MaxWorkerIPCConcurrency:   envInt("MAX_WORKER_IPC_CONCURRENCY", 0),
 		DegradedTimeoutSeconds:    envInt("DEGRADED_TIMEOUT_SECONDS", 30),
 		GluetunPassword:           getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
 		MaxRetries:                envInt("MAX_RETRIES", 3),
@@ -81,7 +78,6 @@ func LoadConfig() Config {
 		DrainPollIntervalMs:       envInt("DRAIN_POLL_INTERVAL_MS", 500),
 		RestartStabilizeSeconds:   envInt("RESTART_STABILIZE_SECONDS", 2),
 		UnhealthyRestartThreshold: envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
-		SlideshowMaxConcurrency:   envInt("TIKTOK_SLIDESHOW_MAX_CONCURRENCY", 1),
 		RedisURL:                  getenvDefault("REDIS_URL", "redis://172.30.0.250:6379/0"),
 	}
 }

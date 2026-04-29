@@ -266,11 +266,7 @@ func (h *Handlers) selectExtractorWorker(preferred string, requireHealthy bool) 
 }
 
 func (h *Handlers) extractorWorkerBelowCapacity(workerID string) bool {
-	maxConcurrency := h.Config.MaxWorkerIPCConcurrency
-	if maxConcurrency <= 0 {
-		return true
-	}
-	return h.Extractor.InFlight(workerID) < maxConcurrency
+	return true
 }
 
 // selectExtractorWorkerAvoiding behaves like selectExtractorWorker but skips
@@ -340,16 +336,12 @@ func (h *Handlers) pickLeastLoadedExtractorWorker(candidates []string) string {
 	if len(candidates) == 0 {
 		return ""
 	}
-	maxConcurrency := h.Config.MaxWorkerIPCConcurrency
 	bestLoad := int(^uint(0) >> 1)
 	best := make([]string, 0, len(candidates))
 	for _, workerID := range candidates {
 		load := h.Extractor.InFlight(workerID)
 		if load < 0 {
 			load = 0
-		}
-		if maxConcurrency > 0 && load >= maxConcurrency {
-			continue
 		}
 		switch {
 		case load < bestLoad:
@@ -361,9 +353,6 @@ func (h *Handlers) pickLeastLoadedExtractorWorker(candidates []string) string {
 	}
 	if len(best) > 0 {
 		return best[rand.Intn(len(best))]
-	}
-	if maxConcurrency > 0 {
-		return ""
 	}
 	return candidates[rand.Intn(len(candidates))]
 }

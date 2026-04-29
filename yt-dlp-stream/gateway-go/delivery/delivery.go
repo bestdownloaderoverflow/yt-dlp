@@ -42,34 +42,14 @@ type Delivery struct {
 	Worker       WorkerLookup
 	BaseCl       *http.Client
 	proxyClients sync.Map // map[string]*http.Client keyed by proxy URL
-	slideshowSem chan struct{}
 }
 
 type DeliveryConfig struct {
-	DegradedRetryAfter      int
-	SlideshowMaxConcurrency int
+	DegradedRetryAfter int
 }
 
 func New(cfg DeliveryConfig, baseCl *http.Client, worker WorkerLookup) *Delivery {
-	d := &Delivery{Config: cfg, BaseCl: baseCl, Worker: worker}
-	if cfg.SlideshowMaxConcurrency > 0 {
-		d.slideshowSem = make(chan struct{}, cfg.SlideshowMaxConcurrency)
-	}
-	return d
-}
-
-func (d *Delivery) tryAcquireSlideshowSlot() (func(), bool) {
-	if d.slideshowSem == nil {
-		return func() {}, true
-	}
-	select {
-	case d.slideshowSem <- struct{}{}:
-		return func() {
-			<-d.slideshowSem
-		}, true
-	default:
-		return nil, false
-	}
+	return &Delivery{Config: cfg, BaseCl: baseCl, Worker: worker}
 }
 
 func (d *Delivery) mediaHTTPClient(workerID string) *http.Client {

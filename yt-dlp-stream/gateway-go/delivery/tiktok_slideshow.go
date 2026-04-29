@@ -27,19 +27,6 @@ func (d *Delivery) StreamTikTokSlideshow(
 	plan DeliveryPlan,
 	onRefresh func() (DeliveryPlan, error),
 ) {
-	release, ok := d.tryAcquireSlideshowSlot()
-	if !ok {
-		if d.Config.DegradedRetryAfter > 0 {
-			w.Header().Set("Retry-After", strconv.Itoa(d.Config.DegradedRetryAfter))
-		}
-		WriteJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error":  "Slideshow renderer busy",
-			"detail": "Please retry in a few seconds",
-		})
-		return
-	}
-	defer release()
-
 	currentPlan := plan
 	for attempt := 0; attempt < 2; attempt++ {
 		outputPath, mediaType, responseHeaders, tempDir, statusCode, err := d.renderTikTokSlideshow(r.Context(), currentPlan)

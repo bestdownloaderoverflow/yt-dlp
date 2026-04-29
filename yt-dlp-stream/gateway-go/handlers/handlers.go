@@ -89,6 +89,10 @@ func isRetryableTikTokRPCError(rpcErr *IPCError) bool {
 	case strings.Contains(msg, "try again later"),
 		strings.Contains(msg, "temporarily unavailable"):
 		return true
+	case code == "upstream_dns_failure",
+		code == "ip_blocked",
+		code == "rate_limited":
+		return true
 	}
 	return rpcErr.Status >= 500 && (code == "internal_error" || code == "download_error")
 }

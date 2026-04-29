@@ -68,18 +68,16 @@ func main() {
 		}
 		ext = pool
 		log.Printf(
-			"extractor IPC enabled: workers=%d read_timeout_ms=%d connect_timeout_ms=%d max_worker_ipc_concurrency=%d",
+			"extractor IPC enabled: workers=%d read_timeout_ms=%d connect_timeout_ms=%d",
 			cfg.WorkerCount,
 			cfg.ExtractorTimeoutMs,
 			10000,
-			cfg.MaxWorkerIPCConcurrency,
 		)
 	}
 
 	// Delivery engine (streaming orchestration in Go).
 	del := delivery.New(delivery.DeliveryConfig{
-		DegradedRetryAfter:      cfg.DegradedRetryAfter,
-		SlideshowMaxConcurrency: cfg.SlideshowMaxConcurrency,
+		DegradedRetryAfter: cfg.DegradedRetryAfter,
 	}, client, deliveryWorkerLookup{reg})
 
 	// Purge stale proxy connections before each container restart so that

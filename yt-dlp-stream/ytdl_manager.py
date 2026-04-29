@@ -15,10 +15,6 @@ import random
 import shutil
 from typing import Optional, Dict, Any, List
 from collections import OrderedDict
-try:
-    import psutil
-except ImportError:  # pragma: no cover - optional in local dev
-    psutil = None
 import yt_dlp
 from yt_dlp.networking.impersonate import ImpersonateTarget
 
@@ -30,34 +26,6 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() not in {"0", "false", "no", "off"}
-
-
-def _env_int(name: str) -> Optional[int]:
-    raw = os.getenv(name)
-    if raw is None:
-        return None
-    try:
-        value = int(raw.strip())
-    except ValueError:
-        return None
-    if value < 1:
-        return None
-    return value
-
-
-def _total_memory_bytes() -> int:
-    if psutil is not None:
-        return int(psutil.virtual_memory().total)
-    try:
-        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
-            for line in handle:
-                if line.startswith("MemTotal:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        return int(parts[1]) * 1024
-    except OSError:
-        pass
-    return 1024 ** 3
 
 
 def _default_tiktok_device_id() -> str:
@@ -148,8 +116,6 @@ class YoutubeDLManager:
         self._global_lock = threading.Lock()
         self._count_lock = threading.Lock()
         self._request_count = 0
-        self._parallel_per_key = self._detect_parallel_per_key()
-        self._max_instances = max(10, self._parallel_per_key * 4)  # LRU cache size
         self._cleanup_interval = 3600  # Cleanup every hour
         self._last_cleanup = time.time()
         self._tiktok_device_id = os.getenv("TIKTOK_DEVICE_ID", _default_tiktok_device_id()).strip()
@@ -162,11 +128,7 @@ class YoutubeDLManager:
         # Optional full override (single value or comma-separated values).
         self._tiktok_app_info_override = os.getenv("TIKTOK_APP_INFO", "").strip()
         self._js_runtimes = _env_js_runtimes()
-        logger.info(
-            "YoutubeDL manager parallelism enabled: per_key=%d total_max_instances=%d",
-            self._parallel_per_key,
-            self._max_instances,
-        )
+        logger.info("YoutubeDL manager parallelism enabled: unbounded per process")
         logger.info(
             "yt-dlp JS runtimes configured: %s",
             ", ".join(
@@ -174,17 +136,6 @@ class YoutubeDLManager:
                 for name, cfg in self._js_runtimes.items()
             ),
         )
-
-    def _detect_parallel_per_key(self) -> int:
-        configured = _env_int("YTDLP_PARALLEL_PER_KEY")
-        if configured is not None:
-            return configured
-
-        cpu_count = (psutil.cpu_count(logical=True) if psutil is not None else None) or os.cpu_count() or 1
-        mem_total = _total_memory_bytes()
-        mem_gib = max(1, int(mem_total / (1024 ** 3)))
-        parallel = min(max(1, cpu_count * 2), max(1, mem_gib * 2), 32)
-        return max(1, parallel)
 
     def _build_tiktok_app_info_list(self) -> List[str]:
         if self._tiktok_app_info_override:
@@ -279,26 +230,6 @@ class YoutubeDLManager:
         headers.setdefault("Accept-Encoding", "identity")
         return headers
 
-    def _cleanup_old_instances(self):
-        """LRU cleanup: hapus instance terlama jika melebihi limit."""
-        while len(self._ydl_instances) > self._max_instances:
-            oldest_key = next(iter(self._ydl_instances))
-            removed = self._ydl_instances.get(oldest_key)
-            if removed and removed.get("busy"):
-                self._ydl_instances.move_to_end(oldest_key)
-                break
-            removed = self._ydl_instances.pop(oldest_key, None)
-            if not removed:
-                continue
-            opts_key = removed.get("opts_key")
-            if opts_key and opts_key in self._pool_slots:
-                self._pool_slots[opts_key] = [slot for slot in self._pool_slots[opts_key] if slot != oldest_key]
-                if not self._pool_slots[opts_key]:
-                    self._pool_slots.pop(opts_key, None)
-                    self._pool_rr.pop(opts_key, None)
-                    self._pool_conds.pop(opts_key, None)
-            logger.info(f"Cleaned up YoutubeDL instance: {oldest_key}")
-
     def _periodic_cleanup_locked(self):
         """Periodic cleanup untuk idle instances. Caller must hold _global_lock."""
         now = time.time()
@@ -347,7 +278,6 @@ class YoutubeDLManager:
         self._pool_conds.setdefault(opts_key, threading.Condition(self._global_lock))
         self._pool_rr.setdefault(opts_key, 0)
         logger.info("Created new YoutubeDL instance: %s", slot_key)
-        self._cleanup_old_instances()
         return slot_key
 
     def _acquire_ydl_slot(self, proxy: Optional[str] = None,
@@ -383,16 +313,13 @@ class YoutubeDLManager:
                     self._pool_rr[opts_key] = (start + offset + 1) % slot_count
                     return slot_key, slot["instance"]
 
-                if slot_count < self._parallel_per_key and len(self._ydl_instances) < self._max_instances:
-                    slot_key = self._create_slot_locked(opts_key, proxy, impersonate, force_ipv6)
-                    slot = self._ydl_instances[slot_key]
-                    slot["busy"] = True
-                    slot["last_used"] = time.time()
-                    self._ydl_instances.move_to_end(slot_key)
-                    self._pool_rr[opts_key] = len(self._pool_slots[opts_key]) % max(1, len(self._pool_slots[opts_key]))
-                    return slot_key, slot["instance"]
-
-                cond.wait(timeout=0.5)
+                slot_key = self._create_slot_locked(opts_key, proxy, impersonate, force_ipv6)
+                slot = self._ydl_instances[slot_key]
+                slot["busy"] = True
+                slot["last_used"] = time.time()
+                self._ydl_instances.move_to_end(slot_key)
+                self._pool_rr[opts_key] = len(self._pool_slots[opts_key]) % max(1, len(self._pool_slots[opts_key]))
+                return slot_key, slot["instance"]
 
     def _release_ydl_slot(self, slot_key: str) -> None:
         with self._global_lock:
@@ -519,8 +446,8 @@ class YoutubeDLManager:
             return {
                 "request_count": self._request_count,
                 "active_instances": len(self._ydl_instances),
-                "max_instances": self._max_instances,
-                "parallel_per_key": self._parallel_per_key,
+                "max_instances": None,
+                "parallel_per_key": None,
                 "instances": {
                     key: {
                         "created": data.get('created'),

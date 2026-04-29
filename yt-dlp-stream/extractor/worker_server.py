@@ -19,10 +19,7 @@ import traceback
 import importlib.util
 from typing import Any, Optional
 
-try:
-    import psutil
-except ImportError:  # pragma: no cover - optional in local dev
-    psutil = None
+
 import yt_dlp
 
 # Keep import path stable inside container
@@ -50,72 +47,7 @@ def _write_message(wfile, payload: dict[str, Any]) -> None:
     wfile.flush()
 
 
-def _memory_snapshot() -> tuple[int, int]:
-    if psutil is not None:
-        mem = psutil.virtual_memory()
-        return int(mem.total), int(mem.available)
-    try:
-        mem_total = 1024 ** 3
-        mem_available = mem_total
-        with open("/proc/meminfo", "r", encoding="utf-8") as handle:
-            for line in handle:
-                if line.startswith("MemTotal:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        mem_total = int(parts[1]) * 1024
-                elif line.startswith("MemAvailable:"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        mem_available = int(parts[1]) * 1024
-        return mem_total, mem_available
-    except OSError:
-        fallback = 1024 ** 3
-        return fallback, fallback
 
-
-def _read_parallel_capacity() -> int:
-    raw = os.getenv("YTDLP_WORKER_CONCURRENCY", "auto").strip().lower()
-    if raw not in {"", "auto"}:
-        try:
-            configured = int(raw)
-        except ValueError:
-            configured = 0
-        if configured > 0:
-            return configured
-
-    cpu_count = (psutil.cpu_count(logical=True) if psutil is not None else None) or os.cpu_count() or 1
-    mem_total, mem_available = _memory_snapshot()
-    mem_gib = max(1, int(mem_total / (1024 ** 3)))
-    capacity = min(max(1, cpu_count * 2), max(1, mem_gib * 2), 32)
-    if mem_available / max(1, mem_total) < 0.20:
-        capacity = max(1, capacity // 2)
-    return max(1, capacity)
-
-
-class ConcurrencyLimiter:
-    def __init__(self, capacity: int):
-        self.capacity = max(1, capacity)
-        self._sem = threading.Semaphore(self.capacity)
-        self._lock = threading.Lock()
-        self._active = 0
-
-    def acquire(self) -> None:
-        self._sem.acquire()
-        with self._lock:
-            self._active += 1
-
-    def release(self) -> None:
-        with self._lock:
-            if self._active > 0:
-                self._active -= 1
-        self._sem.release()
-
-    def active(self) -> int:
-        with self._lock:
-            return self._active
-
-
-LIMITER = ConcurrencyLimiter(_read_parallel_capacity())
 
 
 class RPCHandler(socketserver.StreamRequestHandler):
@@ -143,11 +75,7 @@ class RPCHandler(socketserver.StreamRequestHandler):
                     _write_message(self.wfile, daemon._error_response(req_id, "Field params must be an object", code="bad_request", status=400))
                     continue
 
-                LIMITER.acquire()
-                try:
-                    result = daemon._dispatch(method, params)
-                finally:
-                    LIMITER.release()
+                result = daemon._dispatch(method, params)
                 _write_message(self.wfile, {"id": req_id, "ok": True, "result": result})
             except yt_dlp.utils.DownloadError as exc:
                 _write_message(self.wfile, daemon._error_response(req_id, str(exc), code="download_error", status=400))
@@ -186,10 +114,9 @@ def main() -> int:
     port = int(os.getenv("EXTRACTOR_BIND_PORT", "9487"))
     with ThreadingTCPServer((host, port), RPCHandler) as server:
         logger.info(
-            "extractor worker server listening on %s:%d with auto concurrency=%d",
+            "extractor worker server listening on %s:%d (unlimited concurrency)",
             host,
             port,
-            LIMITER.capacity,
         )
         server.serve_forever(poll_interval=0.5)
     return 0

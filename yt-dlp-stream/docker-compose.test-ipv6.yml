@@ -1,0 +1,119 @@
+# Single worker test with ProtonVPN Indonesia (IPv4 only)
+services:
+  gluetun-1:
+    image: qmcgaw/gluetun:v3.41.1
+    container_name: ytdlp-gluetun-1
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "8001:8000"
+      - "9487:9487"
+    environment:
+      - VPN_SERVICE_PROVIDER=custom
+      - VPN_TYPE=wireguard
+      - WIREGUARD_PRIVATE_KEY=4PAqibezUQFTHw5pPE/6shLC609DCHJULR6oe+1jY3g=
+      - WIREGUARD_ADDRESSES=10.2.0.2/32
+      - WIREGUARD_PUBLIC_KEY=FLN2u1Tt5XV+uB1K1j6nkvgDZ2XKDnd6uT8BHPpQ0Cw=
+      - WIREGUARD_ENDPOINT_IP=146.70.14.42
+      - WIREGUARD_ENDPOINT_PORT=51820
+      - WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL=25s
+      - IPV6=off
+      - DNS_ADDRESS=10.2.0.1
+      - HTTP_CONTROL_SERVER_ADDRESS=:8000
+      - HTTP_CONTROL_SERVER_LOG=off
+      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
+      - HTTPPROXY=on
+      - HTTPPROXY_LOG=off
+    volumes:
+      - ./gluetun/data-test:/gluetun
+    restart: unless-stopped
+    networks:
+      ytdlp-test-network:
+        aliases:
+          - gluetun-1
+
+  ytdlp-1:
+    build:
+      context: ..
+      dockerfile: yt-dlp-stream/Dockerfile
+      target: base
+    container_name: ytdlp-stream-1
+    network_mode: "service:gluetun-1"
+    depends_on:
+      - gluetun-1
+      - redis
+    environment:
+      - WORKER_ID=w1
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=debug
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=0
+      - PYTHONPATH=/app:/app/yt_dlp
+      - REDIS_URL=redis://172.30.1.250:6379/0
+      - GLUETUN_HOST=localhost
+      - GLUETUN_PORT=8000
+      - GLUETUN_USERNAME=admin
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: ytdlp-test-redis
+    volumes:
+      - redis-test-data:/data
+    command: redis-server
+    restart: unless-stopped
+    networks:
+      ytdlp-test-network:
+        ipv4_address: 172.30.1.250
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway-go/Dockerfile
+    container_name: ytdlp-test-gateway
+    ports:
+      - "9111:9111"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - GATEWAY_PORT=9111
+      - WORKER_COUNT=1
+      - EXTRACTOR_IPC_ENABLED=true
+      - EXTRACTOR_TIMEOUT_MS=15000
+      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+      - MAX_RETRIES=3
+      - HEALTH_CHECK_TIMEOUT_MS=15000
+      - HEALTH_MONITOR_INTERVAL_MS=5000
+      - HEALTH_FAILURE_THRESHOLD=3
+      - RATE_LIMIT_COOLDOWN=300
+      - DRAIN_POLL_INTERVAL_MS=350
+      - DRAIN_TIMEOUT_SECONDS=120
+      - RESTART_BACKOFF_BASE=10
+      - RESTART_BACKOFF_MAX=90
+      - RESTART_BACKOFF_JITTER=2
+      - DEGRADED_RETRY_AFTER=5
+      - DEGRADED_TIMEOUT_SECONDS=30
+      - RESTART_STABILIZE_SECONDS=5
+      - UNHEALTHY_RESTART_THRESHOLD=6
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_started
+      ytdlp-1:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - ytdlp-test-network
+
+networks:
+  ytdlp-test-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.1.0/24
+
+volumes:
+  redis-test-data:

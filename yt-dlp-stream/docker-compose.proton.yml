@@ -1,11 +1,11 @@
 x-ytdlp-worker-limits: &ytdlp_worker_limits
-  mem_limit: 512m
-  memswap_limit: 512m
-
-x-gateway-limits: &gateway_limits
   mem_limit: 1g
   memswap_limit: 1g
-  cpus: 2.0
+
+x-gateway-limits: &gateway_limits
+  mem_limit: 2g
+  memswap_limit: 2g
+  cpus: 4.0
 
 services:
   gluetun-1:
@@ -64,7 +64,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -124,7 +123,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -184,7 +182,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -244,7 +241,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -305,7 +301,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -366,7 +361,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -427,7 +421,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -488,7 +481,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -549,7 +541,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -610,7 +601,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -671,7 +661,6 @@ services:
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - YTDLP_WORKER_CONCURRENCY=2
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -701,7 +690,6 @@ services:
       - WORKER_COUNT=11
       - EXTRACTOR_IPC_ENABLED=true
       - EXTRACTOR_TIMEOUT_MS=15000
-      - MAX_WORKER_IPC_CONCURRENCY=2
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
       - MAX_RETRIES=2
       - HEALTH_CHECK_TIMEOUT_MS=15000
@@ -717,7 +705,6 @@ services:
       - DEGRADED_TIMEOUT_SECONDS=30
       - RESTART_STABILIZE_SECONDS=5
       - UNHEALTHY_RESTART_THRESHOLD=6
-      - TIKTOK_SLIDESHOW_MAX_CONCURRENCY=1
     depends_on:
       redis:
         condition: service_started

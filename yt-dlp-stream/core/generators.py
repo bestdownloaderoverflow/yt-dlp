@@ -15,6 +15,7 @@ from fastapi import HTTPException, Request as FastAPIRequest
 from core.config import CHUNK_SIZE, VIDEO_CHUNK_SIZE, AUDIO_FORMAT
 from core.ffmpeg import build_ffmpeg_merge_cmd, build_ffmpeg_single_cmd
 from core.helpers import _extract_info_and_resolve, needs_ios_video_transcode
+from core.http_pool import get_async_pool, get_sync_pool
 from process_manager import process_manager
 from ytdl_manager import ydl_manager
 
@@ -180,8 +181,8 @@ async def _chunked_range_generator(
     and the connection never times out on large files.
     """
     read = 0
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-        while read < total_size:
+    client = get_async_pool()
+    while read < total_size:
             end = min(read + chunk_size - 1, total_size - 1)
             range_headers = {**headers, "Range": f"bytes={read}-{end}"}
             async with client.stream("GET", url, headers=range_headers) as resp:
@@ -219,8 +220,8 @@ async def _chunked_video_generator(
 
     safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-        while read < total_size:
+    client = get_async_pool()
+    while read < total_size:
             # Check for cancellation
             if cancel_event and cancel_event.is_set():
                 logger.info(f"Chunked download cancelled at byte {read}/{total_size}")
@@ -573,7 +574,10 @@ async def _stream_chunked_merge(
     def feed_video():
         try:
             while not cancel_event.is_set():
-                chunk = video_queue.get()
+                try:
+                    chunk = video_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
                 if chunk is None:
                     break
                 # Check for error sentinel
@@ -594,7 +598,10 @@ async def _stream_chunked_merge(
     def feed_audio():
         try:
             while not cancel_event.is_set():
-                chunk = audio_queue.get()
+                try:
+                    chunk = audio_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
                 if chunk is None:
                     break
                 # Check for error sentinel
@@ -760,7 +767,10 @@ async def _stream_mp3_chunked(
     def feed_ffmpeg_stdin():
         try:
             while not cancel_event.is_set():
-                chunk = download_queue.get()
+                try:
+                    chunk = download_queue.get(timeout=1.0)
+                except queue.Empty:
+                    continue
                 if chunk is None:
                     break
                 ffmpeg_proc.stdin.write(chunk)
@@ -905,8 +915,8 @@ async def _download_chunked_to_queue(url, headers, size, chunk_size, refresh_inf
 async def _download_simple_to_queue(url, headers, q, cancel_event=None):
     """Helper: simple download dan push ke queue."""
     safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
-    async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-        async with client.stream("GET", url, headers=safe_headers) as resp:
+    client = get_async_pool()
+    async with client.stream("GET", url, headers=safe_headers) as resp:
             resp.raise_for_status()
             async for data in resp.aiter_bytes():
                 if cancel_event and cancel_event.is_set():
@@ -925,8 +935,8 @@ def _sync_download_chunked_to_queue(url, headers, size, chunk_size, refresh_info
     safe_headers.setdefault("Accept-Encoding", "identity")
     read = 0
     max_retries = 3
-    with httpx.Client(follow_redirects=True, timeout=30) as client:
-        while read < size:
+    client = get_sync_pool()
+    while read < size:
             if cancel_event and cancel_event.is_set():
                 break
             end = min(read + chunk_size - 1, size - 1)
@@ -959,8 +969,8 @@ def _sync_download_chunked_to_queue(url, headers, size, chunk_size, refresh_info
 def _sync_download_simple_to_queue(url, headers, q, cancel_event=None):
     """Sync version of _download_simple_to_queue untuk daemon threads."""
     safe_headers = {k: v for k, v in headers.items() if k.lower() != "accept-encoding"}
-    with httpx.Client(follow_redirects=True, timeout=60) as client:
-        with client.stream("GET", url, headers=safe_headers) as resp:
+    client = get_sync_pool()
+    with client.stream("GET", url, headers=safe_headers) as resp:
             resp.raise_for_status()
             for data in resp.iter_bytes():
                 if cancel_event and cancel_event.is_set():
@@ -997,8 +1007,8 @@ def slideshow_generator(
     image_paths = []
     for i, img_url in enumerate(image_urls):
         img_path = work_dir / f"image_{i}.jpg"
-        with httpx.Client(timeout=60, follow_redirects=True) as client:
-            with client.stream("GET", img_url) as response:
+        client = get_sync_pool()
+        with client.stream("GET", img_url) as response:
                 response.raise_for_status()
                 with open(img_path, "wb") as f:
                     for chunk in response.iter_bytes(chunk_size=8192):
@@ -1026,8 +1036,8 @@ def slideshow_generator(
     if audio_url:
         # Download audio
         audio_path = work_dir / "audio.mp3"
-        with httpx.Client(timeout=60, follow_redirects=True) as client:
-            with client.stream("GET", audio_url) as response:
+        client = get_sync_pool()
+        with client.stream("GET", audio_url) as response:
                 response.raise_for_status()
                 with open(audio_path, "wb") as f:
                     for chunk in response.iter_bytes(chunk_size=8192):

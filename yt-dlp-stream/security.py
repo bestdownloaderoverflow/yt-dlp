@@ -144,6 +144,10 @@ class RateLimiter:
         self._last_redis_check = 0.0
         self._redis_check_interval = 30  # Re-check Redis availability every 30s
 
+        # Start background cleanup thread for in-memory fallback dict
+        self._cleanup_thread = threading.Thread(target=self._run_cleanup, daemon=True, name="RateLimiterCleanup")
+        self._cleanup_thread.start()
+
     def _get_redis(self):
         """Lazy-init Redis client, re-check availability periodically."""
         now = time.time()
@@ -197,6 +201,8 @@ class RateLimiter:
                     ts for ts in self._fallback_requests[client_id]
                     if now - ts < self.window
                 ]
+                if not self._fallback_requests[client_id]:
+                    del self._fallback_requests[client_id]
             requests = self._fallback_requests.get(client_id, [])
             if len(requests) >= self.max_requests:
                 return False
@@ -218,6 +224,16 @@ class RateLimiter:
                     self._fallback_requests[client_id] = valid
             for client_id in to_remove:
                 del self._fallback_requests[client_id]
+
+    def _run_cleanup(self):
+        """Background thread to periodically clean up fallback entries."""
+        import time
+        while True:
+            time.sleep(60)
+            try:
+                self.cleanup_old_entries()
+            except Exception:
+                pass
 
 
 # Global rate limiter instance

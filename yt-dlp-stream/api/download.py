@@ -25,6 +25,7 @@ from core.helpers import (
     _build_ydl_opts,
     needs_ios_video_transcode,
 )
+from core.http_pool import get_async_pool
 from api.stream_ffmpeg import _streaming_response
 
 router = APIRouter()
@@ -137,12 +138,10 @@ async def _download_video_direct(
     media_type = VIDEO_MIME_BY_EXT.get(default_ext, "application/octet-stream")
 
     async def _stream_video() -> AsyncIterator[bytes]:
-        async with httpx.AsyncClient(
-            follow_redirects=True, timeout=300
-        ) as client:
-            async with client.stream(
-                "GET", direct_url, headers=safe_headers
-            ) as resp:
+        client = get_async_pool()
+        async with client.stream(
+            "GET", direct_url, headers=safe_headers
+        ) as resp:
                 resp.raise_for_status()
                 async for data in resp.aiter_bytes(65536):
                     if await request.is_disconnected():
@@ -208,12 +207,10 @@ async def _download_video(
             safe_headers["Accept-Encoding"] = "identity"
 
             async def _strict_simple_stream() -> AsyncIterator[bytes]:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=60
-                ) as client:
-                    async with client.stream(
-                        "GET", direct_url, headers=safe_headers
-                    ) as resp:
+                client = get_async_pool()
+                async with client.stream(
+                    "GET", direct_url, headers=safe_headers
+                ) as resp:
                         resp.raise_for_status()
                         async for data in resp.aiter_bytes(65536):
                             if await request.is_disconnected():
@@ -245,12 +242,10 @@ async def _download_video(
             }
 
             async def _simple_stream() -> AsyncIterator[bytes]:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=60
-                ) as client:
-                    async with client.stream(
-                        "GET", direct_url, headers=safe_headers
-                    ) as resp:
+                client = get_async_pool()
+                async with client.stream(
+                    "GET", direct_url, headers=safe_headers
+                ) as resp:
                         resp.raise_for_status()
                         async for data in resp.aiter_bytes(65536):
                             if await request.is_disconnected():
@@ -417,8 +412,8 @@ async def _download_photo(
     filename = f"photo_{photo_index}.{ext}"
 
     async def _stream_photo() -> AsyncIterator[bytes]:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=60) as client:
-            async with client.stream("GET", photo_url) as resp:
+        client = get_async_pool()
+        async with client.stream("GET", photo_url) as resp:
                 resp.raise_for_status()
                 async for data in resp.aiter_bytes(65536):
                     if await request.is_disconnected():

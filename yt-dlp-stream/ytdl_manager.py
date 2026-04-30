@@ -113,10 +113,14 @@ class YoutubeDLManager:
         self._pool_slots: Dict[str, List[str]] = {}
         self._pool_rr: Dict[str, int] = {}
         self._pool_conds: Dict[str, threading.Condition] = {}
+        self._pool_seq: Dict[str, int] = {}
         self._global_lock = threading.Lock()
         self._count_lock = threading.Lock()
         self._request_count = 0
-        self._cleanup_interval = 3600  # Cleanup every hour
+        self._cleanup_interval = int(os.getenv("YTDLP_CLEANUP_INTERVAL", "300"))  # 5 min default
+        self._max_instances = int(os.getenv("YTDLP_MAX_INSTANCES", "24"))
+        self._max_requests_per_instance = int(os.getenv("YTDLP_MAX_REQUESTS_PER_INSTANCE", "200"))
+        self._acquire_timeout = float(os.getenv("YTDLP_ACQUIRE_TIMEOUT", "30"))
         self._last_cleanup = time.time()
         self._tiktok_device_id = os.getenv("TIKTOK_DEVICE_ID", _default_tiktok_device_id()).strip()
         self._tiktok_app_name = os.getenv("TIKTOK_APP_NAME", "trill").strip() or "trill"
@@ -128,7 +132,12 @@ class YoutubeDLManager:
         # Optional full override (single value or comma-separated values).
         self._tiktok_app_info_override = os.getenv("TIKTOK_APP_INFO", "").strip()
         self._js_runtimes = _env_js_runtimes()
-        logger.info("YoutubeDL manager parallelism enabled: unbounded per process")
+        logger.info(
+            "YoutubeDL manager pool: max_instances=%s max_requests_per_instance=%s acquire_timeout=%ss",
+            self._max_instances,
+            self._max_requests_per_instance,
+            self._acquire_timeout,
+        )
         logger.info(
             "yt-dlp JS runtimes configured: %s",
             ", ".join(
@@ -236,12 +245,15 @@ class YoutubeDLManager:
         if now - self._last_cleanup < self._cleanup_interval:
             return
 
-        # Hapus instances yang idle > 1 jam
+        # Hapus instances yang idle terlalu lama atau sudah terlalu banyak request
         to_remove = []
+        max_req = getattr(self, "_max_requests_per_instance", 200)
         for key, data in self._ydl_instances.items():
             if data.get("busy"):
                 continue
-            if now - data.get('last_used', now) > 3600:
+            idle_time = now - data.get('last_used', now)
+            requests = data.get("requests", 0)
+            if idle_time > 3600 or requests > max_req:
                 to_remove.append(key)
 
         for key in to_remove:
@@ -266,13 +278,16 @@ class YoutubeDLManager:
     def _create_slot_locked(self, opts_key: str, proxy: Optional[str],
                             impersonate: Optional[str], force_ipv6: bool) -> str:
         slots = self._pool_slots.setdefault(opts_key, [])
-        slot_key = f"{opts_key}#{len(slots) + 1}"
+        seq = self._pool_seq.get(opts_key, 0) + 1
+        self._pool_seq[opts_key] = seq
+        slot_key = f"{opts_key}#{seq}"
         self._ydl_instances[slot_key] = {
             "instance": self._create_ydl(proxy, impersonate, force_ipv6),
             "created": time.time(),
             "last_used": time.time(),
             "opts_key": opts_key,
             "busy": False,
+            "requests": 0,
         }
         slots.append(slot_key)
         self._pool_conds.setdefault(opts_key, threading.Condition(self._global_lock))
@@ -286,6 +301,7 @@ class YoutubeDLManager:
         opts_key = self._build_opts_key(proxy, impersonate, force_ipv6)
 
         with self._global_lock:
+            deadline = time.monotonic() + self._acquire_timeout
             self._periodic_cleanup_locked()
             slots = self._pool_slots.setdefault(opts_key, [])
             if not slots:
@@ -313,6 +329,21 @@ class YoutubeDLManager:
                     self._pool_rr[opts_key] = (start + offset + 1) % slot_count
                     return slot_key, slot["instance"]
 
+                if slot_count >= self._max_instances:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"YoutubeDL pool exhausted for {opts_key} "
+                            f"(max={self._max_instances}, waited={self._acquire_timeout}s)"
+                        )
+                    logger.warning(
+                        "Pool full for %s (max=%d), waiting up to %.1fs",
+                        opts_key,
+                        self._max_instances,
+                        remaining,
+                    )
+                    cond.wait(timeout=min(5.0, remaining))
+                    continue
                 slot_key = self._create_slot_locked(opts_key, proxy, impersonate, force_ipv6)
                 slot = self._ydl_instances[slot_key]
                 slot["busy"] = True
@@ -328,6 +359,7 @@ class YoutubeDLManager:
                 return
             slot["busy"] = False
             slot["last_used"] = time.time()
+            slot["requests"] = slot.get("requests", 0) + 1
             opts_key = slot.get("opts_key")
             cond = self._pool_conds.get(opts_key)
             if cond is not None:
@@ -354,7 +386,13 @@ class YoutubeDLManager:
                 # different CookieJar to be used for the Cookie header, breaking
                 # TikTok CDN requests that validate tt_chain_token per-session.
                 if isinstance(info, dict):
-                    self._attach_headers_locked(ydl, info)
+                    # Shallow-copy info + formats to avoid mutating yt-dlp cached objects
+                    info_copy = dict(info)
+                    formats = info_copy.get("formats")
+                    if formats:
+                        info_copy["formats"] = [dict(f) for f in formats]
+                    self._attach_headers_locked(ydl, info_copy)
+                    return info_copy
                 return info
             except Exception as e:
                 logger.error(f"extract_info failed for {url}: {e}")
@@ -446,7 +484,7 @@ class YoutubeDLManager:
             return {
                 "request_count": self._request_count,
                 "active_instances": len(self._ydl_instances),
-                "max_instances": None,
+                "max_instances": self._max_instances,
                 "parallel_per_key": None,
                 "instances": {
                     key: {
@@ -467,6 +505,7 @@ class YoutubeDLManager:
             self._pool_slots.clear()
             self._pool_rr.clear()
             self._pool_conds.clear()
+            self._pool_seq.clear()
             logger.info("Force cleanup: all instances removed")
 
 

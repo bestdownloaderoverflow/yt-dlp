@@ -1,6 +1,12 @@
+x-gluetun-limits: &gluetun_limits
+  mem_limit: 1G
+  memswap_limit: 1G
+  cpus: 4.0
+
 x-ytdlp-worker-limits: &ytdlp_worker_limits
-  mem_limit: 1g
-  memswap_limit: 1g
+  mem_limit: 1G
+  memswap_limit: 1G
+  cpus: 4.0
 
 x-gateway-limits: &gateway_limits
   mem_limit: 2g
@@ -9,6 +15,7 @@ x-gateway-limits: &gateway_limits
 
 services:
   gluetun-1:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-1
     cap_add:
@@ -68,6 +75,7 @@ services:
     restart: unless-stopped
 
   gluetun-2:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-2
     cap_add:
@@ -127,6 +135,7 @@ services:
     restart: unless-stopped
 
   gluetun-3:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-3
     cap_add:
@@ -186,6 +195,7 @@ services:
     restart: unless-stopped
 
   gluetun-4:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-4
     cap_add:
@@ -245,6 +255,7 @@ services:
     restart: unless-stopped
 
   gluetun-5:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-5
     cap_add:
@@ -305,6 +316,7 @@ services:
     restart: unless-stopped
 
   gluetun-6:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-6
     cap_add:
@@ -365,6 +377,7 @@ services:
     restart: unless-stopped
 
   gluetun-7:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-7
     cap_add:
@@ -425,6 +438,7 @@ services:
     restart: unless-stopped
 
   gluetun-8:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-8
     cap_add:
@@ -485,6 +499,7 @@ services:
     restart: unless-stopped
 
   gluetun-9:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-9
     cap_add:
@@ -545,6 +560,7 @@ services:
     restart: unless-stopped
 
   gluetun-10:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-10
     cap_add:
@@ -605,6 +621,7 @@ services:
     restart: unless-stopped
 
   gluetun-11:
+    <<: *gluetun_limits
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-11
     cap_add:
@@ -667,6 +684,8 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ytdlp-redis
+    mem_limit: 300m
+    memswap_limit: 300m
     volumes:
       - redis-data:/data
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru

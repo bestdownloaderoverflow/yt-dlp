@@ -11,6 +11,7 @@ from typing import Dict, Optional, Callable, AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
 import httpx
+from core.http_pool import get_async_pool
 
 logger = logging.getLogger("ytdlp_stream")
 
@@ -43,7 +44,7 @@ class InternalTunnelManager:
 
     def __init__(self):
         self._streams: Dict[str, InternalStreamInfo] = {}
-        self._cleanup_interval = 300  # 5 minutes
+        self._cleanup_interval = 60  # 1 minute
         self._cleanup_thread = threading.Thread(
             target=self._background_cleanup,
             daemon=True,
@@ -126,8 +127,8 @@ class InternalTunnelManager:
         refresh_count = 0
         max_refreshes = 10
 
-        async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-            while read < total_size:
+        client = get_async_pool()
+        while read < total_size:
                 # Check if need refresh (every 3 chunks)
                 chunks_since_refresh = (
                     stream.chunk_count - stream.last_refresh_chunk
@@ -198,7 +199,7 @@ class InternalTunnelManager:
         """Cleanup stream dari memory."""
         self._streams.pop(stream_id, None)
 
-    def cleanup_expired(self, max_age_seconds: int = 3600):
+    def cleanup_expired(self, max_age_seconds: int = 300):
         """Remove expired streams."""
         now = datetime.now()
         expired = [

@@ -25,6 +25,7 @@ from core.generators import slideshow_generator
 from core.helpers import _enforce_rate_limit
 from core.redis_cache import download_cache
 from core.config import estimate_video_size, estimate_mp3_size
+from core.http_pool import get_async_pool
 from ytdl_manager import ydl_manager
 
 router = APIRouter()
@@ -306,17 +307,17 @@ async def _probe_content_length(url: str, headers: dict) -> Optional[int]:
         return None
 
     try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=20) as client:
-            head_resp = await client.request("HEAD", url, headers=headers)
-            size = _parse_content_length(head_resp.headers)
-            if size and size > 0:
-                return size
+        client = get_async_pool()
+        head_resp = await client.request("HEAD", url, headers=headers)
+        size = _parse_content_length(head_resp.headers)
+        if size and size > 0:
+            return size
 
-            range_headers = {**headers, "Range": "bytes=0-0"}
-            range_resp = await client.get(url, headers=range_headers)
-            size = _parse_content_length(range_resp.headers)
-            if size and size > 0:
-                return size
+        range_headers = {**headers, "Range": "bytes=0-0"}
+        range_resp = await client.get(url, headers=range_headers)
+        size = _parse_content_length(range_resp.headers)
+        if size and size > 0:
+            return size
     except Exception as e:
         logger.debug(f"Could not probe content length: {e}")
 
@@ -817,10 +818,8 @@ async def _download_video(
 
         while True:
             try:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=300
-                ) as client:
-                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                client = get_async_pool()
+                async with client.stream("GET", direct_url, headers=safe_headers) as resp:
                         # Handle 403 - try to refresh URL
                         if (
                             resp.status_code == 403
@@ -959,10 +958,8 @@ async def _download_photo(
 
         while True:
             try:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=60
-                ) as client:
-                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                client = get_async_pool()
+                async with client.stream("GET", direct_url, headers=safe_headers) as resp:
                         if (
                             resp.status_code == 403
                             and refresh_count < max_refreshes
@@ -1064,10 +1061,8 @@ async def _download_mp3(
 
         while True:
             try:
-                async with httpx.AsyncClient(
-                    follow_redirects=True, timeout=300
-                ) as client:
-                    async with client.stream("GET", direct_url, headers=safe_headers) as resp:
+                client = get_async_pool()
+                async with client.stream("GET", direct_url, headers=safe_headers) as resp:
                         if (
                             resp.status_code == 403
                             and refresh_count < max_refreshes

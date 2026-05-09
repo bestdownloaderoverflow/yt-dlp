@@ -855,7 +855,7 @@ func (h *Handlers) UptimeChecker() {
 						}
 					}
 					if h.Registry.IsWorkerIdle(wid) {
-						log.Printf("[uptime] restarting %s after 24h", wid)
+						log.Printf("[uptime] restarting %s after 6h", wid)
 						h.scheduleWorkerRestartWithReason(wid, restartReasonUptime, false)
 					}
 				}()

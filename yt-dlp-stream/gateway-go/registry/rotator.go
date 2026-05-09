@@ -124,7 +124,9 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string, reasonC
 
 	drained := v.WaitForDrain(ctx, workerID)
 	if !drained {
-		log.Printf("[%s] drain timeout reached; forcing container restart", workerID)
+		active := v.registry.ActiveRequests(workerID)
+		log.Printf("[%s] drain timeout reached; restart postponed to protect active connections (active_requests=%d)", workerID, active)
+		return false
 	}
 
 	v.registry.UpdateRestartState(workerID, true)

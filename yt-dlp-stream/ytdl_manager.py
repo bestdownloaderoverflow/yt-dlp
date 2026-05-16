@@ -132,6 +132,8 @@ class YoutubeDLManager:
         # Optional full override (single value or comma-separated values).
         self._tiktok_app_info_override = os.getenv("TIKTOK_APP_INFO", "").strip()
         self._js_runtimes = _env_js_runtimes()
+        self._cookiefile = os.getenv("YTDLP_COOKIEFILE", "").strip()
+        self._cookiefile_readonly = _env_bool("YTDLP_COOKIEFILE_READONLY", True)
         logger.info(
             "YoutubeDL manager pool: max_instances=%s max_requests_per_instance=%s acquire_timeout=%ss",
             self._max_instances,
@@ -145,6 +147,12 @@ class YoutubeDLManager:
                 for name, cfg in self._js_runtimes.items()
             ),
         )
+        if self._cookiefile:
+            logger.info(
+                "yt-dlp cookiefile configured: %s%s",
+                self._cookiefile,
+                " (read-only)" if self._cookiefile_readonly else "",
+            )
 
     def _build_tiktok_app_info_list(self) -> List[str]:
         if self._tiktok_app_info_override:
@@ -197,6 +205,8 @@ class YoutubeDLManager:
         if force_ipv6:
             # Force outbound socket bind to IPv6 family only.
             opts["source_address"] = "::"
+        if self._cookiefile:
+            opts["cookiefile"] = self._cookiefile
         if impersonate:
             target_str = impersonate if isinstance(impersonate, str) else str(impersonate)
             with YoutubeDLManager._impersonate_cache_lock:
@@ -218,7 +228,14 @@ class YoutubeDLManager:
                 )
                 opts["impersonate"] = impersonate_target
 
-        return yt_dlp.YoutubeDL(opts)
+        ydl = yt_dlp.YoutubeDL(opts)
+        if self._cookiefile and self._cookiefile_readonly:
+            # Force lazy cookie loading now, then disable save-on-close. Compose
+            # mounts the shared cookie file read-only so parallel workers do not
+            # race while rewriting it.
+            _ = ydl.cookiejar
+            ydl.save_cookies = lambda: None
+        return ydl
 
     @staticmethod
     def _build_outbound_headers_locked(ydl: yt_dlp.YoutubeDL, info_dict: Dict) -> Dict[str, str]:

@@ -65,11 +65,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -124,11 +127,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -183,11 +189,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -242,11 +251,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -301,11 +313,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -360,11 +375,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -419,11 +437,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -480,11 +501,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -541,11 +565,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -602,11 +629,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -663,11 +693,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -724,11 +757,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -785,11 +821,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -846,11 +885,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -907,11 +949,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -968,11 +1013,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -1029,11 +1077,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -1090,11 +1141,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -1151,11 +1205,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
@@ -1212,11 +1269,14 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
       - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://172.30.0.250:6379/0
       - GLUETUN_HOST=localhost
       - GLUETUN_PORT=8000
       - GLUETUN_USERNAME=admin
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 

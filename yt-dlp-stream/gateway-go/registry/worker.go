@@ -10,7 +10,7 @@ import (
 	"gateway-go/metrics"
 )
 
-const uptimeRestartInterval = 6 * time.Hour
+const uptimeRestartInterval = 2 * time.Hour
 
 type Worker struct {
 	ID               string

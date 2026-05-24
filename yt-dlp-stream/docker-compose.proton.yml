@@ -1,21 +1,6 @@
-x-gluetun-limits: &gluetun_limits
-  mem_limit: 512m
-  memswap_limit: 512m
-  cpus: 1.0
-
-x-ytdlp-worker-limits: &ytdlp_worker_limits
-  mem_limit: 1g
-  memswap_limit: 1g
-  cpus: 2.0
-
-x-gateway-limits: &gateway_limits
-  mem_limit: 1g
-  memswap_limit: 1g
-  cpus: 2.0
-
 services:
   gluetun-1:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-1
     cap_add:
@@ -51,7 +36,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-1:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -79,7 +64,7 @@ services:
     restart: unless-stopped
 
   gluetun-2:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-2
     cap_add:
@@ -115,7 +100,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-2:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -143,7 +128,7 @@ services:
     restart: unless-stopped
 
   gluetun-3:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-3
     cap_add:
@@ -179,7 +164,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-3:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -207,7 +192,7 @@ services:
     restart: unless-stopped
 
   gluetun-4:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-4
     cap_add:
@@ -243,7 +228,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-4:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -271,7 +256,7 @@ services:
     restart: unless-stopped
 
   gluetun-5:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-5
     cap_add:
@@ -307,7 +292,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-5:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -335,7 +320,7 @@ services:
     restart: unless-stopped
 
   gluetun-6:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-6
     cap_add:
@@ -371,7 +356,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-6:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -399,7 +384,7 @@ services:
     restart: unless-stopped
 
   gluetun-7:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-7
     cap_add:
@@ -435,7 +420,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-7:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -463,7 +448,7 @@ services:
     restart: unless-stopped
 
   gluetun-8:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-8
     cap_add:
@@ -499,7 +484,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-8:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -527,7 +512,7 @@ services:
     restart: unless-stopped
 
   gluetun-9:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-9
     cap_add:
@@ -563,7 +548,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-9:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -591,7 +576,7 @@ services:
     restart: unless-stopped
 
   gluetun-10:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-10
     cap_add:
@@ -627,7 +612,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-10:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -655,7 +640,7 @@ services:
     restart: unless-stopped
 
   gluetun-11:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-11
     cap_add:
@@ -691,7 +676,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-11:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -719,7 +704,7 @@ services:
     restart: unless-stopped
 
   gluetun-12:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-12
     cap_add:
@@ -755,7 +740,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-12:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -783,7 +768,7 @@ services:
     restart: unless-stopped
 
   gluetun-13:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-13
     cap_add:
@@ -819,7 +804,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-13:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -847,7 +832,7 @@ services:
     restart: unless-stopped
 
   gluetun-14:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-14
     cap_add:
@@ -879,7 +864,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-14:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -907,7 +892,7 @@ services:
     restart: unless-stopped
 
   gluetun-15:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-15
     cap_add:
@@ -939,7 +924,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-15:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -967,7 +952,7 @@ services:
     restart: unless-stopped
 
   gluetun-16:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-16
     cap_add:
@@ -999,7 +984,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-16:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -1027,7 +1012,7 @@ services:
     restart: unless-stopped
 
   gluetun-17:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-17
     cap_add:
@@ -1059,7 +1044,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-17:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -1087,7 +1072,7 @@ services:
     restart: unless-stopped
 
   gluetun-18:
-    <<: *gluetun_limits
+
     image: qmcgaw/gluetun:v3.41.1
     container_name: ytdlp-gluetun-18
     cap_add:
@@ -1119,7 +1104,7 @@ services:
       - "host.docker.internal:172.17.0.1"
 
   ytdlp-18:
-    <<: *ytdlp_worker_limits
+
     build:
       context: ..
       dockerfile: yt-dlp-stream/Dockerfile
@@ -1160,7 +1145,7 @@ services:
         ipv4_address: 172.30.0.250
 
   gateway-warp:
-    <<: *gateway_limits
+
     build:
       context: .
       dockerfile: gateway-go/Dockerfile

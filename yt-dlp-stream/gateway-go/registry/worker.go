@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +16,7 @@ const uptimeRestartInterval = 3 * time.Hour
 type Worker struct {
 	ID               string
 	Host             string
+	Country          string
 	APIPort          int
 	ProxyPort        int
 	ControlPort      int
@@ -58,6 +60,7 @@ type Config struct {
 	RestartQuarantineSeconds  int
 	HealthFailureThreshold    int
 	UnhealthyRestartThreshold int
+	WorkerCountries           map[string]string
 }
 
 type WorkerRegistry struct {
@@ -71,9 +74,14 @@ func NewWorkerRegistry(cfg Config) *WorkerRegistry {
 	workers := make([]*Worker, 0, cfg.WorkerCount)
 	for i := 1; i <= cfg.WorkerCount; i++ {
 		workerID := fmt.Sprintf("w%d", i)
+		var country string
+		if cfg.WorkerCountries != nil {
+			country = cfg.WorkerCountries[workerID]
+		}
 		workers = append(workers, &Worker{
 			ID:          workerID,
 			Host:        fmt.Sprintf("gluetun-%d", i),
+			Country:     country,
 			APIPort:     9487,
 			ProxyPort:   8888,
 			ControlPort: 8000,
@@ -116,7 +124,7 @@ func (r *WorkerRegistry) GetWorker(workerID string) *Worker {
 	return &copyW
 }
 
-func (r *WorkerRegistry) GetHealthyWorkers(exclude map[string]bool) []*Worker {
+func (r *WorkerRegistry) GetHealthyWorkers(exclude map[string]bool, excludeCountries map[string]bool) []*Worker {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -133,6 +141,9 @@ func (r *WorkerRegistry) GetHealthyWorkers(exclude map[string]bool) []*Worker {
 			continue
 		}
 		if exclude != nil && exclude[w.ID] {
+			continue
+		}
+		if excludeCountries != nil && w.Country != "" && excludeCountries[strings.ToLower(w.Country)] {
 			continue
 		}
 		if !w.LastRateLimit.IsZero() && now.Sub(w.LastRateLimit) <= time.Duration(r.cfg.RateLimitCooldownSeconds)*time.Second {

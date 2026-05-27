@@ -49,6 +49,7 @@ func main() {
 		RestartQuarantineSeconds:  cfg.RestartQuarantineSeconds,
 		HealthFailureThreshold:    cfg.HealthFailureThreshold,
 		UnhealthyRestartThreshold: cfg.UnhealthyRestartThreshold,
+		WorkerCountries:           cfg.WorkerCountries,
 	})
 	rotator := registry.NewVPNRotator(reg, registry.RotatorConfig{
 		HealthCheckTimeoutMs:    cfg.HealthCheckTimeoutMs,

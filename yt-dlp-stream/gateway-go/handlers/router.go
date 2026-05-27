@@ -254,7 +254,7 @@ func (h *Handlers) getPreferredOrHealthyWorker(preferredWorkerID string) *regist
 			return preferred
 		}
 	}
-	workers := h.Registry.GetHealthyWorkers(nil)
+	workers := h.Registry.GetHealthyWorkers(nil, nil)
 	if len(workers) == 0 {
 		return nil
 	}
@@ -262,7 +262,7 @@ func (h *Handlers) getPreferredOrHealthyWorker(preferredWorkerID string) *regist
 }
 
 func (h *Handlers) selectExtractorWorker(preferred string, requireHealthy bool) string {
-	return h.selectExtractorWorkerAvoiding(preferred, requireHealthy, nil)
+	return h.selectExtractorWorkerAvoiding(preferred, requireHealthy, nil, nil)
 }
 
 func (h *Handlers) extractorWorkerBelowCapacity(workerID string) bool {
@@ -273,12 +273,28 @@ func (h *Handlers) extractorWorkerBelowCapacity(workerID string) bool {
 // any worker IDs present in the `exclude` set. Used by retry/failover paths
 // so that a worker that just returned a network error isn't immediately
 // re-tried.
-func (h *Handlers) selectExtractorWorkerAvoiding(preferred string, requireHealthy bool, exclude map[string]bool) string {
+func (h *Handlers) selectExtractorWorkerAvoiding(preferred string, requireHealthy bool, exclude map[string]bool, excludeCountries map[string]bool) string {
+	res := h.selectExtractorWorkerAvoidingInternal(preferred, requireHealthy, exclude, excludeCountries)
+	if res == "" && excludeCountries != nil {
+		res = h.selectExtractorWorkerAvoidingInternal(preferred, requireHealthy, exclude, nil)
+	}
+	return res
+}
+
+func (h *Handlers) selectExtractorWorkerAvoidingInternal(preferred string, requireHealthy bool, exclude map[string]bool, excludeCountries map[string]bool) string {
 	if h.Extractor == nil {
 		return ""
 	}
 	isExcluded := func(id string) bool {
-		return exclude != nil && exclude[id]
+		if exclude != nil && exclude[id] {
+			return true
+		}
+		if excludeCountries != nil {
+			if w := h.Registry.GetWorker(id); w != nil && w.Country != "" && excludeCountries[strings.ToLower(w.Country)] {
+				return true
+			}
+		}
+		return false
 	}
 	if preferred != "" && !isExcluded(preferred) && h.Extractor.HasWorker(preferred) {
 		if !h.extractorWorkerBelowCapacity(preferred) {
@@ -291,9 +307,6 @@ func (h *Handlers) selectExtractorWorkerAvoiding(preferred string, requireHealth
 		}
 	}
 	filter := func(ids []string) []string {
-		if exclude == nil {
-			return ids
-		}
 		out := make([]string, 0, len(ids))
 		for _, id := range ids {
 			if !isExcluded(id) {
@@ -303,7 +316,7 @@ func (h *Handlers) selectExtractorWorkerAvoiding(preferred string, requireHealth
 		return out
 	}
 	if requireHealthy {
-		healthy := h.Registry.GetHealthyWorkers(nil)
+		healthy := h.Registry.GetHealthyWorkers(nil, nil)
 		candidates := make([]string, 0, len(healthy))
 		for _, worker := range healthy {
 			if h.Extractor.HasWorker(worker.ID) {
@@ -326,7 +339,7 @@ func (h *Handlers) selectExtractorWorkerAvoiding(preferred string, requireHealth
 	if len(candidates) > 0 {
 		return h.pickLeastLoadedExtractorWorker(candidates)
 	}
-	if exclude == nil {
+	if exclude == nil && excludeCountries == nil {
 		return h.Extractor.PickWorker("")
 	}
 	return ""
@@ -589,6 +602,7 @@ func (h *Handlers) handleResponse(w http.ResponseWriter, resp *http.Response, wo
 
 func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID string, strictPreferred bool) {
 	tried := map[string]bool{}
+	triedCountries := map[string]bool{}
 	queued := map[string]string{}
 	var body []byte
 	if method == http.MethodPost {
@@ -612,7 +626,11 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 			}
 		}
 		if worker == nil {
-			workers := h.Registry.GetHealthyWorkers(tried)
+			workers := h.Registry.GetHealthyWorkers(tried, triedCountries)
+			if len(workers) == 0 {
+				log.Printf("no healthy workers available in other countries; falling back to any healthy worker")
+				workers = h.Registry.GetHealthyWorkers(tried, nil)
+			}
 			if len(workers) == 0 {
 				log.Printf("no healthy workers available")
 				h.logNoHealthyWorkersSnapshot(tried)
@@ -621,6 +639,9 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 			worker = workers[rand.Intn(len(workers))]
 		}
 		tried[worker.ID] = true
+		if worker.Country != "" {
+			triedCountries[strings.ToLower(worker.Country)] = true
+		}
 		h.Registry.IncrementActive(worker.ID)
 		result := h.proxyStreamingResponse(w, r, worker, path, method, body)
 		h.Registry.DecrementActive(worker.ID)
@@ -670,14 +691,22 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 
 func (h *Handlers) proxyWithRotation(w http.ResponseWriter, r *http.Request, path string) {
 	tried := map[string]bool{}
+	triedCountries := map[string]bool{}
 	queued := map[string]string{}
 	for attempt := 0; attempt < h.Config.MaxRetries; attempt++ {
-		workers := h.Registry.GetHealthyWorkers(tried)
+		workers := h.Registry.GetHealthyWorkers(tried, triedCountries)
 		if len(workers) == 0 {
-			break
+			log.Printf("no healthy workers available in other countries for rotation; falling back to any healthy worker")
+			workers = h.Registry.GetHealthyWorkers(tried, nil)
+			if len(workers) == 0 {
+				break
+			}
 		}
 		worker := workers[rand.Intn(len(workers))]
 		tried[worker.ID] = true
+		if worker.Country != "" {
+			triedCountries[strings.ToLower(worker.Country)] = true
+		}
 		h.Registry.IncrementActive(worker.ID)
 		result := h.proxyStreamingResponse(w, r, worker, path, http.MethodGet, nil)
 		h.Registry.DecrementActive(worker.ID)
@@ -725,7 +754,7 @@ func (h *Handlers) proxyWithRotation(w http.ResponseWriter, r *http.Request, pat
 }
 
 func (h *Handlers) proxyToWorker(w http.ResponseWriter, r *http.Request, path string) proxyResult {
-	workers := h.Registry.GetHealthyWorkers(nil)
+	workers := h.Registry.GetHealthyWorkers(nil, nil)
 	if len(workers) == 0 {
 		w.Header().Set("Retry-After", strconv.Itoa(h.Config.DegradedRetryAfter))
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No workers available"})

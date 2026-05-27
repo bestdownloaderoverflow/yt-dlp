@@ -38,6 +38,7 @@ type Config struct {
 	RestartStabilizeSeconds   int
 	UnhealthyRestartThreshold int
 	RedisURL                  string
+	WorkerCountries           map[string]string
 }
 
 func LoadConfig() Config {
@@ -46,6 +47,8 @@ func LoadConfig() Config {
 	if len(youtubeFetchWorkers) == 0 && youtubeFetchWorker != "" {
 		youtubeFetchWorkers = []string{youtubeFetchWorker}
 	}
+
+	workerCountries := parseWorkerCountries(getenvDefault("WORKER_COUNTRIES", ""))
 
 	return Config{
 		GatewayPort:               envInt("GATEWAY_PORT", 9111),
@@ -79,6 +82,7 @@ func LoadConfig() Config {
 		RestartStabilizeSeconds:   envInt("RESTART_STABILIZE_SECONDS", 2),
 		UnhealthyRestartThreshold: envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
 		RedisURL:                  getenvDefault("REDIS_URL", "redis://172.30.0.250:6379/0"),
+		WorkerCountries:           workerCountries,
 	}
 }
 
@@ -170,4 +174,34 @@ func ExtractWorkerID(key string, workerCount int) string {
 		}
 	}
 	return ""
+}
+
+func parseWorkerCountries(raw string) map[string]string {
+	// Initialize with defaults matching docker-compose.proton.yml (up to 18 workers)
+	out := map[string]string{
+		"w1": "Indonesia", "w2": "Indonesia", "w3": "Indonesia",
+		"w4": "Singapore", "w5": "Singapore",
+		"w6": "Vietnam", "w7": "Vietnam", "w8": "Vietnam", "w9": "Vietnam",
+		"w10": "WARP",
+		"w11": "Singapore", "w12": "Singapore", "w13": "Singapore",
+		"w14": "Indonesia",
+		"w15": "Singapore", "w16": "Singapore", "w17": "Singapore", "w18": "Singapore",
+	}
+
+	if strings.TrimSpace(raw) == "" {
+		return out
+	}
+
+	parts := strings.Split(raw, ",")
+	for _, part := range parts {
+		kv := strings.Split(strings.TrimSpace(part), ":")
+		if len(kv) == 2 {
+			k := strings.ToLower(strings.TrimSpace(kv[0]))
+			v := strings.TrimSpace(kv[1])
+			if k != "" && v != "" {
+				out[k] = v
+			}
+		}
+	}
+	return out
 }

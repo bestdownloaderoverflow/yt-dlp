@@ -177,7 +177,7 @@ func (h *Handlers) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 // handleHealth returns worker health snapshot.
 func (h *Handlers) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	healthy := h.Registry.GetHealthyWorkers(nil)
+	healthy := h.Registry.GetHealthyWorkers(nil, nil)
 	now := time.Now()
 	workers := h.Registry.WorkersSnapshot()
 	rows := make([]map[string]any, 0, len(workers))
@@ -643,6 +643,7 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 	}
 	const maxAttempts = 3
 	tried := make(map[string]bool, maxAttempts)
+	triedCountries := make(map[string]bool, maxAttempts)
 	workerID := h.selectExtractorWorker("", true)
 	var (
 		result map[string]any
@@ -662,8 +663,11 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 			}
 			log.Printf("[extractor:%s] tiktok ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
 			tried[workerID] = true
+			if cw := h.Registry.GetWorker(workerID); cw != nil && cw.Country != "" {
+				triedCountries[strings.ToLower(cw.Country)] = true
+			}
 			h.recordFailover("/tiktok", "ipc_network")
-			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
+			workerID = h.selectExtractorWorkerAvoiding("", true, tried, triedCountries)
 			continue
 		}
 		if rpcErr != nil && isRetryableTikTokRPCError(rpcErr) {
@@ -672,8 +676,11 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 				workerID, attempt+1, maxAttempts, rpcErr.Message,
 			)
 			tried[workerID] = true
+			if cw := h.Registry.GetWorker(workerID); cw != nil && cw.Country != "" {
+				triedCountries[strings.ToLower(cw.Country)] = true
+			}
 			h.recordFailover("/tiktok", "rpc_retryable")
-			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
+			workerID = h.selectExtractorWorkerAvoiding("", true, tried, triedCountries)
 			rpcErr = nil
 			continue
 		}
@@ -721,6 +728,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 
 	const maxAttempts = 3
 	tried := make(map[string]bool, maxAttempts)
+	triedCountries := make(map[string]bool, maxAttempts)
 	workerID := h.selectExtractorWorker(preferred, true)
 	var (
 		planRaw map[string]any
@@ -740,9 +748,12 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 			}
 			log.Printf("[extractor:%s] tiktok download prepare ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
 			tried[workerID] = true
+			if cw := h.Registry.GetWorker(workerID); cw != nil && cw.Country != "" {
+				triedCountries[strings.ToLower(cw.Country)] = true
+			}
 			// Session state lives in shared Redis, so any healthy worker can take over.
 			h.recordFailover("/tiktok/download", "ipc_network")
-			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
+			workerID = h.selectExtractorWorkerAvoiding("", true, tried, triedCountries)
 			continue
 		}
 		if rpcErr != nil && isRetryableTikTokRPCError(rpcErr) {
@@ -751,8 +762,11 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 				workerID, attempt+1, maxAttempts, rpcErr.Message,
 			)
 			tried[workerID] = true
+			if cw := h.Registry.GetWorker(workerID); cw != nil && cw.Country != "" {
+				triedCountries[strings.ToLower(cw.Country)] = true
+			}
 			h.recordFailover("/tiktok/download", "rpc_retryable")
-			workerID = h.selectExtractorWorkerAvoiding("", true, tried)
+			workerID = h.selectExtractorWorkerAvoiding("", true, tried, triedCountries)
 			rpcErr = nil
 			continue
 		}

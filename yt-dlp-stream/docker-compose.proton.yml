@@ -1,17 +1,17 @@
 x-gluetun-limits: &gluetun_limits
   mem_limit: 128m
   memswap_limit: 128m
-  cpus: 0.2
+  cpus: 0.1
 
 x-ytdlp-worker-limits: &ytdlp_worker_limits
   mem_limit: 512m
   memswap_limit: 512m
-  cpus: 0.5
+  cpus: 0.3
 
 x-gateway-limits: &gateway_limits
   mem_limit: 512m
   memswap_limit: 512m
-  cpus: 1.0
+  cpus: 0.5
 
 services:
   gluetun-1:
@@ -1187,6 +1187,7 @@ services:
     container_name: ytdlp-redis
     mem_limit: 300m
     memswap_limit: 300m
+    cpus: 0.3
     volumes:
       - redis-data:/data
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru

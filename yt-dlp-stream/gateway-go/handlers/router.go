@@ -605,7 +605,6 @@ func (h *Handlers) handleResponse(w http.ResponseWriter, resp *http.Response, wo
 
 func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, method, preferredWorkerID string, strictPreferred bool) {
 	tried := map[string]bool{}
-	triedCountries := map[string]bool{}
 	queued := map[string]string{}
 	var body []byte
 	if method == http.MethodPost {
@@ -629,11 +628,7 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 			}
 		}
 		if worker == nil {
-			workers := h.Registry.GetHealthyWorkers(tried, triedCountries)
-			if len(workers) == 0 {
-				log.Printf("no healthy workers available in other countries; falling back to any healthy worker")
-				workers = h.Registry.GetHealthyWorkers(tried, nil)
-			}
+			workers := h.Registry.GetHealthyWorkers(tried, nil)
 			if len(workers) == 0 {
 				log.Printf("no healthy workers available")
 				h.logNoHealthyWorkersSnapshot(tried)
@@ -642,9 +637,6 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 			worker = workers[rand.Intn(len(workers))]
 		}
 		tried[worker.ID] = true
-		if worker.Country != "" {
-			triedCountries[strings.ToLower(worker.Country)] = true
-		}
 		h.Registry.IncrementActive(worker.ID)
 		result := h.proxyStreamingResponse(w, r, worker, path, method, body)
 		h.Registry.DecrementActive(worker.ID)
@@ -694,22 +686,14 @@ func (h *Handlers) proxyWithRetry(w http.ResponseWriter, r *http.Request, path, 
 
 func (h *Handlers) proxyWithRotation(w http.ResponseWriter, r *http.Request, path string) {
 	tried := map[string]bool{}
-	triedCountries := map[string]bool{}
 	queued := map[string]string{}
 	for attempt := 0; attempt < h.Config.MaxRetries; attempt++ {
-		workers := h.Registry.GetHealthyWorkers(tried, triedCountries)
+		workers := h.Registry.GetHealthyWorkers(tried, nil)
 		if len(workers) == 0 {
-			log.Printf("no healthy workers available in other countries for rotation; falling back to any healthy worker")
-			workers = h.Registry.GetHealthyWorkers(tried, nil)
-			if len(workers) == 0 {
-				break
-			}
+			break
 		}
 		worker := workers[rand.Intn(len(workers))]
 		tried[worker.ID] = true
-		if worker.Country != "" {
-			triedCountries[strings.ToLower(worker.Country)] = true
-		}
 		h.Registry.IncrementActive(worker.ID)
 		result := h.proxyStreamingResponse(w, r, worker, path, http.MethodGet, nil)
 		h.Registry.DecrementActive(worker.ID)

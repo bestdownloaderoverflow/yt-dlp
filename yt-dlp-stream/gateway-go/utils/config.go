@@ -51,18 +51,7 @@ func LoadConfig() Config {
 
 	workerCountries := parseWorkerCountries(getenvDefault("WORKER_COUNTRIES", ""))
 
-	uniqueCountries := make(map[string]struct{})
-	for _, country := range workerCountries {
-		c := strings.ToLower(strings.TrimSpace(country))
-		if c != "" {
-			uniqueCountries[c] = struct{}{}
-		}
-	}
-	numCountries := len(uniqueCountries)
-	maxRetries := envInt("MAX_RETRIES", 3)
-	if numCountries > maxRetries {
-		maxRetries = numCountries
-	}
+	maxRetries := envInt("MAX_RETRIES", 5)
 
 	return Config{
 		GatewayPort:               envInt("GATEWAY_PORT", 9111),

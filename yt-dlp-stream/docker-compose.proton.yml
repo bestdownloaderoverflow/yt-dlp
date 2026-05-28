@@ -1213,7 +1213,7 @@ services:
       - EXTRACTOR_IPC_ENABLED=true
       - EXTRACTOR_TIMEOUT_MS=15000
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-      - MAX_RETRIES=4
+      - MAX_RETRIES=5
       - TIKTOK_API_KEY=${TIKTOK_API_KEY:-}
       - WORKER_COUNTRIES=w1:Indonesia,w2:Indonesia,w3:Indonesia,w4:Singapore,w5:Singapore,w6:Vietnam,w7:Vietnam,w8:Vietnam,w9:Vietnam,w10:WARP,w11:Singapore,w12:Singapore,w13:Singapore,w14:Indonesia,w15:Singapore,w16:Singapore,w17:Singapore,w18:Singapore
       - HEALTH_CHECK_TIMEOUT_MS=15000

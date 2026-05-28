@@ -103,7 +103,7 @@ func (h *Handlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodOptions {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-API-Key")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -121,6 +121,9 @@ func (h *Handlers) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/stream/video", "/stream/video-chunked", "/stream/mp3", "/stream/mp3-chunked", "/stream/m4a":
 		h.handleStream(w, r)
 	case "/tiktok":
+		if !h.authorize(w, r) {
+			return
+		}
 		h.handleTikTok(w, r)
 	case "/tiktok/download":
 		h.handleTikTokDownload(w, r)
@@ -974,4 +977,24 @@ func extractWorkerID(key string, workerCount int) string {
 		}
 	}
 	return ""
+}
+
+func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request) bool {
+	if h.Config.TikTokAPIKey == "" {
+		return true
+	}
+
+	key := r.Header.Get("X-API-Key")
+	if key == "" {
+		key = r.URL.Query().Get("api_key")
+	}
+
+	if key != h.Config.TikTokAPIKey {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{
+			"error":  "Unauthorized",
+			"detail": "Invalid or missing API Key",
+		})
+		return false
+	}
+	return true
 }

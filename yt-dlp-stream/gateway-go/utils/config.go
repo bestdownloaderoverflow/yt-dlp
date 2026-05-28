@@ -19,6 +19,7 @@ type Config struct {
 	DegradedTimeoutSeconds    int
 	GluetunPassword           string
 	MaxRetries                int
+	TikTokAPIKey              string
 	HealthCheckTimeoutMs      int
 	HealthMonitorIntervalMs   int
 	HealthFailureThreshold    int
@@ -76,6 +77,7 @@ func LoadConfig() Config {
 		DegradedTimeoutSeconds:    envInt("DEGRADED_TIMEOUT_SECONDS", 30),
 		GluetunPassword:           getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
 		MaxRetries:                maxRetries,
+		TikTokAPIKey:              getenvDefault("TIKTOK_API_KEY", ""),
 		HealthCheckTimeoutMs:      envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
 		HealthMonitorIntervalMs:   envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
 		HealthFailureThreshold:    envInt("HEALTH_FAILURE_THRESHOLD", 3),

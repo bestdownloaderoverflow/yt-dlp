@@ -50,6 +50,19 @@ func LoadConfig() Config {
 
 	workerCountries := parseWorkerCountries(getenvDefault("WORKER_COUNTRIES", ""))
 
+	uniqueCountries := make(map[string]struct{})
+	for _, country := range workerCountries {
+		c := strings.ToLower(strings.TrimSpace(country))
+		if c != "" {
+			uniqueCountries[c] = struct{}{}
+		}
+	}
+	numCountries := len(uniqueCountries)
+	maxRetries := envInt("MAX_RETRIES", 3)
+	if numCountries > maxRetries {
+		maxRetries = numCountries
+	}
+
 	return Config{
 		GatewayPort:               envInt("GATEWAY_PORT", 9111),
 		WorkerCount:               envInt("WORKER_COUNT", 3),
@@ -62,7 +75,7 @@ func LoadConfig() Config {
 		ExtractorTimeoutMs:        envInt("EXTRACTOR_TIMEOUT_MS", 45000),
 		DegradedTimeoutSeconds:    envInt("DEGRADED_TIMEOUT_SECONDS", 30),
 		GluetunPassword:           getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
-		MaxRetries:                envInt("MAX_RETRIES", 3),
+		MaxRetries:                maxRetries,
 		HealthCheckTimeoutMs:      envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
 		HealthMonitorIntervalMs:   envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
 		HealthFailureThreshold:    envInt("HEALTH_FAILURE_THRESHOLD", 3),

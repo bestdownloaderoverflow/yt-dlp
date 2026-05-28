@@ -641,7 +641,7 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "URL is required"})
 		return
 	}
-	const maxAttempts = 3
+	maxAttempts := h.Config.MaxRetries
 	tried := make(map[string]bool, maxAttempts)
 	triedCountries := make(map[string]bool, maxAttempts)
 	workerID := h.selectExtractorWorker("", true)
@@ -726,7 +726,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 	download := utilsParseBool(r.URL.Query().Get("download"), true)
 	preferred := extractWorkerID(key, h.Config.WorkerCount)
 
-	const maxAttempts = 3
+	maxAttempts := h.Config.MaxRetries
 	tried := make(map[string]bool, maxAttempts)
 	triedCountries := make(map[string]bool, maxAttempts)
 	workerID := h.selectExtractorWorker(preferred, true)

@@ -1,10 +1,34 @@
 x-gluetun-limits: &gluetun_limits
   healthcheck:
     disable: true
+  deploy:
+    resources:
+      limits:
+        cpus: '0.10'
+        memory: 128M
+      reservations:
+        cpus: '0.05'
+        memory: 64M
 
-x-ytdlp-worker-limits: &ytdlp_worker_limits {}
+x-ytdlp-worker-limits: &ytdlp_worker_limits
+  deploy:
+    resources:
+      limits:
+        cpus: '0.32'
+        memory: 512M
+      reservations:
+        cpus: '0.15'
+        memory: 256M
 
-x-gateway-limits: &gateway_limits {}
+x-gateway-limits: &gateway_limits
+  deploy:
+    resources:
+      limits:
+        cpus: '0.32'
+        memory: 256M
+      reservations:
+        cpus: '0.10'
+        memory: 128M
 
 services:
   gluetun-1:
@@ -1178,6 +1202,14 @@ services:
   redis:
     image: redis:7-alpine
     container_name: ytdlp-redis
+    deploy:
+      resources:
+        limits:
+          cpus: '0.32'
+          memory: 512M
+        reservations:
+          cpus: '0.10'
+          memory: 128M
     volumes:
       - redis-data:/data
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru

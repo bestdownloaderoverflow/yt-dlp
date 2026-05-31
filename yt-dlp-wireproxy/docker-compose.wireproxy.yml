@@ -7,31 +7,31 @@ x-wireproxy-limits: &wireproxy_limits
   deploy:
     resources:
       limits:
-        cpus: '0.08'
-        memory: 64M
+        cpus: '0.12'
+        memory: 256M
       reservations:
-        cpus: '0.04'
-        memory: 32M
+        cpus: '0.06'
+        memory: 48M
 
 x-ytdlp-worker-limits: &ytdlp_worker_limits
   deploy:
     resources:
       limits:
-        cpus: '0.32'
-        memory: 512M
+        cpus: '1.45'
+        memory: 3600M
       reservations:
-        cpus: '0.15'
-        memory: 256M
+        cpus: '0.40'
+        memory: 384M
 
 x-gateway-limits: &gateway_limits
   deploy:
     resources:
       limits:
-        cpus: '0.32'
-        memory: 256M
+        cpus: '0.80'
+        memory: 1216M
       reservations:
-        cpus: '0.10'
-        memory: 128M
+        cpus: '0.25'
+        memory: 256M
 
 services:
   wireproxy-01:

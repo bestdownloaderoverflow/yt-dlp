@@ -1,0 +1,555 @@
+package delivery
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// StreamChunked performs HTTP Range requests in sequential chunks (10MB video / 8MB audio).
+// Falls back to StreamDirect if total size is unknown.
+func (d *Delivery) StreamChunked(
+	w http.ResponseWriter,
+	r *http.Request,
+	workerID string,
+	plan DeliveryPlan,
+	onRefresh func() (DeliveryPlan, error),
+	chunkSize int64,
+) {
+	if strings.TrimSpace(plan.DirectURL) == "" {
+		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
+		return
+	}
+	if chunkSize <= 0 {
+		chunkSize = VideoChunkSize
+	}
+
+	totalSize := parsePositiveInt64(plan.ResponseHeaders["Content-Length"])
+	if totalSize <= 0 {
+		// Without exact size, fall back to direct stream for compatibility.
+		d.StreamDirect(w, r, workerID, plan, onRefresh)
+		return
+	}
+
+	for k, v := range plan.ResponseHeaders {
+		kl := strings.ToLower(k)
+		if kl == "content-length" || kl == "content-range" {
+			continue
+		}
+		w.Header().Set(k, v)
+	}
+	if w.Header().Get("Content-Type") == "" && plan.MediaType != "" {
+		w.Header().Set("Content-Type", plan.MediaType)
+	}
+	w.Header().Set("Accept-Ranges", "bytes")
+	// Content-Length and WriteHeader(200) are committed on the first successful
+	// chunk so that upstream errors can still produce a 5xx instead of a
+	// truncated 200 body.
+
+	currentURL := plan.DirectURL
+	currentReqHeaders := plan.RequestHeaders
+	currentPlan := map[string]any{
+		"direct_url":       plan.DirectURL,
+		"request_headers":  plan.RequestHeaders,
+		"response_headers": plan.ResponseHeaders,
+		"media_type":       plan.MediaType,
+		"can_refresh":      plan.CanRefresh,
+		"platform":         plan.Platform,
+		"ffmpeg_audio_url": plan.FFmpegAudioURL,
+		"photo_urls":       []string{plan.DirectURL},
+		"bypass_proxy":     plan.BypassProxy,
+	}
+	read := int64(0)
+	headersSent := false
+	mediaClient := d.mediaHTTPClientForPlan(workerID, currentPlan)
+	refreshAttempts := 0
+	const maxRefreshAttempts = 10
+	const maxRetriesPerChunk = 3
+
+	for read < totalSize {
+		end := read + chunkSize - 1
+		if end >= totalSize {
+			end = totalSize - 1
+		}
+
+		chunkComplete := false
+		for chunkRetry := 0; chunkRetry < maxRetriesPerChunk && !chunkComplete; chunkRetry++ {
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, currentURL, nil)
+			if err != nil {
+				if !headersSent {
+					WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "chunked stream error"})
+				}
+				return
+			}
+			for k, v := range currentReqHeaders {
+				req.Header.Set(k, v)
+			}
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
+
+			resp, err := mediaClient.Do(req)
+			if err != nil {
+				if r.Context().Err() != nil || isClientAbortError(err) {
+					return
+				}
+				if chunkRetry == maxRetriesPerChunk-1 {
+					log.Printf("chunked upstream request failed at %d-%d: %v", read, end, err)
+					if !headersSent {
+						WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "chunked upstream failed"})
+					}
+					return
+				}
+				time.Sleep(time.Duration(1<<chunkRetry) * time.Second)
+				continue
+			}
+
+			if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				refreshedPlan, refreshErr := onRefresh()
+				if refreshErr != nil {
+					log.Printf("chunked refresh failed at %d-%d: %v", read, end, refreshErr)
+					if !headersSent {
+						WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "chunked refresh failed"})
+					}
+					return
+				}
+				if refreshedPlan.DirectURL != "" {
+					currentURL = refreshedPlan.DirectURL
+				}
+				currentPlan["direct_url"] = refreshedPlan.DirectURL
+				currentPlan["request_headers"] = refreshedPlan.RequestHeaders
+				currentReqHeaders = refreshedPlan.RequestHeaders
+				refreshAttempts++
+				continue
+			}
+
+			if resp.StatusCode != http.StatusPartialContent && !(resp.StatusCode == http.StatusOK && read == 0) {
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				if chunkRetry == maxRetriesPerChunk-1 {
+					log.Printf("chunked upstream status %d at %d-%d", resp.StatusCode, read, end)
+					if !headersSent {
+						WriteJSON(w, http.StatusBadGateway, map[string]string{"error": fmt.Sprintf("chunked upstream status %d", resp.StatusCode)})
+					}
+					return
+				}
+				time.Sleep(time.Duration(1<<chunkRetry) * time.Second)
+				continue
+			}
+
+			// First successful chunk — commit headers now.
+			if !headersSent {
+				w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
+				w.WriteHeader(http.StatusOK)
+				headersSent = true
+			}
+
+			n, copyErr := copyBuffer(w, resp.Body)
+			_ = resp.Body.Close()
+			if copyErr != nil {
+				if isClientAbortError(copyErr) || r.Context().Err() != nil {
+					return
+				}
+				log.Printf("chunked stream copy error at %d-%d: %v", read, end, copyErr)
+				return
+			}
+			read += n
+
+			// Some servers ignore range and stream whole body on first request.
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+			if n <= 0 {
+				return
+			}
+			chunkComplete = true
+		}
+		if !chunkComplete {
+			if !headersSent {
+				WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "chunked stream failed to start"})
+			}
+			return
+		}
+	}
+}
+
+// DownloadToFile downloads a source from a plan to a local file using HTTP Range requests.
+// Returns the updated plan after potential URL refreshes.
+func (d *Delivery) DownloadToFile(
+	ctx context.Context,
+	dstPath string,
+	plan DeliveryPlan,
+	selector planSourceSelector,
+	chunkSize int64,
+	onRefresh func() (DeliveryPlan, error),
+	client *http.Client,
+) (DeliveryPlan, error) {
+	if selector == nil {
+		return plan, fmt.Errorf("missing source selector")
+	}
+	if client == nil {
+		client = d.BaseCl
+	}
+	if chunkSize <= 0 {
+		chunkSize = VideoChunkSize
+	}
+
+	currentPlan := map[string]any{
+		"direct_url":       plan.DirectURL,
+		"request_headers":  plan.RequestHeaders,
+		"response_headers": plan.ResponseHeaders,
+		"media_type":       plan.MediaType,
+		"can_refresh":      plan.CanRefresh,
+		"platform":         plan.Platform,
+		"ffmpeg_audio_url": plan.FFmpegAudioURL,
+		"photo_urls":       []string{plan.DirectURL},
+	}
+	currentURL, currentHeaders := selector(currentPlan)
+	currentHeaders = sanitizeRequestHeaders(currentHeaders)
+	if strings.TrimSpace(currentURL) == "" {
+		return plan, fmt.Errorf("missing source URL in plan")
+	}
+
+	f, err := os.Create(dstPath)
+	if err != nil {
+		return plan, err
+	}
+	defer f.Close()
+
+	var read int64
+	var total int64
+	refreshAttempts := 0
+	const maxRefreshAttempts = 3
+	const maxRetriesPerChunk = 3
+
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
+		if err != nil {
+			return plan, err
+		}
+		for k, v := range currentHeaders {
+			req.Header.Set(k, v)
+		}
+
+		useRange := read > 0 || total > 0
+		if useRange {
+			end := read + chunkSize - 1
+			if total > 0 && end >= total {
+				end = total - 1
+			}
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
+		}
+
+		// Inner retry loop for transient network errors during request/read/copy.
+		var (
+			resp          *http.Response
+			copyErr       error
+			n             int64
+			shouldRefresh bool
+			lastStatus    int
+		)
+		for attempt := 0; attempt < maxRetriesPerChunk; attempt++ {
+			// Send request
+			resp, err = client.Do(req)
+			if err != nil {
+				if ctx.Err() != nil {
+					return plan, ctx.Err()
+				}
+				if attempt == maxRetriesPerChunk-1 {
+					return plan, fmt.Errorf("upstream request failed at offset %d: %w", read, err)
+				}
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+
+			// Check for 403 with refresh capability - not a retry, trigger refresh.
+			if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
+				shouldRefresh = true
+				break
+			}
+
+			// Handle range not satisfiable (end of file or invalid range)
+			if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+				_ = resp.Body.Close()
+				if total > 0 && read >= total {
+					return plan, nil
+				}
+				return plan, fmt.Errorf("range not satisfiable at %d/%d", read, total)
+			}
+
+			// Handle non-success non-partial status codes
+			if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+				bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+				_ = resp.Body.Close()
+				return plan, fmt.Errorf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
+			}
+
+			lastStatus = resp.StatusCode
+
+			// Track total size from partial content response
+			if resp.StatusCode == http.StatusPartialContent {
+				if total <= 0 {
+					if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
+						total = t
+					} else if cl := parsePositiveInt64(resp.Header.Get("Content-Length")); cl > 0 {
+						total = read + cl
+					}
+				}
+			} else if read > 0 {
+				// Server sent 200 OK when we expected a range - some CDNs do this.
+				// Seek back to start, truncate, and restart from beginning.
+				if _, err := f.Seek(0, io.SeekStart); err != nil {
+					_, _ = io.Copy(io.Discard, resp.Body)
+					_ = resp.Body.Close()
+					return plan, err
+				}
+				if err := f.Truncate(0); err != nil {
+					_, _ = io.Copy(io.Discard, resp.Body)
+					_ = resp.Body.Close()
+					return plan, err
+				}
+				read = 0
+				total = parsePositiveInt64(resp.Header.Get("Content-Length"))
+			}
+
+			// Copy the data
+			n, copyErr = copyBuffer(f, resp.Body)
+			_ = resp.Body.Close()
+			resp = nil
+
+			if copyErr != nil {
+				if ctx.Err() != nil {
+					return plan, ctx.Err()
+				}
+				if attempt == maxRetriesPerChunk-1 {
+					return plan, fmt.Errorf("copy failed at offset %d after %d attempts: %w", read, maxRetriesPerChunk, copyErr)
+				}
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+
+			// Success
+			break
+		}
+
+		// Handle refresh request (403) after breaking from retry loop
+		if shouldRefresh {
+			_ = resp.Body.Close()
+			refreshedPlan, refreshErr := onRefresh()
+			if refreshErr != nil {
+				return plan, refreshErr
+			}
+			currentPlan["direct_url"] = refreshedPlan.DirectURL
+			currentPlan["request_headers"] = refreshedPlan.RequestHeaders
+			currentPlan["photo_urls"] = []string{refreshedPlan.DirectURL}
+			currentURL, currentHeaders = selector(currentPlan)
+			currentHeaders = sanitizeRequestHeaders(currentHeaders)
+			if strings.TrimSpace(currentURL) == "" {
+				return plan, fmt.Errorf("missing refreshed source URL in plan")
+			}
+			refreshAttempts++
+			continue
+		}
+
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+
+		read += n
+
+		if lastStatus == http.StatusOK {
+			return plan, nil
+		}
+		if total > 0 && read >= total {
+			return plan, nil
+		}
+		if n <= 0 {
+			return plan, nil
+		}
+	}
+}
+
+// DownloadToWriter downloads a source from a plan into a writer using HTTP Range requests.
+func (d *Delivery) DownloadToWriter(
+	ctx context.Context,
+	dst io.WriteCloser,
+	plan DeliveryPlan,
+	selector planSourceSelector,
+	chunkSize int64,
+	onRefresh func() (DeliveryPlan, error),
+	client *http.Client,
+) error {
+	if dst == nil {
+		return fmt.Errorf("missing destination writer")
+	}
+	if selector == nil {
+		return fmt.Errorf("missing source selector")
+	}
+	if client == nil {
+		client = d.BaseCl
+	}
+	if chunkSize <= 0 {
+		chunkSize = VideoChunkSize
+	}
+
+	currentPlan := map[string]any{
+		"direct_url":        plan.DirectURL,
+		"request_headers":   plan.RequestHeaders,
+		"response_headers":  plan.ResponseHeaders,
+		"media_type":        plan.MediaType,
+		"can_refresh":       plan.CanRefresh,
+		"platform":          plan.Platform,
+		"ffmpeg_audio_url":  plan.FFmpegAudioURL,
+		"photo_urls":        []string{plan.DirectURL},
+	}
+	currentURL, currentHeaders := selector(currentPlan)
+	currentHeaders = sanitizeRequestHeaders(currentHeaders)
+	if strings.TrimSpace(currentURL) == "" {
+		return fmt.Errorf("missing source URL in plan")
+	}
+
+	var read int64
+	var total int64
+	refreshAttempts := 0
+	const maxRefreshAttempts = 3
+	const maxRetriesPerChunk = 3
+
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, currentURL, nil)
+		if err != nil {
+			return err
+		}
+		for k, v := range currentHeaders {
+			req.Header.Set(k, v)
+		}
+
+		useRange := read > 0 || total > 0
+		if useRange {
+			end := read + chunkSize - 1
+			if total > 0 && end >= total {
+				end = total - 1
+			}
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
+		}
+
+		// Inner retry loop for transient network errors during request/read/copy.
+		var (
+			resp         *http.Response
+			copyErr      error
+			n            int64
+			shouldRefresh bool
+		)
+		for attempt := 0; attempt < maxRetriesPerChunk; attempt++ {
+			// Send request
+			resp, err = client.Do(req)
+			if err != nil {
+				if ctx.Err() != nil || isClientAbortError(err) {
+					return err
+				}
+				if attempt == maxRetriesPerChunk-1 {
+					return fmt.Errorf("upstream request failed at offset %d: %w", read, err)
+				}
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+
+			// Check for 403 with refresh capability - not a retry, trigger refresh.
+			if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil && refreshAttempts < maxRefreshAttempts {
+				shouldRefresh = true
+				break
+			}
+
+			// Handle range not satisfiable (end of file or invalid range)
+			if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+				_ = resp.Body.Close()
+				if total > 0 && read >= total {
+					return nil
+				}
+				return fmt.Errorf("range not satisfiable at %d/%d", read, total)
+			}
+
+			// Handle non-success non-partial status codes
+			if resp.StatusCode != http.StatusPartialContent && resp.StatusCode != http.StatusOK {
+				bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+				_ = resp.Body.Close()
+				return fmt.Errorf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(bodySnippet)))
+			}
+
+			// Track total size from partial content response
+			if resp.StatusCode == http.StatusPartialContent {
+				if total <= 0 {
+					if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
+						total = t
+					} else if cl := parsePositiveInt64(resp.Header.Get("Content-Length")); cl > 0 {
+						total = read + cl
+					}
+				}
+			} else if read > 0 {
+				// Server sent 200 OK when we expected a range.
+				// For pipe-based streaming (DownloadToWriter), we cannot reset.
+				_, _ = io.Copy(io.Discard, resp.Body)
+				_ = resp.Body.Close()
+				return fmt.Errorf("upstream ignored resume range at offset %d", read)
+			}
+
+			// Copy the data
+			n, copyErr = copyBuffer(dst, resp.Body)
+			_ = resp.Body.Close()
+			resp = nil
+
+			if copyErr != nil {
+				if ctx.Err() != nil || isClientAbortError(copyErr) {
+					return copyErr
+				}
+				if attempt == maxRetriesPerChunk-1 {
+					return fmt.Errorf("copy failed at offset %d after %d attempts: %w", read, maxRetriesPerChunk, copyErr)
+				}
+				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+
+			// Success
+			break
+		}
+
+		// Handle refresh request (403) after breaking from retry loop
+		if shouldRefresh {
+			_ = resp.Body.Close()
+			refreshedPlan, refreshErr := onRefresh()
+			if refreshErr != nil {
+				return refreshErr
+			}
+			currentPlan["direct_url"] = refreshedPlan.DirectURL
+			currentPlan["request_headers"] = refreshedPlan.RequestHeaders
+			currentPlan["photo_urls"] = []string{refreshedPlan.DirectURL}
+			currentURL, currentHeaders = selector(currentPlan)
+			currentHeaders = sanitizeRequestHeaders(currentHeaders)
+			if strings.TrimSpace(currentURL) == "" {
+				return fmt.Errorf("missing refreshed source URL in plan")
+			}
+			refreshAttempts++
+			continue
+		}
+
+		// If we exhausted retries without success, the error was already returned above.
+		// This point should only be reached on success.
+		read += n
+
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+
+		if n <= 0 {
+			return nil
+		}
+		if total > 0 && read >= total {
+			return nil
+		}
+	}
+}

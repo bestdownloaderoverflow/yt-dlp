@@ -1,0 +1,153 @@
+"""Redis cache for download session management."""
+
+import json
+import os
+import uuid
+from dataclasses import dataclass, asdict
+from typing import Optional
+
+import redis
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+DEFAULT_TTL = 300  # 5 minutes
+WORKER_ID = os.getenv("WORKER_ID", "").strip()
+
+# Separator between WORKER_ID and raw UUID in user-facing keys.
+# Must NOT appear in a UUID (which uses only hex + '-').
+_KEY_SEP = "::"
+
+
+@dataclass
+class DownloadSession:
+    """Download session data."""
+
+    url: str
+    type: str  # video | mp3 | photo | slideshow
+    format_id: Optional[str] = None
+    quality: Optional[str] = None
+    photo_index: Optional[int] = None
+    created_at: Optional[float] = None
+    # Fields for direct download proxy (Twitter/X session integrity)
+    direct_url: Optional[str] = None
+    http_headers: Optional[dict] = None
+    cookies: Optional[str] = None
+    # TikTok-specific fields
+    photo_urls: Optional[list] = None  # List of photo URLs for slideshow
+    audio_url: Optional[str] = None  # Audio URL for slideshow
+    author: Optional[str] = None  # Author nickname for filename
+    platform: Optional[str] = None  # Platform identifier (tiktok, etc)
+    title: Optional[str] = None  # Original title for filename
+    proxy: Optional[str] = None  # Request-level proxy used during fetch
+    impersonate: Optional[str] = None  # Request-level impersonation used during fetch
+    filesize: Optional[int] = None  # Exact/approx media size if known
+    duration: Optional[int] = None  # Duration in seconds if known
+
+
+class RedisDownloadCache:
+    """Redis-based cache for download sessions with TTL."""
+
+    def __init__(self, ttl_seconds: int = DEFAULT_TTL):
+        self._redis = redis.from_url(
+            REDIS_URL,
+            decode_responses=True,
+            retry_on_timeout=True,
+            socket_connect_timeout=2,
+            socket_timeout=5,
+        )
+        self._ttl = ttl_seconds
+        self._key_prefix = "download:"
+
+    def create_session(
+        self,
+        url: str,
+        type: str,
+        format_id: str = None,
+        quality: str = None,
+        photo_index: int = None,
+        direct_url: str = None,
+        http_headers: dict = None,
+        cookies: str = None,
+        photo_urls: list = None,
+        audio_url: str = None,
+        author: str = None,
+        platform: str = None,
+        title: str = None,
+        proxy: str = None,
+        impersonate: str = None,
+        filesize: int = None,
+        duration: int = None,
+    ) -> str:
+        """Create new session and return key."""
+        raw_key = str(uuid.uuid4())
+        key = f"{WORKER_ID}{_KEY_SEP}{raw_key}" if WORKER_ID else raw_key
+        session = DownloadSession(
+            url=url,
+            type=type,
+            format_id=format_id,
+            quality=quality,
+            photo_index=photo_index,
+            created_at=None,  # Redis akan handle timestamp via TTL
+            direct_url=direct_url,
+            http_headers=http_headers,
+            cookies=cookies,
+            photo_urls=photo_urls,
+            audio_url=audio_url,
+            author=author,
+            platform=platform,
+            title=title,
+            proxy=proxy,
+            impersonate=impersonate,
+            filesize=filesize,
+            duration=duration,
+        )
+
+        redis_key = f"{self._key_prefix}{raw_key}"
+        self._redis.setex(redis_key, self._ttl, json.dumps(asdict(session)))
+        return key
+
+    @staticmethod
+    def _extract_raw_key(key: str) -> str:
+        """Extract the raw UUID from a user-facing session key."""
+        if _KEY_SEP in key:
+            return key.split(_KEY_SEP, 1)[1]
+        return key
+
+    def get_session(self, key: str) -> Optional[DownloadSession]:
+        """Get session if valid, else None."""
+        raw_key = self._extract_raw_key(key)
+        redis_key = f"{self._key_prefix}{raw_key}"
+        data = self._redis.get(redis_key)
+
+        if not data:
+            return None
+
+        session_dict = json.loads(data)
+        return DownloadSession(**session_dict)
+
+    def update_session(self, key: str, session: DownloadSession) -> bool:
+        """Update an existing session in Redis (refresh TTL)."""
+        raw_key = self._extract_raw_key(key)
+        redis_key = f"{self._key_prefix}{raw_key}"
+        ttl = self._redis.ttl(redis_key)
+        if ttl <= 0:
+            ttl = self._ttl
+        self._redis.setex(redis_key, ttl, json.dumps(asdict(session)))
+        return True
+
+    def delete_session(self, key: str):
+        """Delete session manually."""
+        raw_key = self._extract_raw_key(key)
+        redis_key = f"{self._key_prefix}{raw_key}"
+        self._redis.delete(redis_key)
+
+    def health_check(self) -> bool:
+        """Check Redis connection."""
+        try:
+            self._redis.ping()
+            return True
+        except redis.ConnectionError:
+            return False
+
+
+# Singleton instance
+download_cache = RedisDownloadCache()

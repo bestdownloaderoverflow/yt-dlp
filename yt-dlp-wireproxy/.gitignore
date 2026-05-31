@@ -57,3 +57,4 @@ gluetun/data*/
 
 # Wireproxy runtime configs (generated from surfshark-pay)
 # runtime-configs/
+!runtime-configs/*

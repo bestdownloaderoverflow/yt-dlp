@@ -41,6 +41,7 @@ build/
 .env.*.local
 serverjs/.env
 serverjs/.env.local
+yt-dlp-wireproxy/.env
 
 # Logs
 *.log
@@ -51,6 +52,14 @@ logs/
 temp/
 serverjs/temp/
 *.tmp
+yt-dlp-wireproxy/tmp/
+
+# yt-dlp-wireproxy runtime state and local secrets
+yt-dlp-wireproxy/runtime-configs/
+yt-dlp-wireproxy/cookie/
+yt-dlp-wireproxy/env/
+yt-dlp-wireproxy/venv/
+yt-dlp-wireproxy/__pycache__/
 
 # Node modules (will be installed in Docker)
 serverjs/node_modules/

@@ -343,16 +343,15 @@ def generate_video_download_links(
         and f.get("acodec") and f["acodec"] != "none"
     ]
 
-    # Find audio-only format
+    # Match yt-dlp-stream behavior: MP3 links point to TikTok's audio-only
+    # direct stream when available, and only fall back to muxed video.
     audio_format = next(
         (f for f in formats
          if f.get("acodec") and f["acodec"] != "none"
          and (not f.get("vcodec") or f["vcodec"] == "none")),
         None
     )
-
     if not audio_format and video_formats:
-        # Fallback to first video format for audio
         audio_format = video_formats[0]
 
     # Sort video formats by quality

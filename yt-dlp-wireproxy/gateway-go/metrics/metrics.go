@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -77,6 +78,30 @@ var (
 			Help: "Number of currently healthy workers",
 		},
 	)
+
+	ProxyHealthy = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_healthy",
+			Help: "Current health status of proxy (1=healthy, 0=unhealthy)",
+		},
+		[]string{"proxy_index", "country"},
+	)
+
+	ProxyFailuresTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_failures_total",
+			Help: "Total number of proxy failures by type",
+		},
+		[]string{"proxy_id", "type"},
+	)
+
+	ProxyRestartsTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_restarts_total",
+			Help: "Total number of proxy container restarts",
+		},
+		[]string{"proxy_id", "success"},
+	)
 )
 
 // Register all metrics with the Prometheus client registry.
@@ -91,6 +116,9 @@ func Register() {
 		GatewayFailoversTotal,
 		GatewayWorkersTotal,
 		GatewayHealthyWorkers,
+		ProxyHealthy,
+		ProxyFailuresTotal,
+		ProxyRestartsTotal,
 	)
 }
 
@@ -151,6 +179,18 @@ func boolToFloat(b bool) float64 {
 		return 1.0
 	}
 	return 0.0
+}
+
+func SetProxyHealth(index int, country string, healthy bool) {
+	ProxyHealthy.WithLabelValues(strconv.Itoa(index), country).Set(boolToFloat(healthy))
+}
+
+func IncProxyFailure(proxyID string, failureType string) {
+	ProxyFailuresTotal.WithLabelValues(proxyID, failureType).Inc()
+}
+
+func IncProxyRestart(proxyID string, success bool) {
+	ProxyRestartsTotal.WithLabelValues(proxyID, boolToString(success)).Inc()
 }
 
 // ServeHTTP handles Prometheus metrics requests.

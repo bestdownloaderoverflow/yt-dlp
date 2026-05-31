@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // StreamFFmpeg pipes media through ffmpeg for transcoding or merging.
@@ -30,30 +31,25 @@ func (d *Delivery) StreamFFmpeg(
 	ffmpegArgs := []string{"-hide_banner", "-loglevel", "error"}
 	var stdinSource io.Reader
 	var extraFiles []*os.File
+	var tempDir string
 	feedWorkers := 0
 	feedErrCh := make(chan error, 2)
 	startFeeds := func() {}
 
 	if plan.FFmpegAudioOnly {
-		pipeR, pipeW := io.Pipe()
-		stdinSource = pipeR
-		ffmpegArgs = append(ffmpegArgs, "-i", "pipe:0")
-		feedWorkers = 1
-		startFeeds = func() {
-			go func() {
-				err := d.DownloadToWriter(
-					r.Context(),
-					pipeW,
-					plan,
-					selectPrimarySource,
-					AudioChunkSize,
-					onRefresh,
-					mediaClient,
-				)
-				_ = pipeW.CloseWithError(err)
-				feedErrCh <- err
-			}()
+		var err error
+		tempDir, err = os.MkdirTemp("", "gateway_ffmpeg_audio_")
+		if err != nil {
+			WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to create ffmpeg temp directory", "detail": err.Error()})
+			return false
 		}
+		defer os.RemoveAll(tempDir)
+		sourcePath := tempDir + "/source"
+		if _, err := d.DownloadToFile(r.Context(), sourcePath, plan, selectPrimarySource, AudioChunkSize, onRefresh, mediaClient); err != nil {
+			WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "Failed to download ffmpeg source", "detail": err.Error()})
+			return false
+		}
+		ffmpegArgs = append(ffmpegArgs, "-i", sourcePath)
 	} else if plan.MergeAV && strings.TrimSpace(plan.FFmpegAudioURL) != "" {
 		videoR, videoW := io.Pipe()
 		audioR, audioW, err := os.Pipe()
@@ -163,6 +159,18 @@ func (d *Delivery) StreamFFmpeg(
 	}
 	startFeeds()
 
+	n, probe, probeErr := readProbeByteWithTimeout(r.Context(), stdout, 20*time.Second)
+	if probeErr != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		detail := strings.TrimSpace(ffmpegErr.String())
+		if detail == "" {
+			detail = probeErr.Error()
+		}
+		WriteJSON(w, http.StatusBadGateway, map[string]string{"error": "FFmpeg stream failed", "detail": detail})
+		return false
+	}
+
 	for k, v := range plan.ResponseHeaders {
 		w.Header().Set(k, v)
 	}
@@ -170,6 +178,9 @@ func (d *Delivery) StreamFFmpeg(
 		w.Header().Set("Content-Type", plan.MediaType)
 	}
 	w.WriteHeader(http.StatusOK)
+	if n > 0 {
+		_, _ = w.Write(probe[:n])
+	}
 	_, copyErr := copyBuffer(w, stdout)
 	waitErr := cmd.Wait()
 	for i := 0; i < feedWorkers; i++ {

@@ -59,6 +59,28 @@ func main() {
 		RestartStabilizeSeconds: cfg.RestartStabilizeSeconds,
 	})
 
+	// Proxy registry and rotator (wireproxy-based).
+	proxyReg := registry.NewProxyRegistry(registry.ProxyConfig{
+		ProxyCount:               cfg.ProxyCount,
+		ProxyCooldownSeconds:     cfg.ProxyCooldownSeconds,
+		ProxyCountriess:          cfg.ProxyCountries,
+		HealthFailureThreshold:   cfg.ProxyHealthFailureThreshold,
+		RestartBackoffBase:       cfg.RestartBackoffBase,
+		RestartBackoffMax:        cfg.RestartBackoffMax,
+		RestartBackoffJitter:     cfg.RestartBackoffJitter,
+		RestartQuarantineSeconds: cfg.RestartQuarantineSeconds,
+		RestartBudgetLimit:       cfg.RestartBudgetLimit,
+		RestartBudgetWindow:      cfg.RestartBudgetWindow,
+	})
+	proxyRot := registry.NewProxyRotator(proxyReg, registry.ProxyRotatorConfig{
+		HealthCheckTimeoutMs:    cfg.HealthCheckTimeoutMs,
+		DrainTimeoutSeconds:     cfg.DrainTimeoutSeconds,
+		DrainPollIntervalMs:     cfg.DrainPollIntervalMs,
+		RestartStabilizeSeconds: cfg.RestartStabilizeSeconds,
+		IPCheckURL:              cfg.IPCheckURL,
+		IPCheckEndpoint:         cfg.IPCheckEndpoint,
+	})
+
 	// Extractor pool (IPC to Python workers).
 	var ext *ExtractorPool
 	if cfg.ExtractorIPCEnabled {
@@ -85,13 +107,23 @@ func main() {
 	// the old VPN network namespace's TCP connections are not reused.
 	rotator.SetPreRestartHook(func(wid string) { del.PurgeWorkerClient(wid) })
 
+	// SOCKS5 proxy client cache purge hook.
+	proxyRot.SetPreRestartHook(func(proxyID string) {
+		p := proxyReg.GetProxy(proxyID)
+		if p != nil {
+			del.PurgeSOCKS5Client(p.SOCKS5URL)
+		}
+	})
+
 	// Handlers serve all HTTP routes.
-	h := handlers.New(cfg, reg, rotator, wrapExtractor(ext), del, client)
+	h := handlers.New(cfg, reg, rotator, proxyReg, proxyRot, wrapExtractor(ext), del, client)
 	defer h.Shutdown()
 
 	go h.RestartScheduler()
 	go h.UptimeChecker()
 	go h.HealthMonitor()
+	go h.ProxyHealthMonitor()
+	go h.ProxyRestartScheduler()
 
 	addr := fmt.Sprintf(":%d", cfg.GatewayPort)
 	server := &http.Server{Addr: addr, Handler: h}
@@ -123,7 +155,7 @@ func (d deliveryWorkerLookup) GetWorker(id string) *delivery.Worker {
 	if w == nil {
 		return nil
 	}
-	return &delivery.Worker{Host: w.Host, ProxyPort: w.ProxyPort}
+	return &delivery.Worker{Host: w.Host, ProxyPort: 0}
 }
 
 // wrapExtractor adapts *ExtractorPool to handlers.Extractor interface.

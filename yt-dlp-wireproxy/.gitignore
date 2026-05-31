@@ -45,8 +45,8 @@ temp/
 Thumbs.db
 
 # Cookies
-cookies/*.txt
-!cookies/.gitkeep
+cookie/*.txt
+!cookie/.gitkeep
 
 # Go binary
 gateway-go/gateway-go
@@ -54,3 +54,6 @@ gateway-go/gateway
 
 # Gluetun VPN data
 gluetun/data*/
+
+# Wireproxy runtime configs (generated from surfshark-pay)
+runtime-configs/

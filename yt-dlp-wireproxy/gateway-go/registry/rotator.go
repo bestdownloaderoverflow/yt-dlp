@@ -116,7 +116,6 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string, reasonC
 	v.mu.Unlock()
 
 	defer func() {
-		// Clear start time after completion
 		v.mu.Lock()
 		delete(v.restartStartTime, workerID)
 		v.mu.Unlock()
@@ -130,33 +129,8 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string, reasonC
 	}
 
 	v.registry.UpdateRestartState(workerID, true)
-	gluetun := fmt.Sprintf("ytdlp-gluetun-%s", strings.TrimPrefix(workerID, "w"))
-	ytdlp := fmt.Sprintf("ytdlp-stream-%s", strings.TrimPrefix(workerID, "w"))
+	ytdlp := fmt.Sprintf("ytdlp-worker-%s", strings.TrimPrefix(workerID, "w"))
 
-	// Purge pooled connections right before gluetun restart kills the
-	// network namespace — any connection created since the initial purge
-	// in scheduleWorkerRestart becomes stale the moment gluetun stops.
-	if v.preRestartHook != nil {
-		v.preRestartHook(workerID)
-	}
-
-	log.Printf("[%s] restarting %s", workerID, gluetun)
-	if err := v.restartContainer(ctx, gluetun); err != nil {
-		log.Printf("[%s] restart error: %v", workerID, err)
-		v.registry.MarkRestarted(workerID, false)
-		v.recordRestartLog(workerID, false, startTime, reasonCode)
-		return false
-	}
-	select {
-	case <-ctx.Done():
-		v.registry.MarkRestarted(workerID, false)
-		v.recordRestartLog(workerID, false, startTime, reasonCode)
-		return false
-	case <-time.After(10 * time.Second):
-	}
-
-	// Purge again before stream restart — gluetun restart may have
-	// allowed new TCP dials during the 10s stabilization window.
 	if v.preRestartHook != nil {
 		v.preRestartHook(workerID)
 	}
@@ -174,6 +148,10 @@ func (v *VPNRotator) RestartWorker(ctx context.Context, workerID string, reasonC
 		v.recordRestartLog(workerID, false, startTime, reasonCode)
 		return false
 	case <-time.After(5 * time.Second):
+	}
+
+	if v.preRestartHook != nil {
+		v.preRestartHook(workerID)
 	}
 
 	healthy := false

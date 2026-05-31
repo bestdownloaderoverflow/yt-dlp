@@ -2,17 +2,17 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    cluster: 'yt-dlp-warp'
+    cluster: 'yt-dlp-wireproxy'
     environment: 'production'
 
 scrape_configs:
-  # Gateway-warp metrics
-  - job_name: 'gateway-warp'
+  # Gateway-wireproxy metrics
+  - job_name: 'gateway-wireproxy'
     static_configs:
-      - targets: ['ytdlp-gateway-warp:9111']
+      - targets: ['ytdlp-gateway-wireproxy:9111']
         labels:
           service: 'gateway'
-          instance: 'gateway-warp'
+          instance: 'gateway-wireproxy'
     metrics_path: /metrics
     scheme: http
 

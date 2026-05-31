@@ -101,6 +101,9 @@ func (d *Delivery) renderTikTokSlideshow(ctx context.Context, plan DeliveryPlan)
 	}
 
 	client := d.BaseCl
+	if plan.ProxyURL != "" {
+		client = d.mediaSOCKS5Client(plan.ProxyURL)
+	}
 	imagePaths := make([]string, 0, len(photoURLs))
 	for i, u := range photoURLs {
 		dst := filepath.Join(tempDir, fmt.Sprintf("image_%d.jpg", i))

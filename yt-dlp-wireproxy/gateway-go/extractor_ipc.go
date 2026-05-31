@@ -49,7 +49,7 @@ func NewExtractorPool(workerCount int, timeout time.Duration) (*ExtractorPool, e
 	workers := make([]string, 0, workerCount)
 	for i := 1; i <= workerCount; i++ {
 		workerID := fmt.Sprintf("w%d", i)
-		addr := fmt.Sprintf("gluetun-%d:9487", i)
+		addr := fmt.Sprintf("ytdlp-worker-%d:9487", i)
 		addrs[workerID] = addr
 		inFlight[workerID] = &atomic.Int64{}
 		workers = append(workers, workerID)

@@ -23,6 +23,7 @@ const (
 func ParseDeliveryPlan(plan map[string]any) DeliveryPlan {
 	return DeliveryPlan{
 		DirectURL:        anyString(plan["direct_url"]),
+		SourceSize:       int64(anyToInt(plan["source_size"], 0)),
 		RequestHeaders:   anyMapToStringMap(plan["request_headers"]),
 		ResponseHeaders:  anyMapToStringMap(plan["response_headers"]),
 		MediaType:        anyString(plan["media_type"]),
@@ -40,34 +41,39 @@ func ParseDeliveryPlan(plan map[string]any) DeliveryPlan {
 		DurationPerImage: anyToInt(plan["duration_per_image"], 4),
 		ContentType:      anyString(plan["content_type"]),
 		FallbackProxy:    plan["fallback_proxy"] == true,
+		FallbackProxyURL: anyString(plan["fallback_proxy_url"]),
 		Key:              anyString(plan["key"]),
 		UseWorkerMP3:     plan["use_worker_mp3"] == true,
+		ProxyURL:         anyString(plan["proxy_url"]),
 	}
 }
 
 // DeliveryPlan represents a fully parsed plan ready for delivery.
 type DeliveryPlan struct {
-	DirectURL         string
-	RequestHeaders    map[string]string
-	ResponseHeaders   map[string]string
-	MediaType         string
-	CanRefresh        bool
-	NeedsFFmpeg       bool
-	MergeAV           bool
-	FFmpegAudioURL    string
-	FFmpegAudioHdrs   map[string]string
-	FFmpegAudioOnly   bool
-	Platform          string
-	SessionType       string
-	DeliveryMode      string
-	PhotoURLs         []string // TikTok slideshow photos
-	AudioURL          string   // TikTok slideshow audio
-	DurationPerImage  int      // TikTok slideshow: seconds per image
-	ContentType       string   // "slideshow" for TikTok photo posts
-	FallbackProxy     bool     // Whether fallback proxy was needed
-	Key               string   // Session key for refresh
-	UseWorkerMP3      bool     // Run MP3 transcode inside worker container
-	BypassProxy       bool     // Skip worker proxy; use direct connection
+	DirectURL        string
+	SourceSize       int64
+	RequestHeaders   map[string]string
+	ResponseHeaders  map[string]string
+	MediaType        string
+	CanRefresh       bool
+	NeedsFFmpeg      bool
+	MergeAV          bool
+	FFmpegAudioURL   string
+	FFmpegAudioHdrs  map[string]string
+	FFmpegAudioOnly  bool
+	Platform         string
+	SessionType      string
+	DeliveryMode     string
+	PhotoURLs        []string // TikTok slideshow photos
+	AudioURL         string   // TikTok slideshow audio
+	DurationPerImage int      // TikTok slideshow: seconds per image
+	ContentType      string   // "slideshow" for TikTok photo posts
+	FallbackProxy    bool     // Whether fallback proxy was needed
+	FallbackProxyURL string   // SOCKS5 proxy used only if direct media delivery fails
+	Key              string   // Session key for refresh
+	UseWorkerMP3     bool     // Run MP3 transcode inside worker container
+	BypassProxy      bool     // Skip worker proxy; use direct connection
+	ProxyURL         string   // SOCKS5 proxy URL for TikTok media delivery
 }
 
 // ResolveDeliveryMode decides which delivery mode to use based on the plan and route.
@@ -309,27 +315,29 @@ func anyToInt(v any, fallback int) int {
 // planToMap converts a DeliveryPlan back to a map for legacy compatibility.
 func planToMap(p DeliveryPlan) map[string]any {
 	return map[string]any{
-		"direct_url":             p.DirectURL,
-		"request_headers":        p.RequestHeaders,
-		"response_headers":       p.ResponseHeaders,
-		"media_type":             p.MediaType,
-		"can_refresh":            p.CanRefresh,
-		"needs_ffmpeg":           p.NeedsFFmpeg,
-		"platform":               p.Platform,
-		"ffmpeg_audio_url":       p.FFmpegAudioURL,
-		"ffmpeg_audio_headers":   p.FFmpegAudioHdrs,
-		"ffmpeg_merge":           p.MergeAV,
-		"ffmpeg_audio_only":      p.FFmpegAudioOnly,
-		"session_type":           p.SessionType,
-		"delivery_mode":          p.DeliveryMode,
-		"photo_urls":             p.PhotoURLs,
-		"audio_url":              p.AudioURL,
-		"duration_per_image":     p.DurationPerImage,
-		"content_type":           p.ContentType,
-		"fallback_proxy":         p.FallbackProxy,
-		"key":                    p.Key,
-		"use_worker_mp3":         p.UseWorkerMP3,
-		"bypass_proxy":           p.BypassProxy,
+		"direct_url":           p.DirectURL,
+		"source_size":          p.SourceSize,
+		"request_headers":      p.RequestHeaders,
+		"response_headers":     p.ResponseHeaders,
+		"media_type":           p.MediaType,
+		"can_refresh":          p.CanRefresh,
+		"needs_ffmpeg":         p.NeedsFFmpeg,
+		"platform":             p.Platform,
+		"ffmpeg_audio_url":     p.FFmpegAudioURL,
+		"ffmpeg_audio_headers": p.FFmpegAudioHdrs,
+		"ffmpeg_merge":         p.MergeAV,
+		"ffmpeg_audio_only":    p.FFmpegAudioOnly,
+		"session_type":         p.SessionType,
+		"delivery_mode":        p.DeliveryMode,
+		"photo_urls":           p.PhotoURLs,
+		"audio_url":            p.AudioURL,
+		"duration_per_image":   p.DurationPerImage,
+		"content_type":         p.ContentType,
+		"fallback_proxy":       p.FallbackProxy,
+		"fallback_proxy_url":   p.FallbackProxyURL,
+		"key":                  p.Key,
+		"use_worker_mp3":       p.UseWorkerMP3,
+		"bypass_proxy":         p.BypassProxy,
 	}
 }
 

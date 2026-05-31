@@ -21,22 +21,23 @@ WORKDIR /app
 # Copy yt-dlp custom from parent directory (build context is parent)
 COPY yt_dlp /app/yt_dlp
 
+# Install Python dependencies before copying application source so source-only
+# changes can reuse the dependency layer.
+COPY yt-dlp-wireproxy/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
 # Copy application files
-COPY yt-dlp-stream/requirements.txt .
-COPY yt-dlp-stream/main.py .
-COPY yt-dlp-stream/ytdl_manager.py .
-COPY yt-dlp-stream/process_manager.py .
-COPY yt-dlp-stream/internal_tunnel.py .
-COPY yt-dlp-stream/security.py .
-COPY yt-dlp-stream/utils.py .
+COPY yt-dlp-wireproxy/main.py .
+COPY yt-dlp-wireproxy/ytdl_manager.py .
+COPY yt-dlp-wireproxy/process_manager.py .
+COPY yt-dlp-wireproxy/internal_tunnel.py .
+COPY yt-dlp-wireproxy/security.py .
+COPY yt-dlp-wireproxy/utils.py .
 
 # Copy directories (api, core)
-COPY yt-dlp-stream/api ./api
-COPY yt-dlp-stream/core ./core
-COPY yt-dlp-stream/extractor ./extractor
-
-# Install dependencies
-RUN pip install --no-cache-dir -r requirements.txt
+COPY yt-dlp-wireproxy/api ./api
+COPY yt-dlp-wireproxy/core ./core
+COPY yt-dlp-wireproxy/extractor ./extractor
 
 # Verify yt-dlp can be imported
 RUN python -c "import yt_dlp; print(f'yt-dlp version: {yt_dlp.version.__version__}')"

@@ -8,15 +8,18 @@ package delivery
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
-	"net/url"
+	neturl "net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/net/proxy"
 )
 
 type Extractor interface {
@@ -38,10 +41,11 @@ func (w *Worker) HTTPProxyURL() string {
 }
 
 type Delivery struct {
-	Config       DeliveryConfig
-	Worker       WorkerLookup
-	BaseCl       *http.Client
-	proxyClients sync.Map // map[string]*http.Client keyed by proxy URL
+	Config        DeliveryConfig
+	Worker        WorkerLookup
+	BaseCl        *http.Client
+	proxyClients  sync.Map // map[string]*http.Client keyed by HTTP proxy URL
+	socks5Clients sync.Map // map[string]*http.Client keyed by SOCKS5 proxy URL
 }
 
 type DeliveryConfig struct {
@@ -71,7 +75,7 @@ func (d *Delivery) mediaHTTPClient(workerID string) *http.Client {
 	if !ok || baseTransport == nil {
 		return d.BaseCl
 	}
-	proxyURL, err := url.Parse(proxyURLStr)
+	proxyURL, err := neturl.Parse(proxyURLStr)
 	if err != nil {
 		return d.BaseCl
 	}
@@ -89,6 +93,74 @@ func (d *Delivery) mediaHTTPClient(workerID string) *http.Client {
 	return cl
 }
 
+func (d *Delivery) mediaSOCKS5Client(socksURL string) *http.Client {
+	if socksURL == "" {
+		return d.BaseCl
+	}
+
+	if cached, ok := d.socks5Clients.Load(socksURL); ok {
+		return cached.(*http.Client)
+	}
+
+	u, err := neturl.Parse(socksURL)
+	if err != nil {
+		return d.BaseCl
+	}
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		addr := u.Host + ":1080"
+		host, port, err = net.SplitHostPort(addr)
+		if err != nil {
+			return d.BaseCl
+		}
+	}
+
+	socksDialer, err := proxy.SOCKS5("tcp", net.JoinHostPort(host, port), nil, proxy.Direct)
+	if err != nil {
+		return d.BaseCl
+	}
+
+	baseTransport, ok := d.BaseCl.Transport.(*http.Transport)
+	if !ok || baseTransport == nil {
+		baseTransport = &http.Transport{
+			MaxIdleConns:        512,
+			MaxIdleConnsPerHost: 128,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  false,
+		}
+	}
+
+	tr := baseTransport.Clone()
+	if tr.TLSClientConfig == nil {
+		tr.TLSClientConfig = &tls.Config{}
+	} else {
+		tr.TLSClientConfig = tr.TLSClientConfig.Clone()
+	}
+	tr.TLSClientConfig.NextProtos = []string{"http/1.1"}
+	tr.ForceAttemptHTTP2 = false
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if contextDialer, ok := socksDialer.(proxy.ContextDialer); ok {
+			return contextDialer.DialContext(ctx, network, addr)
+		}
+		return socksDialer.Dial(network, addr)
+	}
+	tr.Proxy = nil
+
+	cl := &http.Client{
+		Transport: tr,
+		Timeout:   d.BaseCl.Timeout,
+	}
+
+	if existing, loaded := d.socks5Clients.LoadOrStore(socksURL, cl); loaded {
+		return existing.(*http.Client)
+	}
+	return cl
+}
+
+func (d *Delivery) PurgeSOCKS5Client(socksURL string) {
+	d.socks5Clients.Delete(socksURL)
+}
+
 // PurgeWorkerClient removes the cached proxy client for a worker.
 // Call this before restarting the worker's gluetun container so that
 // stale TCP connections to the old VPN network namespace are discarded.
@@ -101,6 +173,10 @@ func (d *Delivery) PurgeWorkerClient(workerID string) {
 }
 
 func (d *Delivery) mediaHTTPClientForPlan(workerID string, plan map[string]any) *http.Client {
+	proxyURL := anyString(plan["proxy_url"])
+	if proxyURL != "" {
+		return d.mediaSOCKS5Client(proxyURL)
+	}
 	if shouldBypassWorkerProxy(plan) {
 		return d.BaseCl
 	}

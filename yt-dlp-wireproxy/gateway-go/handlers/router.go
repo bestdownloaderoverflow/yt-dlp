@@ -62,33 +62,49 @@ type Handlers struct {
 	Config     utils.Config
 	Registry   *registry.WorkerRegistry
 	Rotator    *registry.VPNRotator
+	ProxyReg   *registry.ProxyRegistry
+	ProxyRot   *registry.ProxyRotator
 	Extractor  Extractor
 	Delivery   *delivery.Delivery
 	Client     *http.Client
 	RLFetch    *utils.SlidingWindowRateLimiter
 	RLDownload *utils.SlidingWindowRateLimiter
 
+	tiktokSem chan struct{}
+
 	restartTasksMu sync.Mutex
 	restartTasks   map[string]context.CancelFunc
 	restartReasons map[string]string
+	proxyTasksMu   sync.Mutex
+	proxyTasks     map[string]context.CancelFunc
+	proxyReasons   map[string]string
 	ctx            context.Context
 	cancel         context.CancelFunc
 	startedAt      time.Time
 }
 
-func New(cfg utils.Config, reg *registry.WorkerRegistry, rotator *registry.VPNRotator, ext Extractor, del *delivery.Delivery, client *http.Client) *Handlers {
+func New(cfg utils.Config, reg *registry.WorkerRegistry, rotator *registry.VPNRotator, proxyReg *registry.ProxyRegistry, proxyRot *registry.ProxyRotator, ext Extractor, del *delivery.Delivery, client *http.Client) *Handlers {
 	ctx, cancel := context.WithCancel(context.Background())
+	tiktokConcurrency := cfg.TikTokConcurrency
+	if tiktokConcurrency < 1 {
+		tiktokConcurrency = 6
+	}
 	return &Handlers{
 		Config:         cfg,
 		Registry:       reg,
 		Rotator:        rotator,
+		ProxyReg:       proxyReg,
+		ProxyRot:       proxyRot,
 		Extractor:      ext,
 		Delivery:       del,
 		Client:         client,
 		RLFetch:        utils.NewSlidingWindowRateLimiter(cfg.GatewayRLFetchLimit, cfg.GatewayRLWindowSeconds),
 		RLDownload:     utils.NewSlidingWindowRateLimiter(cfg.GatewayRLDownloadLimit, cfg.GatewayRLWindowSeconds),
+		tiktokSem:      make(chan struct{}, tiktokConcurrency),
 		restartTasks:   map[string]context.CancelFunc{},
 		restartReasons: map[string]string{},
+		proxyTasks:     map[string]context.CancelFunc{},
+		proxyReasons:   map[string]string{},
 		ctx:            ctx,
 		cancel:         cancel,
 		startedAt:      time.Now(),
@@ -280,6 +296,12 @@ func (h *Handlers) selectExtractorWorkerAvoiding(preferred string, requireHealth
 	res := h.selectExtractorWorkerAvoidingInternal(preferred, requireHealthy, exclude, excludeCountries)
 	if res == "" && excludeCountries != nil {
 		res = h.selectExtractorWorkerAvoidingInternal(preferred, requireHealthy, exclude, nil)
+	}
+	if res == "" && exclude != nil {
+		// A small deployment may only have one extractor. Prefer a different
+		// worker first, then reuse an accepting worker so proxy rotation can
+		// still recover from an extraction-specific failure.
+		res = h.selectExtractorWorkerAvoidingInternal(preferred, requireHealthy, nil, nil)
 	}
 	return res
 }
@@ -980,5 +1002,119 @@ func (h *Handlers) authorize(w http.ResponseWriter, r *http.Request) bool {
 		})
 		return false
 	}
+	return true
+}
+
+func (h *Handlers) ProxyHealthMonitor() {
+	if h.ProxyReg == nil || h.ProxyRot == nil {
+		return
+	}
+	interval := h.Config.HealthMonitorIntervalMs
+	if interval < 1000 {
+		interval = 1000
+	}
+	ticker := time.NewTicker(time.Duration(interval) * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-ticker.C:
+			proxies := h.ProxyReg.ProxiesSnapshot()
+			var wg sync.WaitGroup
+			for _, p := range proxies {
+				proxy := p
+				if proxy.Restarting || proxy.RestartScheduled {
+					continue
+				}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					healthy, exitIP := h.ProxyRot.HealthCheckProxy(proxy.ID)
+					h.ProxyReg.RecordProbe(proxy.ID, healthy, exitIP)
+					threshold := h.Config.ProxyHealthFailureThreshold
+					if threshold < 1 {
+						threshold = 3
+					}
+					if h.ProxyReg.ShouldRestartUnhealthy(proxy.ID, threshold) {
+						log.Printf("[proxy:%s] unhealthy for %d consecutive probes; scheduling restart", proxy.ID, threshold)
+						h.scheduleProxyRestart(proxy.ID, "health_monitor")
+					}
+				}()
+			}
+			wg.Wait()
+		}
+	}
+}
+
+func (h *Handlers) ProxyRestartScheduler() {
+	if h.ProxyReg == nil || h.ProxyRot == nil {
+		return
+	}
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-ticker.C:
+			needing := h.ProxyReg.ProxiesNeedRestart()
+			for _, proxyID := range needing {
+				h.ensureProxyRestartTask(proxyID)
+			}
+		}
+	}
+}
+
+func (h *Handlers) scheduleProxyRestart(proxyID string, reasonCode string) {
+	if h.ProxyReg == nil || h.ProxyRot == nil {
+		return
+	}
+	if reasonCode == "" {
+		reasonCode = "unknown"
+	}
+
+	h.proxyTasksMu.Lock()
+	h.proxyReasons[proxyID] = reasonCode
+	h.proxyTasksMu.Unlock()
+
+	scheduled := h.ProxyReg.ScheduleRestart(proxyID)
+	if !scheduled {
+		log.Printf("[proxy:%s] restart already scheduled or in progress", proxyID)
+		return
+	}
+	h.ensureProxyRestartTask(proxyID)
+}
+
+func (h *Handlers) ensureProxyRestartTask(proxyID string) bool {
+	if h.ProxyReg == nil || h.ProxyRot == nil {
+		return false
+	}
+
+	h.proxyTasksMu.Lock()
+	if _, exists := h.proxyTasks[proxyID]; exists {
+		h.proxyTasksMu.Unlock()
+		return false
+	}
+	ctx, cancel := context.WithCancel(h.ctx)
+	h.proxyTasks[proxyID] = cancel
+	h.proxyTasksMu.Unlock()
+
+	go func() {
+		defer func() {
+			h.proxyTasksMu.Lock()
+			delete(h.proxyTasks, proxyID)
+			delete(h.proxyReasons, proxyID)
+			h.proxyTasksMu.Unlock()
+		}()
+
+		h.proxyTasksMu.Lock()
+		reasonCode := h.proxyReasons[proxyID]
+		h.proxyTasksMu.Unlock()
+		if reasonCode == "" {
+			reasonCode = "unknown"
+		}
+		h.ProxyRot.RestartProxy(ctx, proxyID, reasonCode)
+	}()
 	return true
 }

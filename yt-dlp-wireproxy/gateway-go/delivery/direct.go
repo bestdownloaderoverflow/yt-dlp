@@ -27,6 +27,9 @@ func (d *Delivery) StreamDirect(
 	if plan.CanRefresh && onRefresh != nil {
 		maxAttempts = 2
 	}
+	if plan.FallbackProxyURL != "" {
+		maxAttempts++
+	}
 
 	currentURL := plan.DirectURL
 	currentPlan := map[string]any{
@@ -39,7 +42,9 @@ func (d *Delivery) StreamDirect(
 		"ffmpeg_audio_url": plan.FFmpegAudioURL,
 		"photo_urls":       plan.PhotoURLs,
 		"bypass_proxy":     plan.BypassProxy,
+		"proxy_url":        plan.ProxyURL,
 	}
+	usingFallbackProxy := false
 	currentReqHeaders := plan.RequestHeaders
 	currentRespHeaders := plan.ResponseHeaders
 	currentMediaType := plan.MediaType
@@ -75,7 +80,13 @@ func (d *Delivery) StreamDirect(
 			return false
 		}
 
-		if resp.StatusCode == http.StatusForbidden && attempt == 0 && plan.CanRefresh && onRefresh != nil {
+		if resp.StatusCode == http.StatusForbidden && !usingFallbackProxy && plan.FallbackProxyURL != "" {
+			_ = resp.Body.Close()
+			currentPlan["proxy_url"] = plan.FallbackProxyURL
+			usingFallbackProxy = true
+			continue
+		}
+		if resp.StatusCode == http.StatusForbidden && plan.CanRefresh && onRefresh != nil {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 			_ = resp.Body.Close()
 			// For TikTok content, check if this is a permanent error that won't be fixed by refresh.
@@ -132,11 +143,12 @@ func (d *Delivery) StreamDirect(
 		}
 		if cr := resp.Header.Get("Content-Range"); cr != "" {
 			w.Header().Set("Content-Range", cr)
+			w.Header().Del("Content-Length")
 		}
 		if ar := resp.Header.Get("Accept-Ranges"); ar != "" {
 			w.Header().Set("Accept-Ranges", ar)
 		}
-		if cl := resp.Header.Get("Content-Length"); cl != "" && w.Header().Get("Content-Length") == "" {
+		if cl := resp.Header.Get("Content-Length"); cl != "" {
 			w.Header().Set("Content-Length", cl)
 		}
 

@@ -16,6 +16,7 @@ import (
 
 	"gateway-go/delivery"
 	"gateway-go/metrics"
+	"gateway-go/registry"
 )
 
 // isIPCNetworkError reports whether an IPC call failure is a network-level
@@ -196,11 +197,52 @@ func (h *Handlers) handleHealth(w http.ResponseWriter, _ *http.Request) {
 			"restart_backoff_remaining": positiveSeconds(worker.NextRestartAt.Sub(now)),
 		})
 	}
+
+	proxyRows := []map[string]any{}
+	proxyHealthyCount := 0
+	if h.ProxyReg != nil {
+		proxies := h.ProxyReg.ProxiesSnapshot()
+		for _, p := range proxies {
+			if p.Healthy && p.IsAccepting() {
+				proxyHealthyCount++
+			}
+			cooldownRemaining := 0
+			if p.Cooldown && now.Before(p.CooldownUntil) {
+				cooldownRemaining = positiveSeconds(p.CooldownUntil.Sub(now))
+			}
+			proxyRows = append(proxyRows, map[string]any{
+				"id":                        p.ID,
+				"index":                     p.Index,
+				"country":                   p.Country,
+				"healthy":                   p.Healthy,
+				"restarting":                p.Restarting,
+				"restart_scheduled":         p.RestartScheduled,
+				"cooldown":                  p.Cooldown,
+				"active_requests":           p.ActiveCount(),
+				"failures":                  p.Failures,
+				"restart_failures":          p.RestartFailures,
+				"exit_ip":                   p.LastExitIP,
+				"previous_exit_ip":          p.PreviousExitIP,
+				"cooldown_remaining":        cooldownRemaining,
+				"restart_backoff_remaining": positiveSeconds(p.BackoffUntil.Sub(now)),
+				"quarantine_remaining":      positiveSeconds(p.QuarantineUntil.Sub(now)),
+			})
+		}
+	}
+
 	status := "degraded"
-	if len(healthy) > 0 {
+	if len(healthy) > 0 && proxyHealthyCount > 0 {
 		status = "healthy"
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": status, "workers": rows})
+
+	payload := map[string]any{
+		"status":  status,
+		"workers": rows,
+	}
+	if h.ProxyReg != nil {
+		payload["proxies"] = proxyRows
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 // handleMetrics exposes Prometheus metrics.
@@ -641,9 +683,31 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "URL is required"})
 		return
 	}
+
+	clientProxyOverride := payload.Proxy != ""
+
+	select {
+	case h.tiktokSem <- struct{}{}:
+		defer func() { <-h.tiktokSem }()
+	default:
+		w.Header().Set("Retry-After", "5")
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error":  "TikTok concurrency limit reached",
+			"detail": "Too many concurrent TikTok extractions. Try again in 5 seconds.",
+		})
+		return
+	}
+
 	maxAttempts := h.Config.MaxRetries
-	tried := make(map[string]bool, maxAttempts)
+	triedWorkers := make(map[string]bool, maxAttempts)
+	triedProxies := make(map[string]bool, maxAttempts)
 	workerID := h.selectExtractorWorker("", true)
+
+	var selectedProxy *registry.Proxy
+	if !clientProxyOverride && h.ProxyReg != nil {
+		selectedProxy = h.ProxyReg.SelectProxy(triedProxies, nil)
+	}
+
 	var (
 		result map[string]any
 		rpcErr *IPCError
@@ -655,15 +719,27 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 			return
 		}
-		result, rpcErr, err = h.Extractor.TikTok(workerID, payload.URL, payload.Proxy, payload.Impersonate)
+
+		proxyArg := payload.Proxy
+		if !clientProxyOverride && selectedProxy != nil && h.ProxyReg != nil {
+			proxyArg = selectedProxy.SOCKS5URL
+			h.ProxyReg.IncrementActive(selectedProxy.ID)
+		}
+
+		result, rpcErr, err = h.Extractor.TikTok(workerID, payload.URL, proxyArg, payload.Impersonate)
+
+		if !clientProxyOverride && selectedProxy != nil && h.ProxyReg != nil {
+			h.ProxyReg.DecrementActive(selectedProxy.ID)
+		}
+
 		if err != nil {
 			if !isIPCNetworkError(err) {
 				break
 			}
 			log.Printf("[extractor:%s] tiktok ipc error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
-			tried[workerID] = true
+			triedWorkers[workerID] = true
 			h.recordFailover("/tiktok", "ipc_network")
-			workerID = h.selectExtractorWorkerAvoiding("", true, tried, nil)
+			workerID = h.selectExtractorWorkerAvoiding("", true, triedWorkers, nil)
 			continue
 		}
 		if rpcErr != nil && isRetryableTikTokRPCError(rpcErr) {
@@ -671,9 +747,14 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 				"[extractor:%s] tiktok rpc retryable error (attempt %d/%d): %s",
 				workerID, attempt+1, maxAttempts, rpcErr.Message,
 			)
-			tried[workerID] = true
+			triedWorkers[workerID] = true
+			if !clientProxyOverride && selectedProxy != nil && h.ProxyReg != nil {
+				triedProxies[selectedProxy.ID] = true
+				h.ProxyReg.MarkCooldown(selectedProxy.ID)
+				selectedProxy = h.ProxyReg.SelectProxy(triedProxies, nil)
+			}
 			h.recordFailover("/tiktok", "rpc_retryable")
-			workerID = h.selectExtractorWorkerAvoiding("", true, tried, nil)
+			workerID = h.selectExtractorWorkerAvoiding("", true, triedWorkers, nil)
 			rpcErr = nil
 			continue
 		}
@@ -784,29 +865,7 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 		})
 		return
 	}
-	if plan.ContentType == "slideshow" {
-		refreshFn := func() (delivery.DeliveryPlan, error) {
-			np, rpcErr, err := h.Extractor.TikTokDownloadRefresh(workerID, key, download)
-			if err != nil {
-				return delivery.DeliveryPlan{}, err
-			}
-			if rpcErr != nil {
-				return delivery.DeliveryPlan{}, fmt.Errorf("extractor rpc error (%s): %s", rpcErr.Code, rpcErr.Message)
-			}
-			return delivery.ParseDeliveryPlan(np), nil
-		}
-		h.Delivery.StreamTikTokSlideshow(w, r, plan, refreshFn)
-		return
-	}
-
-	// Direct URL stream with refresh
-	if plan.DirectURL == "" {
-		h.recordExtractFailure("tiktok_download_prepare", "invalid_plan")
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
-		return
-	}
-
-	h.Delivery.StreamDirect(w, r, workerID, plan, func() (delivery.DeliveryPlan, error) {
+	refreshFn := func() (delivery.DeliveryPlan, error) {
 		np, rpcErr, err := h.Extractor.TikTokDownloadRefresh(workerID, key, download)
 		if err != nil {
 			return delivery.DeliveryPlan{}, err
@@ -814,8 +873,26 @@ func (h *Handlers) handleTikTokDownloadViaExtractorIPC(w http.ResponseWriter, r 
 		if rpcErr != nil {
 			return delivery.DeliveryPlan{}, fmt.Errorf("extractor rpc error (%s): %s", rpcErr.Code, rpcErr.Message)
 		}
-		return delivery.ParseDeliveryPlan(np), nil
-	})
+		refreshed := delivery.ParseDeliveryPlan(np)
+		refreshed.ProxyURL = plan.ProxyURL
+		return refreshed, nil
+	}
+	if plan.ContentType == "slideshow" {
+		h.Delivery.StreamTikTokSlideshow(w, r, plan, refreshFn)
+		return
+	}
+
+	if plan.DirectURL == "" {
+		h.recordExtractFailure("tiktok_download_prepare", "invalid_plan")
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": "Invalid stream plan: missing direct_url"})
+		return
+	}
+
+	if plan.NeedsFFmpeg {
+		h.Delivery.StreamFFmpeg(w, r, workerID, plan, refreshFn)
+		return
+	}
+	h.Delivery.StreamDirect(w, r, workerID, plan, refreshFn)
 }
 
 // handleTunnel

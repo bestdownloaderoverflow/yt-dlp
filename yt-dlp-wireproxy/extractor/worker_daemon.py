@@ -23,7 +23,10 @@ import logging
 import os
 import signal
 import sys
+import time
 import traceback
+import urllib.error
+import urllib.request
 from typing import Any, Dict, Optional
 
 import yt_dlp
@@ -437,6 +440,33 @@ def _extract_format_headers(
     return safe_headers, cookies
 
 
+def _is_direct_tiktok_media_usable(
+    fmt: Dict[str, Any],
+    info: Dict[str, Any],
+    request_url: str,
+    proxy: Optional[str],
+    impersonate: Optional[str],
+) -> bool:
+    media_url = fmt.get("url")
+    if not media_url:
+        return False
+    headers, cookies = _extract_format_headers(fmt, info, request_url, proxy, impersonate)
+    headers = dict(headers)
+    headers["Accept-Encoding"] = "identity"
+    headers["Range"] = "bytes=0-0"
+    if cookies:
+        headers["Cookie"] = cookies
+    req = urllib.request.Request(media_url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status in {200, 206, 416}
+    except urllib.error.HTTPError as exc:
+        return exc.code == 416
+    except Exception as exc:
+        logger.warning("TikTok direct media preflight failed: %s", exc)
+        return False
+
+
 def _generate_tiktok_video_links(
     info: Dict[str, Any],
     author: Dict[str, Any],
@@ -453,6 +483,11 @@ def _generate_tiktok_video_links(
         if f.get("vcodec") and f["vcodec"] != "none"
         and f.get("acodec") and f["acodec"] != "none"
     ]
+    video_formats.sort(key=lambda x: (x.get("height", 0) * x.get("width", 0)), reverse=True)
+    download_format = next((f for f in formats if f.get("format_id") == "download"), None)
+    hd_formats = [f for f in video_formats if f.get("height", 0) >= 720]
+    sd_formats = [f for f in video_formats if f.get("height", 0) < 720]
+
     audio_format = next(
         (f for f in formats
          if f.get("acodec") and f["acodec"] != "none"
@@ -462,10 +497,17 @@ def _generate_tiktok_video_links(
     if not audio_format and video_formats:
         audio_format = video_formats[0]
 
-    video_formats.sort(key=lambda x: (x.get("height", 0) * x.get("width", 0)), reverse=True)
-    download_format = next((f for f in formats if f.get("format_id") == "download"), None)
-    hd_formats = [f for f in video_formats if f.get("height", 0) >= 720]
-    sd_formats = [f for f in video_formats if f.get("height", 0) < 720]
+    direct_candidates = sd_formats or video_formats
+    direct_format = next(
+        (f for f in direct_candidates if _is_direct_tiktok_media_usable(f, info, request_url, proxy, impersonate)),
+        None,
+    )
+    if direct_candidates and not direct_format:
+        raise RuntimeError(json.dumps({
+            "status": 503,
+            "code": "IP_BLOCKED",
+            "message": "TikTok direct media preflight failed; retry extraction with another proxy",
+        }))
 
     if download_format:
         http_headers, cookies = _extract_format_headers(download_format, info, request_url, proxy, impersonate)
@@ -486,7 +528,7 @@ def _generate_tiktok_video_links(
         links["watermark"] = f"/tiktok/download?key={key}"
 
     if sd_formats:
-        fmt = sd_formats[0]
+        fmt = direct_format
         http_headers, cookies = _extract_format_headers(fmt, info, request_url, proxy, impersonate)
         key = _get_download_cache().create_session(
             url=request_url,
@@ -883,9 +925,11 @@ def _build_stream_plan_from_session(session: Any, download: bool) -> Dict[str, A
 
     return {
         "fallback_proxy": False,
+        "fallback_proxy_url": getattr(session, "proxy", None) if platform in {"tiktok", "douyin"} else None,
         "content_type": content_type,
         "platform": platform,
         "direct_url": direct_url,
+        "source_size": resolved_size or None,
         "request_headers": safe_headers,
         "response_headers": response_headers,
         "media_type": media_type,
@@ -1027,14 +1071,11 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
         session.filesize = fmt.get("filesize") or fmt.get("filesize_approx")
         protocol = fmt.get("protocol")
         delivery = plan_delivery(resolved)
-        # Keep MP3 as transcoded output, but let the gateway perform the
-        # download/transcode so VPN is only used during extraction.
         return {
             "protocol": protocol,
             "delivery_mode": delivery.mode,
-            "needs_ffmpeg": True,
-            "ffmpeg_audio_only": True,
-            "use_worker_mp3": True,
+            "needs_ffmpeg": False,
+            "ffmpeg_audio_only": False,
         }
 
     if content_type == "video":
@@ -1258,7 +1299,20 @@ def _tiktok_download_refresh(params: Dict[str, Any]) -> Dict[str, Any]:
             "message": f"Refresh not supported for content type: {content_type}",
         }))
 
-    info = ydl_manager.extract_info(original_url, proxy=proxy, impersonate=impersonate)
+    info = None
+    last_error = None
+    for attempt in range(3):
+        try:
+            info = ydl_manager.extract_info(original_url, proxy=proxy, impersonate=impersonate)
+            if info:
+                break
+        except Exception as exc:
+            last_error = exc
+            logger.warning("TikTok download refresh attempt %d/3 failed: %s", attempt + 1, exc)
+        if attempt < 2:
+            time.sleep(0.25)
+    if not info and last_error:
+        raise last_error
     if not info:
         raise RuntimeError(json.dumps({
             "status": 503,
@@ -1307,12 +1361,24 @@ def _tiktok_download_refresh(params: Dict[str, Any]) -> Dict[str, Any]:
         session.http_headers = new_headers
         session.cookies = new_cookies
     else:
+        formats = info.get("formats", [])
         audio_format = next(
-            (f for f in info.get("formats", [])
+            (f for f in formats
              if f.get("acodec") and f["acodec"] != "none"
              and (not f.get("vcodec") or f["vcodec"] == "none")),
             None
         )
+        if not audio_format:
+            video_formats = [
+                f for f in formats
+                if f.get("vcodec") and f["vcodec"] != "none"
+                and f.get("acodec") and f["acodec"] != "none"
+                and f.get("url")
+            ]
+            video_formats.sort(key=lambda x: (x.get("height", 0) * x.get("width", 0)), reverse=True)
+            audio_format = next((f for f in video_formats if f.get("height", 0) < 720), None)
+            if not audio_format and video_formats:
+                audio_format = video_formats[0]
         if not audio_format:
             raise RuntimeError(json.dumps({
                 "status": 503,

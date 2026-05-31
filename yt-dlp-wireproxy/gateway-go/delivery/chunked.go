@@ -64,6 +64,7 @@ func (d *Delivery) StreamChunked(
 		"ffmpeg_audio_url": plan.FFmpegAudioURL,
 		"photo_urls":       []string{plan.DirectURL},
 		"bypass_proxy":     plan.BypassProxy,
+		"proxy_url":        plan.ProxyURL,
 	}
 	read := int64(0)
 	headersSent := false
@@ -223,8 +224,9 @@ func (d *Delivery) DownloadToFile(
 	defer f.Close()
 
 	var read int64
-	var total int64
+	total := plan.SourceSize
 	refreshAttempts := 0
+	usingFallbackProxy := false
 	const maxRefreshAttempts = 3
 	const maxRetriesPerChunk = 3
 
@@ -265,6 +267,14 @@ func (d *Delivery) DownloadToFile(
 					return plan, fmt.Errorf("upstream request failed at offset %d: %w", read, err)
 				}
 				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+
+			if resp.StatusCode == http.StatusForbidden && !usingFallbackProxy && plan.FallbackProxyURL != "" {
+				_ = resp.Body.Close()
+				resp = nil
+				client = d.mediaSOCKS5Client(plan.FallbackProxyURL)
+				usingFallbackProxy = true
 				continue
 			}
 
@@ -399,14 +409,14 @@ func (d *Delivery) DownloadToWriter(
 	}
 
 	currentPlan := map[string]any{
-		"direct_url":        plan.DirectURL,
-		"request_headers":   plan.RequestHeaders,
-		"response_headers":  plan.ResponseHeaders,
-		"media_type":        plan.MediaType,
-		"can_refresh":       plan.CanRefresh,
-		"platform":          plan.Platform,
-		"ffmpeg_audio_url":  plan.FFmpegAudioURL,
-		"photo_urls":        []string{plan.DirectURL},
+		"direct_url":       plan.DirectURL,
+		"request_headers":  plan.RequestHeaders,
+		"response_headers": plan.ResponseHeaders,
+		"media_type":       plan.MediaType,
+		"can_refresh":      plan.CanRefresh,
+		"platform":         plan.Platform,
+		"ffmpeg_audio_url": plan.FFmpegAudioURL,
+		"photo_urls":       []string{plan.DirectURL},
 	}
 	currentURL, currentHeaders := selector(currentPlan)
 	currentHeaders = sanitizeRequestHeaders(currentHeaders)
@@ -415,8 +425,9 @@ func (d *Delivery) DownloadToWriter(
 	}
 
 	var read int64
-	var total int64
+	total := plan.SourceSize
 	refreshAttempts := 0
+	usingFallbackProxy := false
 	const maxRefreshAttempts = 3
 	const maxRetriesPerChunk = 3
 
@@ -429,21 +440,19 @@ func (d *Delivery) DownloadToWriter(
 			req.Header.Set(k, v)
 		}
 
-		useRange := read > 0 || total > 0
-		if useRange {
-			end := read + chunkSize - 1
-			if total > 0 && end >= total {
-				end = total - 1
-			}
-			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
+		end := read + chunkSize - 1
+		if total > 0 && end >= total {
+			end = total - 1
 		}
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", read, end))
 
 		// Inner retry loop for transient network errors during request/read/copy.
 		var (
-			resp         *http.Response
-			copyErr      error
-			n            int64
+			resp          *http.Response
+			copyErr       error
+			n             int64
 			shouldRefresh bool
+			lastStatus    int
 		)
 		for attempt := 0; attempt < maxRetriesPerChunk; attempt++ {
 			// Send request
@@ -456,6 +465,14 @@ func (d *Delivery) DownloadToWriter(
 					return fmt.Errorf("upstream request failed at offset %d: %w", read, err)
 				}
 				time.Sleep(time.Duration(1<<attempt) * time.Second)
+				continue
+			}
+
+			if resp.StatusCode == http.StatusForbidden && !usingFallbackProxy && plan.FallbackProxyURL != "" {
+				_ = resp.Body.Close()
+				resp = nil
+				client = d.mediaSOCKS5Client(plan.FallbackProxyURL)
+				usingFallbackProxy = true
 				continue
 			}
 
@@ -482,6 +499,7 @@ func (d *Delivery) DownloadToWriter(
 			}
 
 			// Track total size from partial content response
+			lastStatus = resp.StatusCode
 			if resp.StatusCode == http.StatusPartialContent {
 				if total <= 0 {
 					if t := parseContentRangeTotal(resp.Header.Get("Content-Range")); t > 0 {
@@ -545,6 +563,9 @@ func (d *Delivery) DownloadToWriter(
 			_ = resp.Body.Close()
 		}
 
+		if lastStatus == http.StatusOK {
+			return nil
+		}
 		if n <= 0 {
 			return nil
 		}

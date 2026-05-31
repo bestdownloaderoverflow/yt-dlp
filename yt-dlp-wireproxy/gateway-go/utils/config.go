@@ -7,39 +7,46 @@ import (
 )
 
 type Config struct {
-	GatewayPort               int
-	WorkerCount               int
-	ExtractorIPCEnabled       bool
-	YouTubeFetchIPv6Only      bool
-	YouTubeFetchWorker        string
-	YouTubeFetchWorkers       []string
-	ExtractorPythonBin        string
-	ExtractorWorkerPath       string
-	ExtractorTimeoutMs        int
-	DegradedTimeoutSeconds    int
-	GluetunPassword           string
-	MaxRetries                int
-	TikTokAPIKey              string
-	HealthCheckTimeoutMs      int
-	HealthMonitorIntervalMs   int
-	HealthFailureThreshold    int
-	RateLimitCooldownSeconds  int
-	RestartBackoffBase        int
-	RestartBackoffMax         int
-	RestartBudgetLimit        int
-	RestartBudgetWindow       int
-	RestartQuarantineSeconds  int
-	RestartBackoffJitter      int
-	DegradedRetryAfter        int
-	GatewayRLWindowSeconds    int
-	GatewayRLFetchLimit       int
-	GatewayRLDownloadLimit    int
-	DrainTimeoutSeconds       int
-	DrainPollIntervalMs       int
-	RestartStabilizeSeconds   int
-	UnhealthyRestartThreshold int
-	RedisURL                  string
-	WorkerCountries           map[string]string
+	GatewayPort                 int
+	WorkerCount                 int
+	ProxyCount                  int
+	ExtractorIPCEnabled         bool
+	YouTubeFetchIPv6Only        bool
+	YouTubeFetchWorker          string
+	YouTubeFetchWorkers         []string
+	ExtractorPythonBin          string
+	ExtractorWorkerPath         string
+	ExtractorTimeoutMs          int
+	DegradedTimeoutSeconds      int
+	GluetunPassword             string
+	MaxRetries                  int
+	TikTokAPIKey                string
+	TikTokConcurrency           int
+	HealthCheckTimeoutMs        int
+	HealthMonitorIntervalMs     int
+	HealthFailureThreshold      int
+	ProxyHealthFailureThreshold int
+	RateLimitCooldownSeconds    int
+	ProxyCooldownSeconds        int
+	RestartBackoffBase          int
+	RestartBackoffMax           int
+	RestartBudgetLimit          int
+	RestartBudgetWindow         int
+	RestartQuarantineSeconds    int
+	RestartBackoffJitter        int
+	DegradedRetryAfter          int
+	GatewayRLWindowSeconds      int
+	GatewayRLFetchLimit         int
+	GatewayRLDownloadLimit      int
+	DrainTimeoutSeconds         int
+	DrainPollIntervalMs         int
+	RestartStabilizeSeconds     int
+	UnhealthyRestartThreshold   int
+	RedisURL                    string
+	WorkerCountries             map[string]string
+	ProxyCountries              map[int]string
+	IPCheckURL                  string
+	IPCheckEndpoint             string
 }
 
 func LoadConfig() Config {
@@ -51,42 +58,51 @@ func LoadConfig() Config {
 
 	workerCountries := parseWorkerCountries(getenvDefault("WORKER_COUNTRIES", ""))
 
+	proxyCountries := parseProxyCountries(getenvDefault("PROXY_COUNTRIES", "1:Indonesia,2:Indonesia,3:Indonesia,4:Singapore,5:Singapore,6:Singapore,7:Singapore,8:Singapore,9:Vietnam,10:Vietnam,11:Vietnam,12:Vietnam"))
+
 	maxRetries := envInt("MAX_RETRIES", 5)
 
 	return Config{
-		GatewayPort:               envInt("GATEWAY_PORT", 9111),
-		WorkerCount:               envInt("WORKER_COUNT", 3),
-		ExtractorIPCEnabled:       envBool("EXTRACTOR_IPC_ENABLED", false),
-		YouTubeFetchIPv6Only:      envBool("YOUTUBE_FETCH_IPV6_ONLY", false),
-		YouTubeFetchWorker:        youtubeFetchWorker,
-		YouTubeFetchWorkers:       youtubeFetchWorkers,
-		ExtractorPythonBin:        getenvDefault("EXTRACTOR_PYTHON_BIN", "python3"),
-		ExtractorWorkerPath:       getenvDefault("EXTRACTOR_WORKER_PATH", "../extractor/worker_daemon.py"),
-		ExtractorTimeoutMs:        envInt("EXTRACTOR_TIMEOUT_MS", 45000),
-		DegradedTimeoutSeconds:    envInt("DEGRADED_TIMEOUT_SECONDS", 30),
-		GluetunPassword:           getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
-		MaxRetries:                maxRetries,
-		TikTokAPIKey:              getenvDefault("TIKTOK_API_KEY", ""),
-		HealthCheckTimeoutMs:      envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
-		HealthMonitorIntervalMs:   envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
-		HealthFailureThreshold:    envInt("HEALTH_FAILURE_THRESHOLD", 3),
-		RateLimitCooldownSeconds:  envInt("RATE_LIMIT_COOLDOWN", 300),
-		RestartBackoffBase:        envInt("RESTART_BACKOFF_BASE", 30),
-		RestartBackoffMax:         envInt("RESTART_BACKOFF_MAX", 300),
-		RestartBudgetLimit:        envInt("RESTART_BUDGET_LIMIT", 3),
-		RestartBudgetWindow:       envInt("RESTART_BUDGET_WINDOW", 600),
-		RestartQuarantineSeconds:  envInt("RESTART_QUARANTINE_SECONDS", 600),
-		RestartBackoffJitter:      envInt("RESTART_BACKOFF_JITTER", 5),
-		DegradedRetryAfter:        envInt("DEGRADED_RETRY_AFTER", 5),
-		GatewayRLWindowSeconds:    envInt("GATEWAY_RL_WINDOW_SECONDS", 60),
-		GatewayRLFetchLimit:       envInt("GATEWAY_RL_FETCH_LIMIT", 45),
-		GatewayRLDownloadLimit:    envInt("GATEWAY_RL_DOWNLOAD_LIMIT", 45),
-		DrainTimeoutSeconds:       envInt("DRAIN_TIMEOUT_SECONDS", 90),
-		DrainPollIntervalMs:       envInt("DRAIN_POLL_INTERVAL_MS", 500),
-		RestartStabilizeSeconds:   envInt("RESTART_STABILIZE_SECONDS", 2),
-		UnhealthyRestartThreshold: envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
-		RedisURL:                  getenvDefault("REDIS_URL", "redis://172.30.0.250:6379/0"),
-		WorkerCountries:           workerCountries,
+		GatewayPort:                 envInt("GATEWAY_PORT", 9111),
+		WorkerCount:                 envInt("WORKER_COUNT", 3),
+		ProxyCount:                  envInt("PROXY_COUNT", 12),
+		ExtractorIPCEnabled:         envBool("EXTRACTOR_IPC_ENABLED", false),
+		YouTubeFetchIPv6Only:        envBool("YOUTUBE_FETCH_IPV6_ONLY", false),
+		YouTubeFetchWorker:          youtubeFetchWorker,
+		YouTubeFetchWorkers:         youtubeFetchWorkers,
+		ExtractorPythonBin:          getenvDefault("EXTRACTOR_PYTHON_BIN", "python3"),
+		ExtractorWorkerPath:         getenvDefault("EXTRACTOR_WORKER_PATH", "../extractor/worker_daemon.py"),
+		ExtractorTimeoutMs:          envInt("EXTRACTOR_TIMEOUT_MS", 45000),
+		DegradedTimeoutSeconds:      envInt("DEGRADED_TIMEOUT_SECONDS", 30),
+		GluetunPassword:             getenvDefault("GLUETUN_PASSWORD", "secretpassword"),
+		MaxRetries:                  maxRetries,
+		TikTokAPIKey:                getenvDefault("TIKTOK_API_KEY", ""),
+		TikTokConcurrency:           envInt("TIKTOK_CONCURRENCY", 6),
+		HealthCheckTimeoutMs:        envInt("HEALTH_CHECK_TIMEOUT_MS", 8000),
+		HealthMonitorIntervalMs:     envInt("HEALTH_MONITOR_INTERVAL_MS", 5000),
+		HealthFailureThreshold:      envInt("HEALTH_FAILURE_THRESHOLD", 3),
+		ProxyHealthFailureThreshold: envInt("PROXY_HEALTH_FAILURE_THRESHOLD", 3),
+		RateLimitCooldownSeconds:    envInt("RATE_LIMIT_COOLDOWN", 300),
+		ProxyCooldownSeconds:        envInt("PROXY_COOLDOWN_SECONDS", 300),
+		RestartBackoffBase:          envInt("RESTART_BACKOFF_BASE", 30),
+		RestartBackoffMax:           envInt("RESTART_BACKOFF_MAX", 300),
+		RestartBudgetLimit:          envInt("RESTART_BUDGET_LIMIT", 3),
+		RestartBudgetWindow:         envInt("RESTART_BUDGET_WINDOW", 600),
+		RestartQuarantineSeconds:    envInt("RESTART_QUARANTINE_SECONDS", 600),
+		RestartBackoffJitter:        envInt("RESTART_BACKOFF_JITTER", 5),
+		DegradedRetryAfter:          envInt("DEGRADED_RETRY_AFTER", 5),
+		GatewayRLWindowSeconds:      envInt("GATEWAY_RL_WINDOW_SECONDS", 60),
+		GatewayRLFetchLimit:         envInt("GATEWAY_RL_FETCH_LIMIT", 45),
+		GatewayRLDownloadLimit:      envInt("GATEWAY_RL_DOWNLOAD_LIMIT", 45),
+		DrainTimeoutSeconds:         envInt("DRAIN_TIMEOUT_SECONDS", 90),
+		DrainPollIntervalMs:         envInt("DRAIN_POLL_INTERVAL_MS", 500),
+		RestartStabilizeSeconds:     envInt("RESTART_STABILIZE_SECONDS", 2),
+		UnhealthyRestartThreshold:   envInt("UNHEALTHY_RESTART_THRESHOLD", 6),
+		RedisURL:                    getenvDefault("REDIS_URL", "redis://172.30.0.250:6379/0"),
+		WorkerCountries:             workerCountries,
+		ProxyCountries:              proxyCountries,
+		IPCheckURL:                  getenvDefault("IP_CHECK_URL", "https://api.ipify.org"),
+		IPCheckEndpoint:             getenvDefault("IP_CHECK_ENDPOINT", "/ip"),
 	}
 }
 
@@ -178,6 +194,34 @@ func ExtractWorkerID(key string, workerCount int) string {
 		}
 	}
 	return ""
+}
+
+func parseProxyCountries(raw string) map[int]string {
+	out := map[int]string{
+		1: "Indonesia", 2: "Indonesia", 3: "Indonesia",
+		4: "Singapore", 5: "Singapore", 6: "Singapore", 7: "Singapore", 8: "Singapore",
+		9: "Vietnam", 10: "Vietnam", 11: "Vietnam", 12: "Vietnam",
+	}
+
+	if strings.TrimSpace(raw) == "" {
+		return out
+	}
+
+	parts := strings.Split(raw, ",")
+	for _, part := range parts {
+		kv := strings.Split(strings.TrimSpace(part), ":")
+		if len(kv) == 2 {
+			idx, err := strconv.Atoi(strings.TrimSpace(kv[0]))
+			if err != nil || idx < 1 {
+				continue
+			}
+			v := strings.TrimSpace(kv[1])
+			if v != "" {
+				out[idx] = v
+			}
+		}
+	}
+	return out
 }
 
 func parseWorkerCountries(raw string) map[string]string {

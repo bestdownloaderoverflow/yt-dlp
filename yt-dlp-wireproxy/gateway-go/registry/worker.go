@@ -18,8 +18,6 @@ type Worker struct {
 	Host             string
 	Country          string
 	APIPort          int
-	ProxyPort        int
-	ControlPort      int
 	Healthy          bool
 	Restarting       bool
 	RestartScheduled bool
@@ -41,11 +39,11 @@ func (w *Worker) APIURL() string {
 }
 
 func (w *Worker) ControlURL(password string) string {
-	return fmt.Sprintf("http://admin:%s@%s:%d", password, w.Host, w.ControlPort)
+	return fmt.Sprintf("http://admin:%s@%s:%d", password, w.Host, 8000)
 }
 
 func (w *Worker) HTTPProxyURL() string {
-	return fmt.Sprintf("http://%s:%d", w.Host, w.ProxyPort)
+	return fmt.Sprintf("http://%s:%d", w.Host, 8888)
 }
 
 type Config struct {
@@ -79,14 +77,12 @@ func NewWorkerRegistry(cfg Config) *WorkerRegistry {
 			country = cfg.WorkerCountries[workerID]
 		}
 		workers = append(workers, &Worker{
-			ID:          workerID,
-			Host:        fmt.Sprintf("gluetun-%d", i),
-			Country:     country,
-			APIPort:     9487,
-			ProxyPort:   8888,
-			ControlPort: 8000,
-			Healthy:     false,
-			StartedAt:   now,
+			ID:        workerID,
+			Host:      fmt.Sprintf("ytdlp-worker-%d", i),
+			Country:   country,
+			APIPort:   9487,
+			Healthy:   false,
+			StartedAt: now,
 		})
 		// Pre-initialize per-worker time series so dashboards show 0 instead of "No data"
 		// before the first restart/failure event occurs.

@@ -70,7 +70,7 @@ type Handlers struct {
 	RLFetch    *utils.SlidingWindowRateLimiter
 	RLDownload *utils.SlidingWindowRateLimiter
 
-	tiktokSem chan struct{}
+	tiktokSem chan struct{} // nil means unlimited, matching yt-dlp-stream behavior.
 
 	restartTasksMu sync.Mutex
 	restartTasks   map[string]context.CancelFunc
@@ -85,9 +85,9 @@ type Handlers struct {
 
 func New(cfg utils.Config, reg *registry.WorkerRegistry, rotator *registry.VPNRotator, proxyReg *registry.ProxyRegistry, proxyRot *registry.ProxyRotator, ext Extractor, del *delivery.Delivery, client *http.Client) *Handlers {
 	ctx, cancel := context.WithCancel(context.Background())
-	tiktokConcurrency := cfg.TikTokConcurrency
-	if tiktokConcurrency < 1 {
-		tiktokConcurrency = 6
+	var tiktokSem chan struct{}
+	if cfg.TikTokConcurrency > 0 {
+		tiktokSem = make(chan struct{}, cfg.TikTokConcurrency)
 	}
 	return &Handlers{
 		Config:         cfg,
@@ -100,7 +100,7 @@ func New(cfg utils.Config, reg *registry.WorkerRegistry, rotator *registry.VPNRo
 		Client:         client,
 		RLFetch:        utils.NewSlidingWindowRateLimiter(cfg.GatewayRLFetchLimit, cfg.GatewayRLWindowSeconds),
 		RLDownload:     utils.NewSlidingWindowRateLimiter(cfg.GatewayRLDownloadLimit, cfg.GatewayRLWindowSeconds),
-		tiktokSem:      make(chan struct{}, tiktokConcurrency),
+		tiktokSem:      tiktokSem,
 		restartTasks:   map[string]context.CancelFunc{},
 		restartReasons: map[string]string{},
 		proxyTasks:     map[string]context.CancelFunc{},

@@ -686,16 +686,18 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 
 	clientProxyOverride := payload.Proxy != ""
 
-	select {
-	case h.tiktokSem <- struct{}{}:
-		defer func() { <-h.tiktokSem }()
-	default:
-		w.Header().Set("Retry-After", "5")
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error":  "TikTok concurrency limit reached",
-			"detail": "Too many concurrent TikTok extractions. Try again in 5 seconds.",
-		})
-		return
+	if h.tiktokSem != nil {
+		select {
+		case h.tiktokSem <- struct{}{}:
+			defer func() { <-h.tiktokSem }()
+		default:
+			w.Header().Set("Retry-After", "5")
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error":  "TikTok concurrency limit reached",
+				"detail": "Too many concurrent TikTok extractions. Try again in 5 seconds.",
+			})
+			return
+		}
 	}
 
 	maxAttempts := h.Config.MaxRetries

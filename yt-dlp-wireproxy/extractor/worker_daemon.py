@@ -25,8 +25,6 @@ import signal
 import sys
 import time
 import traceback
-import urllib.error
-import urllib.request
 from typing import Any, Dict, Optional
 
 import yt_dlp
@@ -440,33 +438,6 @@ def _extract_format_headers(
     return safe_headers, cookies
 
 
-def _is_direct_tiktok_media_usable(
-    fmt: Dict[str, Any],
-    info: Dict[str, Any],
-    request_url: str,
-    proxy: Optional[str],
-    impersonate: Optional[str],
-) -> bool:
-    media_url = fmt.get("url")
-    if not media_url:
-        return False
-    headers, cookies = _extract_format_headers(fmt, info, request_url, proxy, impersonate)
-    headers = dict(headers)
-    headers["Accept-Encoding"] = "identity"
-    headers["Range"] = "bytes=0-0"
-    if cookies:
-        headers["Cookie"] = cookies
-    req = urllib.request.Request(media_url, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as response:
-            return response.status in {200, 206, 416}
-    except urllib.error.HTTPError as exc:
-        return exc.code == 416
-    except Exception as exc:
-        logger.warning("TikTok direct media preflight failed: %s", exc)
-        return False
-
-
 def _generate_tiktok_video_links(
     info: Dict[str, Any],
     author: Dict[str, Any],
@@ -497,18 +468,6 @@ def _generate_tiktok_video_links(
     if not audio_format and video_formats:
         audio_format = video_formats[0]
 
-    direct_candidates = sd_formats or video_formats
-    direct_format = next(
-        (f for f in direct_candidates if _is_direct_tiktok_media_usable(f, info, request_url, proxy, impersonate)),
-        None,
-    )
-    if direct_candidates and not direct_format:
-        raise RuntimeError(json.dumps({
-            "status": 503,
-            "code": "IP_BLOCKED",
-            "message": "TikTok direct media preflight failed; retry extraction with another proxy",
-        }))
-
     if download_format:
         http_headers, cookies = _extract_format_headers(download_format, info, request_url, proxy, impersonate)
         key = _get_download_cache().create_session(
@@ -528,7 +487,7 @@ def _generate_tiktok_video_links(
         links["watermark"] = f"/tiktok/download?key={key}"
 
     if sd_formats:
-        fmt = direct_format
+        fmt = sd_formats[0]
         http_headers, cookies = _extract_format_headers(fmt, info, request_url, proxy, impersonate)
         key = _get_download_cache().create_session(
             url=request_url,

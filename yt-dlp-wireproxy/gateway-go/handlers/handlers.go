@@ -98,6 +98,41 @@ func isRetryableTikTokRPCError(rpcErr *IPCError) bool {
 	return rpcErr.Status >= 500 && (code == "internal_error" || code == "download_error")
 }
 
+func tiktokRPCErrorProxyPenalty(rpcErr *IPCError) (bool, string) {
+	if rpcErr == nil {
+		return false, ""
+	}
+	msg := strings.ToLower(strings.TrimSpace(rpcErr.Message))
+	code := strings.ToLower(strings.TrimSpace(rpcErr.Code))
+
+	switch code {
+	case "rate_limited":
+		return true, restartReasonRateLimit
+	case "ip_blocked":
+		return true, "ip_blocked"
+	}
+
+	switch {
+	case strings.Contains(msg, "captcha"),
+		strings.Contains(msg, "verify you are human"),
+		strings.Contains(msg, "verify that you are human"),
+		strings.Contains(msg, "challenge"),
+		strings.Contains(msg, "not a bot"):
+		return true, "challenge"
+	case strings.Contains(msg, "rate-limited"),
+		strings.Contains(msg, "rate limited"),
+		strings.Contains(msg, "session has been rate-limited"),
+		strings.Contains(msg, "too many requests"):
+		return true, restartReasonRateLimit
+	case strings.Contains(msg, "ip blocked"),
+		strings.Contains(msg, "blocked by tiktok"),
+		strings.Contains(msg, "access denied"):
+		return true, "ip_blocked"
+	default:
+		return false, ""
+	}
+}
+
 func isYouTubePlatform(platform string) bool {
 	switch strings.ToLower(strings.TrimSpace(platform)) {
 	case "youtube", "youtube:tab", "youtube:shorts":
@@ -721,6 +756,15 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
 			return
 		}
+		if !clientProxyOverride && h.ProxyReg != nil && selectedProxy == nil {
+			h.recordExtractFailure("tiktok", "no_proxy")
+			w.Header().Set("Retry-After", strconv.Itoa(h.Config.DegradedRetryAfter))
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+				"error":  "No proxy available",
+				"detail": "All wireproxy instances are cooling down or unavailable. Try again later.",
+			})
+			return
+		}
 
 		proxyArg := payload.Proxy
 		if !clientProxyOverride && selectedProxy != nil && h.ProxyReg != nil {
@@ -752,7 +796,16 @@ func (h *Handlers) handleTikTokViaExtractorIPC(w http.ResponseWriter, r *http.Re
 			triedWorkers[workerID] = true
 			if !clientProxyOverride && selectedProxy != nil && h.ProxyReg != nil {
 				triedProxies[selectedProxy.ID] = true
-				h.ProxyReg.MarkCooldown(selectedProxy.ID)
+				if penalizeProxy, reasonCode := tiktokRPCErrorProxyPenalty(rpcErr); penalizeProxy {
+					log.Printf(
+						"[proxy:%s] tiktok hard proxy error; cooldown + restart scheduled (reason=%s code=%s)",
+						selectedProxy.ID,
+						reasonCode,
+						rpcErr.Code,
+					)
+					h.ProxyReg.MarkCooldown(selectedProxy.ID)
+					h.scheduleProxyRestart(selectedProxy.ID, reasonCode)
+				}
 				selectedProxy = h.ProxyReg.SelectProxy(triedProxies, nil)
 			}
 			h.recordFailover("/tiktok", "rpc_retryable")

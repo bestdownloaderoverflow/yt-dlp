@@ -106,9 +106,9 @@ probe_one_container() {
   local c="wireproxy-${i}"
   local dir="$2"
 
-  # Metrics: wg show style text dari :9080/metrics (di dalam wireproxy sendiri)
+  # Metrics: wg show style text dari :9080/ (wireproxy info HTML page), stripped by renderer
   docker exec "$c" wget -qO- --timeout=5 --tries=1 \
-    http://127.0.0.1:9080/metrics > "${dir}/m-${i}" 2>/dev/null || true
+    http://127.0.0.1:9080/ > "${dir}/m-${i}" 2>/dev/null || true
 
   # SOCKS5 probe: keluar lewat ${c}:1080, dilihat dari ytdlp-worker-1
   docker exec "${SOCKS_PROBE_CONTAINER}" curl --proxy "socks5h://${c}:1080" \
@@ -142,6 +142,10 @@ do_iteration() {
 
   # 3. Render
   python3 "$RENDER_PY" "$dir" --count "$PROXY_COUNT"
+
+  # 4. Cleanup temp dir (avoid accumulation in watch mode)
+  rm -rf "$dir"
+  CURRENT_TMPDIR=""
 }
 
 # --- main loop ---------------------------------------------------------------

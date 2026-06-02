@@ -41,10 +41,12 @@ def c(code: str, text: str) -> str:
 
 # --- Regexes -----------------------------------------------------------------
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
 RE_ENDPOINT = re.compile(r"endpoint:\s+(\S+)")
 RE_HANDSHAKE = re.compile(r"latest handshake:\s+(.+)")
 RE_TRANSFER = re.compile(
-    r"transfer:\s+([\d.]+)\s*(\w+)\s*received,\s+([\d.]+)\s*(\w+)\s*sent"
+    r"transfer:\s+([\d.]+)\s*(\w*?)\s*received,\s+([\d.]+)\s*(\w*?)\s*sent"
 )
 
 UNIT_FACTOR = {
@@ -64,6 +66,7 @@ def parse_metrics(text: str) -> dict:
     out = {"endpoint": "", "handshake": "", "rx_b": 0, "tx_b": 0}
     if not text:
         return out
+    text = _TAG_RE.sub("", text)  # strip HTML tags from wireproxy info page
     em = RE_ENDPOINT.search(text)
     if em:
         out["endpoint"] = em.group(1)
@@ -119,7 +122,7 @@ def _handshake_age_seconds(handshake: str) -> int | None:
 
     Returns None if unparseable.
     """
-    if not handshake or handshake == "never":
+    if not handshake or handshake.lower() == "never":
         return None
     m = re.match(r"(\d+)\s+(second|minute|hour|day)s?\s+ago", handshake)
     if not m:
@@ -140,7 +143,7 @@ def _handshake_age_seconds(handshake: str) -> int | None:
 def handshake_color(handshake: str) -> str:
     if not handshake or handshake == "-":
         return _DIM
-    if handshake == "never":
+    if handshake.lower() == "never":
         return _RED
     age = _handshake_age_seconds(handshake)
     if age is None:

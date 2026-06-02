@@ -33,6 +33,10 @@ temp/
 *.tmp
 *.log
 
+# Monitor probe artifacts (raw output dumps from manual wireproxy probes)
+monitor-tmp/
+!monitor-tmp/.gitkeep
+
 # IDE
 .vscode/
 .idea/

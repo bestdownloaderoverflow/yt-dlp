@@ -110,11 +110,20 @@ probe_one_container() {
   docker exec "$c" wget -qO- --timeout=5 --tries=1 \
     http://127.0.0.1:9080/ > "${dir}/m-${i}" 2>/dev/null || true
 
-  # SOCKS5 probe: keluar lewat ${c}:1080, dilihat dari ytdlp-worker-1
-  docker exec "${SOCKS_PROBE_CONTAINER}" curl --proxy "socks5h://${c}:1080" \
-    -m 8 -sS -o "${dir}/ip-${i}" \
-    -w '%{http_code} %{time_total}\n' \
-    "${IP_CHECK_URL}" > "${dir}/lat-${i}" 2>/dev/null || true
+  # SOCKS5 probe: keluar lewat ${c}:1080, dilihat dari ytdlp-worker-1.
+  # Jangan pakai curl -o "${dir}/ip-${i}" di dalam docker exec: path itu
+  # akan dianggap path di container worker, bukan temp dir host monitor.
+  local probe_out status_line body
+  probe_out="$(
+    docker exec "${SOCKS_PROBE_CONTAINER}" curl --proxy "socks5h://${c}:1080" \
+      -m 8 -sS \
+      -w $'\n%{http_code} %{time_total}\n' \
+      "${IP_CHECK_URL}" 2>/dev/null || true
+  )"
+  status_line="$(printf '%s\n' "$probe_out" | tail -n 1)"
+  body="$(printf '%s\n' "$probe_out" | sed '$d')"
+  printf '%s' "$body" > "${dir}/ip-${i}"
+  printf '%s\n' "$status_line" > "${dir}/lat-${i}"
 }
 
 do_iteration() {

@@ -6,6 +6,7 @@
 #   2. docker exec wireproxy-XX wget /metrics         -> WireGuard handshake + transfer
 #   3. docker exec ytdlp-worker-1 curl --proxy        -> exit IP + latency per container
 #      socks5h://wireproxy-XX:1080 https://api.ipify.org
+#   4. docker exec ytdlp-redis-wireproxy redis-cli    -> last restart message
 #
 # Tabel dirender dengan python helper (monitor-wireproxy-render.py) berwarna,
 # dikelompokkan per negara, refresh-able.
@@ -25,6 +26,7 @@ RENDER_PY="${SCRIPT_DIR}/monitor-wireproxy-render.py"
 
 GATEWAY_CONTAINER="${GATEWAY_CONTAINER:-ytdlp-gateway-wireproxy}"
 SOCKS_PROBE_CONTAINER="${SOCKS_PROBE_CONTAINER:-ytdlp-worker-1}"
+REDIS_CONTAINER="${REDIS_CONTAINER:-ytdlp-redis-wireproxy}"
 GATEWAY_PORT="${GATEWAY_PORT:-9111}"
 PROXY_COUNT="${PROXY_COUNT:-18}"
 IP_CHECK_URL="${IP_CHECK_URL:-https://api.ipify.org}"
@@ -87,6 +89,12 @@ if ! curl -sS --max-time 3 "http://localhost:${GATEWAY_PORT}/health" >/dev/null 
   exit 1
 fi
 
+REDIS_AVAILABLE=0
+if docker ps --filter "name=^/${REDIS_CONTAINER}$" --format '{{.Names}}' \
+     | grep -qx "${REDIS_CONTAINER}"; then
+  REDIS_AVAILABLE=1
+fi
+
 # --- per-iteration work ------------------------------------------------------
 
 CURRENT_TMPDIR=""
@@ -124,6 +132,11 @@ probe_one_container() {
   body="$(printf '%s\n' "$probe_out" | sed '$d')"
   printf '%s' "$body" > "${dir}/ip-${i}"
   printf '%s\n' "$status_line" > "${dir}/lat-${i}"
+
+  if [[ "$REDIS_AVAILABLE" -eq 1 ]]; then
+    docker exec "${REDIS_CONTAINER}" redis-cli --raw \
+      lindex "restart_log:p$((10#$i))" 0 > "${dir}/restart-${i}" 2>/dev/null || true
+  fi
 }
 
 do_iteration() {

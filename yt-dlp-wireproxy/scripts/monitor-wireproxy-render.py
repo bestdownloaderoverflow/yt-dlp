@@ -6,6 +6,7 @@ Reads from a per-cycle temp directory:
   m-XX          - text/wg-show output from wireproxy-XX /metrics
   ip-XX         - exit IP captured from SOCKS5 probe
   lat-XX        - "<http_code> <time_total>" captured from SOCKS5 probe
+  restart-XX    - latest restart_log:pN Redis entry
 
 Renders a colored ASCII table grouped by country, sorted by index, to stdout.
 Auto-strips ANSI when stdout is not a TTY (so piping to a file/log still works).
@@ -115,6 +116,52 @@ def safe_read(path: str) -> str:
         return ""
 
 
+def _format_duration_ms(duration_ms: int) -> str:
+    if duration_ms < 0:
+        return "-"
+    if duration_ms < 1000:
+        return f"{duration_ms}ms"
+    return f"{duration_ms / 1000:.1f}s"
+
+
+def parse_restart_message(text: str) -> dict:
+    out = {"message": "-", "success": None}
+    if not text.strip():
+        return out
+    try:
+        entry = json.loads(text)
+    except json.JSONDecodeError:
+        return out
+
+    success = bool(entry.get("success"))
+    result = "ok" if success else "fail"
+    reason = str(entry.get("reason_code") or "unknown")
+    duration = _format_duration_ms(int(entry.get("duration_ms", -1) or -1))
+    restart_failures = int(entry.get("restart_failures", 0) or 0)
+    ts = int(entry.get("timestamp", 0) or 0)
+    when = ""
+    if ts > 0:
+        try:
+            when = datetime.fromtimestamp(ts / 1000).strftime("%m-%d %H:%M")
+        except (OSError, OverflowError, ValueError):
+            when = ""
+
+    bits = []
+    if when:
+        bits.append(when)
+    bits.append(result)
+    bits.append(reason)
+    bits.append(duration)
+    if restart_failures > 0:
+        bits.append(f"rf={restart_failures}")
+    if entry.get("quarantine"):
+        bits.append("quarantine")
+
+    out["message"] = " ".join(bits)
+    out["success"] = success
+    return out
+
+
 # --- Handshake color ---------------------------------------------------------
 
 def _handshake_age_seconds(handshake: str) -> int | None:
@@ -208,8 +255,7 @@ COLS = [
     ("FAIL", 4),
     ("COOL", 4),
     ("RST", 3),
-    ("HANDSHAKE", 16),
-    ("ENDPOINT", 32),
+    ("LAST RESTART MESSAGE", 52),
     ("RX/TX", 13),
 ]
 
@@ -276,6 +322,7 @@ def main() -> int:
         ph = proxies_health.get(pid, {})
 
         m = parse_metrics(safe_read(os.path.join(cycle_dir, f"m-{idx}")))
+        restart = parse_restart_message(safe_read(os.path.join(cycle_dir, f"restart-{idx}")))
         http_code, latency_s = parse_latency_file(
             safe_read(os.path.join(cycle_dir, f"lat-{idx}"))
         )
@@ -297,6 +344,8 @@ def main() -> int:
             "cooldown_remaining": int(ph.get("cooldown_remaining", 0) or 0),
             "endpoint": m["endpoint"],
             "handshake": m["handshake"],
+            "restart_message": restart["message"],
+            "restart_success": restart["success"],
             "rx_b": m["rx_b"],
             "tx_b": m["tx_b"],
         }
@@ -398,13 +447,14 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
             else:
                 rst_cell = c(_DIM, "-")
 
-            # Handshake
-            hs = r["handshake"] or "-"
-            hs_cell = c(handshake_color(hs), hs)
-
-            # Endpoint
-            ep = r["endpoint"] or "-"
-            ep_cell = ep if vlen(ep) <= COLS[10][1] else trunc(ep, COLS[10][1])
+            # Last restart message
+            restart_msg = trunc(r["restart_message"] or "-", COLS[9][1])
+            if r["restart_success"] is True:
+                restart_cell = c(_GRN, restart_msg)
+            elif r["restart_success"] is False:
+                restart_cell = c(_RED, restart_msg)
+            else:
+                restart_cell = c(_DIM, restart_msg)
 
             # RX/TX
             rx_tx = f"{human_bytes(r['rx_b'])}/{human_bytes(r['tx_b'])}"
@@ -426,9 +476,8 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
                 pad(fail_cell, COLS[6][1]),
                 pad(cool_cell, COLS[7][1]),
                 rst_cell.ljust(COLS[8][1]),
-                pad(hs_cell, COLS[9][1]),
-                pad(ep_cell, COLS[10][1]),
-                pad(rx_tx_cell, COLS[11][1]),
+                pad(restart_cell, COLS[9][1]),
+                pad(rx_tx_cell, COLS[10][1]),
             ]
             print("  " + "  ".join(cells))
 

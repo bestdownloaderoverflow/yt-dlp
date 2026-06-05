@@ -1,0 +1,165 @@
+x-wireproxy: &wireproxy
+  build:
+    context: .
+    dockerfile: wireproxy/Dockerfile
+  image: ytdlp-wireproxy:v1.1.2
+  command: ["--config", "/etc/wireproxy/wireproxy.conf", "--info", "0.0.0.0:9080"]
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 10s
+  networks:
+    - ytdlp-wireproxy-3-network
+
+x-ytdlp-worker: &ytdlp_worker
+  build:
+    context: ..
+    dockerfile: yt-dlp-wireproxy/Dockerfile
+    target: base
+  depends_on:
+    - redis
+  environment:
+    - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+    - LOG_LEVEL=${LOG_LEVEL:-info}
+    - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+    - YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
+    - PYTHONPATH=/app:/app/yt_dlp
+    - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
+    - REDIS_URL=redis://redis:6379/0
+    - WORKER_COUNT=3
+  volumes:
+    - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
+  command: ["python", "extractor/worker_server.py"]
+  restart: unless-stopped
+  networks:
+    - ytdlp-wireproxy-3-network
+
+services:
+  wireproxy-01:
+    <<: *wireproxy
+    container_name: wireproxy-01
+    volumes:
+      - ./runtime-configs-3/wireproxy-01.conf:/etc/wireproxy/wireproxy.conf:ro
+
+  wireproxy-02:
+    <<: *wireproxy
+    container_name: wireproxy-02
+    volumes:
+      - ./runtime-configs-3/wireproxy-02.conf:/etc/wireproxy/wireproxy.conf:ro
+
+  wireproxy-03:
+    <<: *wireproxy
+    container_name: wireproxy-03
+    volumes:
+      - ./runtime-configs-3/wireproxy-03.conf:/etc/wireproxy/wireproxy.conf:ro
+
+  ytdlp-worker-1:
+    <<: *ytdlp_worker
+    container_name: ytdlp-worker-1
+    environment:
+      - WORKER_ID=w1
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
+      - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_COUNT=3
+
+  ytdlp-worker-2:
+    <<: *ytdlp_worker
+    container_name: ytdlp-worker-2
+    environment:
+      - WORKER_ID=w2
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
+      - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_COUNT=3
+
+  ytdlp-worker-3:
+    <<: *ytdlp_worker
+    container_name: ytdlp-worker-3
+    environment:
+      - WORKER_ID=w3
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
+      - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_COUNT=3
+
+  redis:
+    image: redis:7-alpine
+    container_name: ytdlp-redis-wireproxy-3
+    volumes:
+      - redis-data-3:/data
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    networks:
+      - ytdlp-wireproxy-3-network
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway-go/Dockerfile
+    container_name: ytdlp-gateway-wireproxy-3
+    ports:
+      - "9111:9111"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - GATEWAY_PORT=9111
+      - WORKER_COUNT=3
+      - PROXY_COUNT=3
+      - EXTRACTOR_IPC_ENABLED=true
+      - EXTRACTOR_TIMEOUT_MS=45000
+      - MAX_RETRIES=3
+      - TIKTOK_API_KEY=${TIKTOK_API_KEY:-}
+      - TIKTOK_CONCURRENCY=0
+      - PROXY_COUNTRIES=1:Taiwan,2:Indonesia,3:Singapore
+      - PROXY_COOLDOWN_SECONDS=300
+      - PROXY_HEALTH_FAILURE_THRESHOLD=3
+      - IP_CHECK_URL=https://api.ipify.org
+      - YOUTUBE_FETCH_IPV6_ONLY=false
+      - HEALTH_CHECK_TIMEOUT_MS=15000
+      - HEALTH_MONITOR_INTERVAL_MS=5000
+      - HEALTH_FAILURE_THRESHOLD=3
+      - RATE_LIMIT_COOLDOWN=300
+      - DRAIN_POLL_INTERVAL_MS=350
+      - DRAIN_TIMEOUT_SECONDS=120
+      - RESTART_BACKOFF_BASE=10
+      - RESTART_BACKOFF_MAX=90
+      - RESTART_BACKOFF_JITTER=2
+      - DEGRADED_RETRY_AFTER=5
+      - DEGRADED_TIMEOUT_SECONDS=30
+      - RESTART_STABILIZE_SECONDS=5
+      - UNHEALTHY_RESTART_THRESHOLD=6
+      - REDIS_URL=redis://redis:6379/0
+    depends_on:
+      - redis
+      - wireproxy-01
+      - wireproxy-02
+      - wireproxy-03
+      - ytdlp-worker-1
+      - ytdlp-worker-2
+      - ytdlp-worker-3
+    restart: unless-stopped
+    networks:
+      - ytdlp-wireproxy-3-network
+
+networks:
+  ytdlp-wireproxy-3-network:
+    driver: bridge
+
+volumes:
+  redis-data-3:

@@ -1033,13 +1033,13 @@ def _hydrate_generic_session(session: Any) -> Dict[str, Any]:
         return {
             "protocol": protocol,
             "delivery_mode": delivery.mode,
-            "needs_ffmpeg": False,
-            "ffmpeg_audio_only": False,
+            "needs_ffmpeg": True,
+            "ffmpeg_audio_only": True,
         }
 
     if content_type == "video":
         quality = str(getattr(session, "quality", "") or "")
-        quality_key = f"{quality}p" if quality.isdigit() else "1080p"
+        quality_key = quality if quality.isdigit() else "1080"
         format_str = QUALITY_FORMATS.get(quality_key, QUALITY_FORMATS["1080"])
         resolved = ydl_manager.resolve_formats(info, format_str, proxy=proxy, impersonate=impersonate)
         if not resolved:

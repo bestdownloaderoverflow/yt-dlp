@@ -133,6 +133,56 @@ func tiktokRPCErrorProxyPenalty(rpcErr *IPCError) (bool, string) {
 	}
 }
 
+// isRetryableYouTubeFetchRPCError marks transient YouTube extraction failures
+// that are worth retrying with another wireproxy exit.
+func isRetryableYouTubeFetchRPCError(rpcErr *IPCError) bool {
+	if rpcErr == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(rpcErr.Message))
+	code := strings.ToLower(strings.TrimSpace(rpcErr.Code))
+
+	switch code {
+	case "upstream_dns_failure", "rate_limited", "ip_blocked", "proxy_error":
+		return true
+	}
+
+	switch {
+	case strings.Contains(msg, "http error 429"),
+		strings.Contains(msg, "too many requests"),
+		strings.Contains(msg, "rate limit"),
+		strings.Contains(msg, "rate-limit"):
+		return true
+	case strings.Contains(msg, "proxy"),
+		strings.Contains(msg, "connection reset"),
+		strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "connection aborted"),
+		strings.Contains(msg, "remote end closed connection"),
+		strings.Contains(msg, "i/o timeout"),
+		strings.Contains(msg, "timed out"),
+		strings.Contains(msg, "temporary failure in name resolution"),
+		strings.Contains(msg, "name resolution"),
+		strings.Contains(msg, "no route to host"):
+		return true
+	case strings.Contains(msg, "temporarily unavailable"),
+		strings.Contains(msg, "try again later"),
+		strings.Contains(msg, "internal server error"),
+		strings.Contains(msg, "bad gateway"),
+		strings.Contains(msg, "service unavailable"),
+		strings.Contains(msg, "gateway timeout"):
+		return true
+	case strings.Contains(msg, "private video"),
+		strings.Contains(msg, "video unavailable"),
+		strings.Contains(msg, "this video is unavailable"),
+		strings.Contains(msg, "not a valid url"),
+		strings.Contains(msg, "unsupported url"),
+		strings.Contains(msg, "sign in to confirm your age"):
+		return false
+	}
+
+	return rpcErr.Status >= 500 && (code == "internal_error" || code == "download_error")
+}
+
 func isYouTubePlatform(platform string) bool {
 	switch strings.ToLower(strings.TrimSpace(platform)) {
 	case "youtube", "youtube:tab", "youtube:shorts":
@@ -311,36 +361,121 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 	preferred := extractWorkerID(r.URL.Query().Get("key"), h.Config.WorkerCount)
 	isYouTube := isYouTubeURL(url)
 	forceIPv6 := h.Config.YouTubeFetchIPv6Only && isYouTube
+	clientProxyOverride := proxy != ""
 
-	workerID := ""
-	if forceIPv6 && len(h.Config.YouTubeFetchWorkers) > 0 {
-		eligible := make([]string, 0, len(h.Config.YouTubeFetchWorkers))
-		for _, configuredWorker := range h.Config.YouTubeFetchWorkers {
-			if !h.Extractor.HasWorker(configuredWorker) {
-				continue
+	selectFetchWorker := func(exclude map[string]bool) (string, bool) {
+		if forceIPv6 && len(h.Config.YouTubeFetchWorkers) > 0 {
+			eligible := make([]string, 0, len(h.Config.YouTubeFetchWorkers))
+			for _, configuredWorker := range h.Config.YouTubeFetchWorkers {
+				if exclude != nil && exclude[configuredWorker] {
+					continue
+				}
+				if !h.Extractor.HasWorker(configuredWorker) {
+					continue
+				}
+				candidate := h.Registry.GetWorker(configuredWorker)
+				if h.isWorkerAcceptingRequests(candidate) {
+					eligible = append(eligible, configuredWorker)
+				}
 			}
-			candidate := h.Registry.GetWorker(configuredWorker)
-			if h.isWorkerAcceptingRequests(candidate) {
-				eligible = append(eligible, configuredWorker)
+			if len(eligible) == 0 {
+				return "", true
 			}
+			return h.pickLeastLoadedExtractorWorker(eligible), false
 		}
-		if len(eligible) == 0 {
+		return h.selectExtractorWorkerAvoiding(preferred, false, exclude, nil), false
+	}
+
+	autoProxyFailover := isYouTube && !clientProxyOverride && h.ProxyReg != nil
+	maxAttempts := 1
+	if autoProxyFailover {
+		maxAttempts = h.Config.MaxRetries
+		if maxAttempts < 1 {
+			maxAttempts = 1
+		}
+	}
+	triedWorkers := make(map[string]bool, maxAttempts)
+	triedProxies := make(map[string]bool, maxAttempts)
+
+	var (
+		result   map[string]any
+		rpcErr   *IPCError
+		err      error
+		workerID string
+	)
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		var ipv6PoolEmpty bool
+		workerID, ipv6PoolEmpty = selectFetchWorker(triedWorkers)
+		if ipv6PoolEmpty {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 				"error":  "YouTube IPv6 worker unavailable",
 				"detail": "No healthy worker available in configured YouTube IPv6 pool",
 			})
 			return
 		}
-		workerID = h.pickLeastLoadedExtractorWorker(eligible)
-	} else {
-		workerID = h.selectExtractorWorker(preferred, false)
-	}
-	if workerID == "" {
-		h.recordExtractFailure("fetch", "no_worker")
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+		if workerID == "" {
+			h.recordExtractFailure("fetch", "no_worker")
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "No extractor workers available"})
+			return
+		}
+
+		proxyArg := proxy
+		var selectedProxy *registry.Proxy
+		if autoProxyFailover {
+			selectedProxy = h.ProxyReg.SelectProxy(triedProxies, nil)
+			if selectedProxy == nil {
+				if err != nil || rpcErr != nil {
+					break
+				}
+				h.recordExtractFailure("fetch", "no_proxy")
+				w.Header().Set("Retry-After", strconv.Itoa(h.Config.DegradedRetryAfter))
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error":  "No proxy available",
+					"detail": "All wireproxy instances are cooling down or unavailable. Try again later.",
+				})
+				return
+			}
+			proxyArg = selectedProxy.SOCKS5URL
+			h.ProxyReg.IncrementActive(selectedProxy.ID)
+			log.Printf("[extractor:%s] youtube fetch using %s (%s)", workerID, selectedProxy.ID, selectedProxy.SOCKS5URL)
+		}
+
+		result, rpcErr, err = h.Extractor.Fetch(workerID, url, proxyArg, impersonate, forceIPv6)
+
+		if autoProxyFailover && selectedProxy != nil {
+			h.ProxyReg.DecrementActive(selectedProxy.ID)
+		}
+
+		if err != nil {
+			if autoProxyFailover && isIPCNetworkError(err) && attempt+1 < maxAttempts {
+				log.Printf("[extractor:%s] youtube fetch ipc retryable error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
+				triedWorkers[workerID] = true
+				if selectedProxy != nil {
+					triedProxies[selectedProxy.ID] = true
+				}
+				h.recordFailover("/fetch", "ipc_network")
+				continue
+			}
+			break
+		}
+		if rpcErr != nil {
+			if autoProxyFailover && isRetryableYouTubeFetchRPCError(rpcErr) && attempt+1 < maxAttempts {
+				log.Printf(
+					"[extractor:%s] youtube fetch rpc retryable error (attempt %d/%d): %s",
+					workerID, attempt+1, maxAttempts, rpcErr.Message,
+				)
+				triedWorkers[workerID] = true
+				if selectedProxy != nil {
+					triedProxies[selectedProxy.ID] = true
+				}
+				h.recordFailover("/fetch", "rpc_retryable")
+				continue
+			}
+			break
+		}
+		writeJSON(w, http.StatusOK, result)
 		return
 	}
-	result, rpcErr, err := h.Extractor.Fetch(workerID, url, proxy, impersonate, forceIPv6)
 	if err != nil {
 		log.Printf("[extractor:%s] fetch ipc error: %v", workerID, err)
 		h.recordExtractFailureWithReason("fetch", "ipc_error", ipcErrorType(err))

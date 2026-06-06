@@ -338,6 +338,7 @@ func planToMap(p DeliveryPlan) map[string]any {
 		"key":                  p.Key,
 		"use_worker_mp3":       p.UseWorkerMP3,
 		"bypass_proxy":         p.BypassProxy,
+		"proxy_url":            p.ProxyURL,
 	}
 }
 

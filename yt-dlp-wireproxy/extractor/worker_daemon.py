@@ -889,6 +889,7 @@ def _build_stream_plan_from_session(session: Any, download: bool) -> Dict[str, A
         "platform": platform,
         "direct_url": direct_url,
         "source_size": resolved_size or None,
+        "proxy_url": getattr(session, "proxy", None),
         "request_headers": safe_headers,
         "response_headers": response_headers,
         "media_type": media_type,

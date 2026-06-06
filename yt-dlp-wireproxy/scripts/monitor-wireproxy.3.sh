@@ -153,7 +153,8 @@ do_iteration() {
 
   # 2. Fan-out paralel: 3 metrics + 3 socks5 = 6 probe paralel
   local pids=()
-  for i in $(seq -w 1 "$PROXY_COUNT"); do
+  for n in $(seq 1 "$PROXY_COUNT"); do
+    i="$(printf "%02d" "$n")"
     probe_one_container "$i" "$dir" &
     pids+=("$!")
   done

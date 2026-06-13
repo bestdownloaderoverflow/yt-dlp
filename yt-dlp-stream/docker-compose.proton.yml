@@ -146,11 +146,11 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Indonesia
+      - SERVER_COUNTRIES=Singapore
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=mMDduHqI3uBKeplhVPcurCA6lcTXPDB0JfTvWU0Jl2M=
+      - WIREGUARD_PRIVATE_KEY=iJoe44p+rXSVlML2A6UPXEbAIUP+PpdHOWoVtkjwvGQ=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
-      - WIREGUARD_PUBLIC_KEY=qyghLDfpfyparp0M52OVcmhKckayOvbRO2DDLkgJqyk=
+      - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
       - DNS_ADDRESS=162.252.172.57
       - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
@@ -212,7 +212,7 @@ services:
       - VPN_TYPE=wireguard
       - SERVER_COUNTRIES=Singapore
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=aNY1C2I2Yf825GyQZsFYCfFyary/UmQmQSyx+R1qlVQ=
+      - WIREGUARD_PRIVATE_KEY=sGQDLt9BygDBVZIXTRC2/Hz7XiwipO+mqb8wCzgTHEs=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
       - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
       - DNS_ADDRESS=162.252.172.57
@@ -276,7 +276,7 @@ services:
       - VPN_TYPE=wireguard
       - SERVER_COUNTRIES=Singapore
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=eM/CPrdN1PEyHtoxEE6U4By9kvCMzebLn0bfPcGqLlE=
+      - WIREGUARD_PRIVATE_KEY=uM0oq/Ao3AnMoQkObrJ33fWdcjb/NaqvVg2kKQl9JEg=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
       - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
       - DNS_ADDRESS=162.252.172.57
@@ -338,11 +338,11 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Vietnam
+      - SERVER_COUNTRIES=Indonesia
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=ADUTRMEDrDN1nhGbYQsb6emkjHy6/igp/a5jywEoFVw=
+      - WIREGUARD_PRIVATE_KEY=mMDduHqI3uBKeplhVPcurCA6lcTXPDB0JfTvWU0Jl2M=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
-      - WIREGUARD_PUBLIC_KEY=Mioou38fh5H+3LWMpitLOWT3JaDGg2gXxqjl2eXkPFU=
+      - WIREGUARD_PUBLIC_KEY=qyghLDfpfyparp0M52OVcmhKckayOvbRO2DDLkgJqyk=
       - DNS_ADDRESS=162.252.172.57
       - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
@@ -404,7 +404,7 @@ services:
       - VPN_TYPE=wireguard
       - SERVER_COUNTRIES=Vietnam
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=+PLv2aytTl2E0aVE2L5sa0jZ5R13y8FRLCdwNf6VyUc=
+      - WIREGUARD_PRIVATE_KEY=qCpy04Yc0jwlGjcuHjZQrjo/PA+Rw+2SUGaGmKi0rU8=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
       - WIREGUARD_PUBLIC_KEY=Mioou38fh5H+3LWMpitLOWT3JaDGg2gXxqjl2eXkPFU=
       - DNS_ADDRESS=162.252.172.57
@@ -468,7 +468,7 @@ services:
       - VPN_TYPE=wireguard
       - SERVER_COUNTRIES=Vietnam
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=qCpy04Yc0jwlGjcuHjZQrjo/PA+Rw+2SUGaGmKi0rU8=
+      - WIREGUARD_PRIVATE_KEY=AMGYufne8kfGZNAGcX4JVQhFZF0ShNd33ZbsZ4/xgks=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
       - WIREGUARD_PUBLIC_KEY=Mioou38fh5H+3LWMpitLOWT3JaDGg2gXxqjl2eXkPFU=
       - DNS_ADDRESS=162.252.172.57
@@ -530,9 +530,9 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Vietnam
+      - SERVER_COUNTRIES=Singapore
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=AMGYufne8kfGZNAGcX4JVQhFZF0ShNd33ZbsZ4/xgks=
+      - WIREGUARD_PRIVATE_KEY=aNY1C2I2Yf825GyQZsFYCfFyary/UmQmQSyx+R1qlVQ=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
       - WIREGUARD_PUBLIC_KEY=Mioou38fh5H+3LWMpitLOWT3JaDGg2gXxqjl2eXkPFU=
       - DNS_ADDRESS=162.252.172.57
@@ -592,14 +592,14 @@ services:
       - "8010:8000"
       - "9496:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=custom
+      - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=2Fxrep3b6xWpp3zLPFqCQvqugT9nBXnIWqBkLg9qNWo=
-      - WIREGUARD_ADDRESSES=172.16.0.2/32
-      - WIREGUARD_ENDPOINT_IP=162.159.192.1
-      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
-      - WIREGUARD_ENDPOINT_PORT=2408
-      - DNS_ADDRESS=1.1.1.1
+      - SERVER_COUNTRIES=Singapore
+      - IPV6=off
+      - WIREGUARD_PRIVATE_KEY=eM/CPrdN1PEyHtoxEE6U4By9kvCMzebLn0bfPcGqLlE=
+      - WIREGUARD_ADDRESSES=10.14.0.2/16
+      - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
+      - DNS_ADDRESS=162.252.172.57
       - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
@@ -658,9 +658,9 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Singapore
+      - SERVER_COUNTRIES=Vietnam
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=iJoe44p+rXSVlML2A6UPXEbAIUP+PpdHOWoVtkjwvGQ=
+      - WIREGUARD_PRIVATE_KEY=+PLv2aytTl2E0aVE2L5sa0jZ5R13y8FRLCdwNf6VyUc=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
       - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
       - DNS_ADDRESS=162.252.172.57
@@ -722,9 +722,9 @@ services:
     environment:
       - VPN_SERVICE_PROVIDER=surfshark
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Singapore
+      - SERVER_COUNTRIES=Vietnam
       - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=sGQDLt9BygDBVZIXTRC2/Hz7XiwipO+mqb8wCzgTHEs=
+      - WIREGUARD_PRIVATE_KEY=ADUTRMEDrDN1nhGbYQsb6emkjHy6/igp/a5jywEoFVw=
       - WIREGUARD_ADDRESSES=10.14.0.2/16
       - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
       - DNS_ADDRESS=162.252.172.57
@@ -784,14 +784,14 @@ services:
       - "8013:8000"
       - "9499:9487"
     environment:
-      - VPN_SERVICE_PROVIDER=surfshark
+      - VPN_SERVICE_PROVIDER=custom
       - VPN_TYPE=wireguard
-      - SERVER_COUNTRIES=Singapore
-      - IPV6=off
-      - WIREGUARD_PRIVATE_KEY=uM0oq/Ao3AnMoQkObrJ33fWdcjb/NaqvVg2kKQl9JEg=
-      - WIREGUARD_ADDRESSES=10.14.0.2/16
-      - WIREGUARD_PUBLIC_KEY=MGfgkhJsMVMTO33h1wr76+z6gQr/93VcGdClfbaPsnU=
-      - DNS_ADDRESS=162.252.172.57
+      - WIREGUARD_PRIVATE_KEY=2Fxrep3b6xWpp3zLPFqCQvqugT9nBXnIWqBkLg9qNWo=
+      - WIREGUARD_ADDRESSES=172.16.0.2/32,2606:4700:110:8496:c851:73fa:2f92:b23a/128
+      - WIREGUARD_ENDPOINT_IP=162.159.192.1
+      - WIREGUARD_PUBLIC_KEY=bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=
+      - WIREGUARD_ENDPOINT_PORT=2408
+      - DNS_ADDRESS=1.1.1.1
       - WIREGUARD_MTU=1280
       - HTTP_CONTROL_SERVER_ADDRESS=:8000
       - HTTP_CONTROL_SERVER_LOG=off
@@ -835,306 +835,6 @@ services:
     command: ["python", "extractor/worker_server.py"]
     restart: unless-stopped
 
-  gluetun-14:
-    <<: *gluetun_defaults
-
-    image: qmcgaw/gluetun:v3.41.1
-    container_name: ytdlp-gluetun-14
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "8014:8000"
-      - "9500:9487"
-    environment:
-      - VPN_SERVICE_PROVIDER=mullvad
-      - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=qGjlk+SDw974RDu2y5SubH13dFdpdW/yahp6uBbamHA=
-      - WIREGUARD_ADDRESSES=10.71.190.92/32
-      - SERVER_COUNTRIES=Indonesia
-      - HTTP_CONTROL_SERVER_ADDRESS=:8000
-      - HTTP_CONTROL_SERVER_LOG=off
-      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
-      - HTTPPROXY=on
-      - HTTPPROXY_LOG=off
-    volumes:
-      - ./gluetun/data14:/gluetun
-    restart: unless-stopped
-    networks:
-      ytdlp-warp-network:
-        aliases:
-          - gluetun-14
-    extra_hosts:
-      - "host.docker.internal:172.17.0.1"
-
-  ytdlp-14:
-    build:
-      context: ..
-      dockerfile: yt-dlp-stream/Dockerfile
-      target: base
-    container_name: ytdlp-stream-14
-    network_mode: "service:gluetun-14"
-    depends_on:
-      - gluetun-14
-      - redis
-    environment:
-      - WORKER_ID=w14
-      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
-      - PYTHONPATH=/app:/app/yt_dlp
-      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
-      - REDIS_URL=redis://172.30.0.250:6379/0
-      - GLUETUN_HOST=localhost
-      - GLUETUN_PORT=8000
-      - GLUETUN_USERNAME=admin
-      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-    volumes:
-      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
-    command: ["python", "extractor/worker_server.py"]
-    restart: unless-stopped
-
-  gluetun-15:
-    <<: *gluetun_defaults
-
-    image: qmcgaw/gluetun:v3.41.1
-    container_name: ytdlp-gluetun-15
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "8015:8000"
-      - "9501:9487"
-    environment:
-      - VPN_SERVICE_PROVIDER=mullvad
-      - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=GIcoaV4dAC0aJSIeOWUaKLF1s8dsgTTQEbHSrLgWGmo=
-      - WIREGUARD_ADDRESSES=10.69.223.104/32
-      - SERVER_COUNTRIES=Singapore
-      - HTTP_CONTROL_SERVER_ADDRESS=:8000
-      - HTTP_CONTROL_SERVER_LOG=off
-      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
-      - HTTPPROXY=on
-      - HTTPPROXY_LOG=off
-    volumes:
-      - ./gluetun/data15:/gluetun
-    restart: unless-stopped
-    networks:
-      ytdlp-warp-network:
-        aliases:
-          - gluetun-15
-    extra_hosts:
-      - "host.docker.internal:172.17.0.1"
-
-  ytdlp-15:
-    build:
-      context: ..
-      dockerfile: yt-dlp-stream/Dockerfile
-      target: base
-    container_name: ytdlp-stream-15
-    network_mode: "service:gluetun-15"
-    depends_on:
-      - gluetun-15
-      - redis
-    environment:
-      - WORKER_ID=w15
-      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
-      - PYTHONPATH=/app:/app/yt_dlp
-      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
-      - REDIS_URL=redis://172.30.0.250:6379/0
-      - GLUETUN_HOST=localhost
-      - GLUETUN_PORT=8000
-      - GLUETUN_USERNAME=admin
-      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-    volumes:
-      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
-    command: ["python", "extractor/worker_server.py"]
-    restart: unless-stopped
-
-  gluetun-16:
-    <<: *gluetun_defaults
-
-    image: qmcgaw/gluetun:v3.41.1
-    container_name: ytdlp-gluetun-16
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "8016:8000"
-      - "9502:9487"
-    environment:
-      - VPN_SERVICE_PROVIDER=mullvad
-      - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=AAxHsqrJGgeyFsaBHDEGTSKdEguVLvhpK83Qu4z37Ek=
-      - WIREGUARD_ADDRESSES=10.65.14.74/32
-      - SERVER_COUNTRIES=Singapore
-      - HTTP_CONTROL_SERVER_ADDRESS=:8000
-      - HTTP_CONTROL_SERVER_LOG=off
-      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
-      - HTTPPROXY=on
-      - HTTPPROXY_LOG=off
-    volumes:
-      - ./gluetun/data16:/gluetun
-    restart: unless-stopped
-    networks:
-      ytdlp-warp-network:
-        aliases:
-          - gluetun-16
-    extra_hosts:
-      - "host.docker.internal:172.17.0.1"
-
-  ytdlp-16:
-    build:
-      context: ..
-      dockerfile: yt-dlp-stream/Dockerfile
-      target: base
-    container_name: ytdlp-stream-16
-    network_mode: "service:gluetun-16"
-    depends_on:
-      - gluetun-16
-      - redis
-    environment:
-      - WORKER_ID=w16
-      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
-      - PYTHONPATH=/app:/app/yt_dlp
-      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
-      - REDIS_URL=redis://172.30.0.250:6379/0
-      - GLUETUN_HOST=localhost
-      - GLUETUN_PORT=8000
-      - GLUETUN_USERNAME=admin
-      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-    volumes:
-      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
-    command: ["python", "extractor/worker_server.py"]
-    restart: unless-stopped
-
-  gluetun-17:
-    <<: *gluetun_defaults
-
-    image: qmcgaw/gluetun:v3.41.1
-    container_name: ytdlp-gluetun-17
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "8017:8000"
-      - "9503:9487"
-    environment:
-      - VPN_SERVICE_PROVIDER=mullvad
-      - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=eCObSqPc/wt9oxXkvAehG5LRm/b6cdkjzr5fNWc+BkQ=
-      - WIREGUARD_ADDRESSES=10.64.234.127/32
-      - SERVER_COUNTRIES=Singapore
-      - HTTP_CONTROL_SERVER_ADDRESS=:8000
-      - HTTP_CONTROL_SERVER_LOG=off
-      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
-      - HTTPPROXY=on
-      - HTTPPROXY_LOG=off
-    volumes:
-      - ./gluetun/data17:/gluetun
-    restart: unless-stopped
-    networks:
-      ytdlp-warp-network:
-        aliases:
-          - gluetun-17
-    extra_hosts:
-      - "host.docker.internal:172.17.0.1"
-
-  ytdlp-17:
-    build:
-      context: ..
-      dockerfile: yt-dlp-stream/Dockerfile
-      target: base
-    container_name: ytdlp-stream-17
-    network_mode: "service:gluetun-17"
-    depends_on:
-      - gluetun-17
-      - redis
-    environment:
-      - WORKER_ID=w17
-      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
-      - PYTHONPATH=/app:/app/yt_dlp
-      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
-      - REDIS_URL=redis://172.30.0.250:6379/0
-      - GLUETUN_HOST=localhost
-      - GLUETUN_PORT=8000
-      - GLUETUN_USERNAME=admin
-      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-    volumes:
-      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
-    command: ["python", "extractor/worker_server.py"]
-    restart: unless-stopped
-
-  gluetun-18:
-    <<: *gluetun_defaults
-
-    image: qmcgaw/gluetun:v3.41.1
-    container_name: ytdlp-gluetun-18
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    ports:
-      - "8018:8000"
-      - "9504:9487"
-    environment:
-      - VPN_SERVICE_PROVIDER=mullvad
-      - VPN_TYPE=wireguard
-      - WIREGUARD_PRIVATE_KEY=6HFmZp571CUZIB0/TTcOmKERZgdFPwzOn59FVCxWRX0=
-      - WIREGUARD_ADDRESSES=10.65.0.133/32
-      - SERVER_COUNTRIES=Singapore
-      - HTTP_CONTROL_SERVER_ADDRESS=:8000
-      - HTTP_CONTROL_SERVER_LOG=off
-      - "HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE={\"auth\":\"basic\",\"username\":\"admin\",\"password\":\"${GLUETUN_PASSWORD:-secretpassword}\"}"
-      - HTTPPROXY=on
-      - HTTPPROXY_LOG=off
-    volumes:
-      - ./gluetun/data18:/gluetun
-    restart: unless-stopped
-    networks:
-      ytdlp-warp-network:
-        aliases:
-          - gluetun-18
-    extra_hosts:
-      - "host.docker.internal:172.17.0.1"
-
-  ytdlp-18:
-    build:
-      context: ..
-      dockerfile: yt-dlp-stream/Dockerfile
-      target: base
-    container_name: ytdlp-stream-18
-    network_mode: "service:gluetun-18"
-    depends_on:
-      - gluetun-18
-      - redis
-    environment:
-      - WORKER_ID=w18
-      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:-dev-secret-key}
-      - LOG_LEVEL=${LOG_LEVEL:-info}
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
-      - PYTHONPATH=/app:/app/yt_dlp
-      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
-      - REDIS_URL=redis://172.30.0.250:6379/0
-      - GLUETUN_HOST=localhost
-      - GLUETUN_PORT=8000
-      - GLUETUN_USERNAME=admin
-      - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
-    volumes:
-      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
-    command: ["python", "extractor/worker_server.py"]
-    restart: unless-stopped
-
   redis:
     image: redis:7-alpine
     container_name: ytdlp-redis
@@ -1157,13 +857,13 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - GATEWAY_PORT=9111
-      - WORKER_COUNT=18
+      - WORKER_COUNT=13
       - EXTRACTOR_IPC_ENABLED=true
       - EXTRACTOR_TIMEOUT_MS=15000
       - GLUETUN_PASSWORD=${GLUETUN_PASSWORD:-secretpassword}
       - MAX_RETRIES=3
       - TIKTOK_API_KEY=${TIKTOK_API_KEY:-}
-      - WORKER_COUNTRIES=w1:Indonesia,w2:Indonesia,w3:Indonesia,w4:Singapore,w5:Singapore,w6:Vietnam,w7:Vietnam,w8:Vietnam,w9:Vietnam,w10:WARP,w11:Singapore,w12:Singapore,w13:Singapore,w14:Indonesia,w15:Singapore,w16:Singapore,w17:Singapore,w18:Singapore
+      - WORKER_COUNTRIES=w1:Indonesia,w2:Indonesia,w3:Singapore,w4:Singapore,w5:Singapore,w6:Indonesia,w7:Vietnam,w8:Vietnam,w9:Singapore,w10:Singapore,w11:Vietnam,w12:Vietnam,w13:WARP
       - HEALTH_CHECK_TIMEOUT_MS=15000
       - HEALTH_MONITOR_INTERVAL_MS=5000
       - HEALTH_FAILURE_THRESHOLD=3
@@ -1205,16 +905,6 @@ services:
       ytdlp-12:
         condition: service_healthy
       ytdlp-13:
-        condition: service_healthy
-      ytdlp-14:
-        condition: service_healthy
-      ytdlp-15:
-        condition: service_healthy
-      ytdlp-16:
-        condition: service_healthy
-      ytdlp-17:
-        condition: service_healthy
-      ytdlp-18:
         condition: service_healthy
     restart: unless-stopped
     networks:

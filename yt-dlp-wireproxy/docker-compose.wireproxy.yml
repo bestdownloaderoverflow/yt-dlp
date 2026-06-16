@@ -298,7 +298,7 @@ services:
       - PYTHONPATH=/app:/app/yt_dlp
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
-      - WORKER_COUNT=4
+      - WORKER_COUNT=8
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -324,7 +324,7 @@ services:
       - PYTHONPATH=/app:/app/yt_dlp
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
-      - WORKER_COUNT=4
+      - WORKER_COUNT=8
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -350,7 +350,7 @@ services:
       - PYTHONPATH=/app:/app/yt_dlp
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
-      - WORKER_COUNT=4
+      - WORKER_COUNT=8
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -376,7 +376,111 @@ services:
       - PYTHONPATH=/app:/app/yt_dlp
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
-      - WORKER_COUNT=4
+      - WORKER_COUNT=8
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+    networks:
+      - ytdlp-wireproxy-network
+
+  ytdlp-worker-5:
+    <<: *ytdlp_worker
+    build:
+      context: ..
+      dockerfile: yt-dlp-wireproxy/Dockerfile
+      target: base
+    container_name: ytdlp-worker-5
+    depends_on:
+      - redis
+    environment:
+      - WORKER_ID=w5
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:?set STREAM_SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
+      - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_COUNT=8
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+    networks:
+      - ytdlp-wireproxy-network
+
+  ytdlp-worker-6:
+    <<: *ytdlp_worker
+    build:
+      context: ..
+      dockerfile: yt-dlp-wireproxy/Dockerfile
+      target: base
+    container_name: ytdlp-worker-6
+    depends_on:
+      - redis
+    environment:
+      - WORKER_ID=w6
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:?set STREAM_SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
+      - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_COUNT=8
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+    networks:
+      - ytdlp-wireproxy-network
+
+  ytdlp-worker-7:
+    <<: *ytdlp_worker
+    build:
+      context: ..
+      dockerfile: yt-dlp-wireproxy/Dockerfile
+      target: base
+    container_name: ytdlp-worker-7
+    depends_on:
+      - redis
+    environment:
+      - WORKER_ID=w7
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:?set STREAM_SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
+      - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_COUNT=8
+    volumes:
+      - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
+    command: ["python", "extractor/worker_server.py"]
+    restart: unless-stopped
+    networks:
+      - ytdlp-wireproxy-network
+
+  ytdlp-worker-8:
+    <<: *ytdlp_worker
+    build:
+      context: ..
+      dockerfile: yt-dlp-wireproxy/Dockerfile
+      target: base
+    container_name: ytdlp-worker-8
+    depends_on:
+      - redis
+    environment:
+      - WORKER_ID=w8
+      - STREAM_SECRET_KEY=${STREAM_SECRET_KEY:?set STREAM_SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=300
+      - YTDLP_JS_RUNTIMES=deno:/usr/local/bin/deno
+      - PYTHONPATH=/app:/app/yt_dlp
+      - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
+      - REDIS_URL=redis://redis:6379/0
+      - WORKER_COUNT=8
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -406,7 +510,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       - GATEWAY_PORT=9111
-      - WORKER_COUNT=4
+      - WORKER_COUNT=8
       - PROXY_COUNT=18
       - EXTRACTOR_IPC_ENABLED=true
       - EXTRACTOR_TIMEOUT_MS=15000
@@ -438,6 +542,10 @@ services:
       - ytdlp-worker-2
       - ytdlp-worker-3
       - ytdlp-worker-4
+      - ytdlp-worker-5
+      - ytdlp-worker-6
+      - ytdlp-worker-7
+      - ytdlp-worker-8
     restart: unless-stopped
     networks:
       - ytdlp-wireproxy-network

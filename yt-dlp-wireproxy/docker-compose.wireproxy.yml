@@ -299,6 +299,7 @@ services:
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
       - WORKER_COUNT=8
+      - YTDLP_MAX_INSTANCES=0
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -325,6 +326,7 @@ services:
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
       - WORKER_COUNT=8
+      - YTDLP_MAX_INSTANCES=0
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -351,6 +353,7 @@ services:
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
       - WORKER_COUNT=8
+      - YTDLP_MAX_INSTANCES=0
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -377,6 +380,7 @@ services:
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
       - WORKER_COUNT=8
+      - YTDLP_MAX_INSTANCES=0
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -403,6 +407,7 @@ services:
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
       - WORKER_COUNT=8
+      - YTDLP_MAX_INSTANCES=0
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -429,6 +434,7 @@ services:
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
       - WORKER_COUNT=8
+      - YTDLP_MAX_INSTANCES=0
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -455,6 +461,7 @@ services:
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
       - WORKER_COUNT=8
+      - YTDLP_MAX_INSTANCES=0
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -481,6 +488,7 @@ services:
       - YTDLP_COOKIEFILE=/app/cookie/cookie.txt
       - REDIS_URL=redis://redis:6379/0
       - WORKER_COUNT=8
+      - YTDLP_MAX_INSTANCES=0
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     command: ["python", "extractor/worker_server.py"]
@@ -513,7 +521,7 @@ services:
       - WORKER_COUNT=8
       - PROXY_COUNT=18
       - EXTRACTOR_IPC_ENABLED=true
-      - EXTRACTOR_TIMEOUT_MS=15000
+      - EXTRACTOR_TIMEOUT_MS=30000
       - MAX_RETRIES=3
       - TIKTOK_API_KEY=${TIKTOK_API_KEY:?set TIKTOK_API_KEY}
       - TIKTOK_CONCURRENCY=0

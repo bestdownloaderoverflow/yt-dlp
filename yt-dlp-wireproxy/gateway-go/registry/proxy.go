@@ -412,9 +412,12 @@ func (r *ProxyRegistry) ShouldRestartUnhealthy(proxyID string, threshold int) bo
 	if p.Healthy || p.Restarting || p.RestartScheduled {
 		return false
 	}
-	if p.ActiveCount() > 0 {
-		return false
-	}
+	// NOTE: deliberately do NOT gate on ActiveCount() here. An unhealthy proxy is
+	// already excluded from SelectProxy, so it receives no new traffic. Scheduling
+	// the restart immediately lets WaitForProxyDrain (in RestartProxy) wait for any
+	// remaining in-flight requests to finish before the actual docker restart, which
+	// is the proper guard. Gating here merely postponed recycling of dead proxies
+	// that still had long-lived in-flight streams under load.
 	return p.ProbeFailures >= threshold
 }
 

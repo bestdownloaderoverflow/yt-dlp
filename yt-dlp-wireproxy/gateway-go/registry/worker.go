@@ -433,9 +433,10 @@ func (r *WorkerRegistry) ShouldRestartUnhealthy(workerID string) bool {
 	if w.Healthy || w.Restarting || w.RestartScheduled {
 		return false
 	}
-	if w.ActiveRequests > 0 {
-		return false
-	}
+	// NOTE: deliberately do NOT gate on ActiveRequests here. An unhealthy worker is
+	// excluded from selection, so it gets no new traffic; WaitForDrain in the rotator
+	// still waits for in-flight requests to finish before the actual restart. Gating
+	// here only postponed recycling of dead workers that still had in-flight work.
 
 	now := time.Now()
 	if now.Before(w.QuarantineUntil) || now.Before(w.NextRestartAt) {

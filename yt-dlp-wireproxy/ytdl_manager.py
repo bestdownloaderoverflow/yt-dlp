@@ -136,7 +136,7 @@ class YoutubeDLManager:
         self._cookiefile_readonly = _env_bool("YTDLP_COOKIEFILE_READONLY", True)
         logger.info(
             "YoutubeDL manager pool: max_instances=%s max_requests_per_instance=%s acquire_timeout=%ss",
-            self._max_instances,
+            self._max_instances if self._max_instances > 0 else "unlimited",
             self._max_requests_per_instance,
             self._acquire_timeout,
         )
@@ -346,7 +346,7 @@ class YoutubeDLManager:
                     self._pool_rr[opts_key] = (start + offset + 1) % slot_count
                     return slot_key, slot["instance"]
 
-                if slot_count >= self._max_instances:
+                if self._max_instances > 0 and slot_count >= self._max_instances:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         raise TimeoutError(

@@ -1,5 +1,6 @@
 import Tiktok from "@tobyg74/tiktok-api-dl";
 import { createSession } from "./session.ts";
+import { getOrExtract } from "./extraction_cache.ts";
 
 export type DownloaderVersion = "v1" | "v2" | "v3";
 
@@ -125,10 +126,7 @@ function buildStatistics(r: any): StatisticsInfo {
   };
 }
 
-export async function extractPost(
-  url: string,
-  options: ExtractOptions = {}
-): Promise<TikTokResponse> {
+export async function fetchRaw(url: string, options: ExtractOptions = {}): Promise<any> {
   const version = options.version || "v1";
 
   const response: any = await (Tiktok as any).Downloader(url, {
@@ -142,6 +140,15 @@ export async function extractPost(
 
   const r = response.result;
   if (!r) throw new Error("No result returned from downloader");
+  return r;
+}
+
+export async function buildResponse(
+  r: any,
+  url: string,
+  options: ExtractOptions = {}
+): Promise<TikTokResponse> {
+  const version = options.version || "v1";
 
   const author = buildAuthor(r);
   const statistics = buildStatistics(r);
@@ -295,6 +302,14 @@ export async function extractPost(
     music_duration: durationMs,
     author,
   };
+}
+
+export async function extractPost(
+  url: string,
+  options: ExtractOptions = {}
+): Promise<TikTokResponse> {
+  const raw = await getOrExtract(url, options, () => fetchRaw(url, options));
+  return await buildResponse(raw, url, options);
 }
 
 export function isTiktokUrl(url: string): boolean {

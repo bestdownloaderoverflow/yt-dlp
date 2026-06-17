@@ -5,6 +5,7 @@ import {
   type DownloaderVersion,
 } from "./tiktok.ts";
 import { getSession, deleteSession, activeSessionCount, closeSessionStore, isRedisBackend, type SessionData } from "./session.ts";
+import { closeExtractionCache, isExtractCacheRedis, extractCacheTtl } from "./extraction_cache.ts";
 import { renderSlideshow, cleanupTemp, readSlideshowFile, SlideshowError } from "./slideshow.ts";
 
 const PORT = Number(process.env.PORT) || 7788;
@@ -101,6 +102,8 @@ async function handleHealth(): Promise<Response> {
     version: DEFAULT_VERSION,
     active_sessions: sessions,
     session_backend: isRedisBackend() ? "redis" : "memory",
+    extract_cache_backend: isExtractCacheRedis() ? "redis" : "memory",
+    extract_cache_ttl_seconds: extractCacheTtl(),
     ffmpeg: FFMPEG_PATH,
   });
 }
@@ -281,6 +284,7 @@ if (process.env.REDIS_URL) {
 } else {
   console.log("Redis: not configured (using in-memory session store)");
 }
+console.log(`Extraction cache: TTL ${extractCacheTtl()}s, backend ${isExtractCacheRedis() ? "redis" : "memory"}`);
 console.log(`Endpoints:`);
 console.log(`  GET  /`);
 console.log(`  GET  /health`);
@@ -289,11 +293,13 @@ console.log(`  GET  /tiktok/download   (query: key, download?)`);
 
 process.on("SIGINT", async () => {
   await closeSessionStore();
+  await closeExtractionCache();
   server.stop();
   process.exit(0);
 });
 process.on("SIGTERM", async () => {
   await closeSessionStore();
+  await closeExtractionCache();
   server.stop();
   process.exit(0);
 });

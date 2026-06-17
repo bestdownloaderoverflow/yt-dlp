@@ -124,6 +124,17 @@ Session key berlaku **5 menit** (300 detik), disimpan di **Redis** (jika `REDIS_
 - Redis key prefix: `tiktok:session:`, TTL 300 detik, policy `allkeys-lru` (maxmemory 128MB).
 - Endpoint `/health` menampilkan `session_backend: "redis"` atau `"memory"` dan `active_sessions` count.
 
+### Extraction cache (`POST /tiktok`)
+
+Hasil ekstraksi upstream `Tiktok.Downloader()` di-**cache** (Redis jika `REDIS_URL` di-set, otherwise in-memory) agar request berulang ke URL yang sama tidak memanggil upstream TikTok berkali-kali. Ini menurunkan latensi & risiko rate-limit, sama seperti `extraction_cache` di `yt-dlp-wireproxy`.
+
+- **Yang di-cache:** raw extraction result (metadata + CDN URL), **bukan** response final. Download links (`/tiktok/download?key=...`) tetap dibuat fresh per request → session baru setiap kali.
+- **Cache key:** `SHA-256(url|proxy|impersonate|version)`, prefix Redis `exinfo:`.
+- **TTL:** `TIKTOK_EXTRACT_CACHE_TTL_SECONDS` (default **90 detik** — menyamai expiry CDN URL TikTok). Bump ke 300 untuk parity dengan wireproxy prod, dengan risiko CDN URL sudah expired pada cache hit tua → download 403 (client re-extract).
+- **Stampede protection:** Redis `SET NX` lock (TTL 35s); request concurrent ke URL sama menunggu hingga 8 detik lalu fallback ke ekstraksi sendiri.
+- **Graceful degradation:** jika Redis down, otomatis fall-through ke ekstraksi langsung tanpa cache.
+- Endpoint `/health` menampilkan `extract_cache_backend` (`redis`/`memory`) dan `extract_cache_ttl_seconds`.
+
 ### Slideshow rendering
 
 Saat `key` merujuk ke session type `slideshow`:
@@ -156,6 +167,7 @@ tiktok-api-dl/
 ├── src/
 │   ├── index.ts       # Bun.serve: CORS + routing / /health /tiktok /tiktok/download
 │   ├── tiktok.ts      # wrapper Tiktok.Downloader + wireproxy-compatible JSON + key generation
+│   ├── extraction_cache.ts # Redis/in-memory cache hasil ekstraksi (TTL + stampede protection)
 │   ├── session.ts     # session store: Redis backend + in-memory fallback (TTL 5 menit)
 │   └── slideshow.ts   # ffmpeg slideshow rendering (photo post → MP4)
 └── test.sh
@@ -169,7 +181,8 @@ tiktok-api-dl/
 | `DEFAULT_VERSION` | `v1` | Default downloader version (`v1`/`v2`/`v3`) |
 | `TIKTOK_API_KEY` | (kosong) | Jika di-set, endpoint `/tiktok` butuh header `X-API-Key` |
 | `FFMPEG_PATH` | `ffmpeg` | Path ke binary ffmpeg |
-| `REDIS_URL` | (kosong) | Jika di-set, session store pakai Redis; jika kosong, pakai in-memory fallback |
+| `REDIS_URL` | (kosong) | Jika di-set, session store & extraction cache pakai Redis; jika kosong, pakai in-memory fallback |
+| `TIKTOK_EXTRACT_CACHE_TTL_SECONDS` | `90` | TTL cache hasil ekstraksi `/tiktok` (detik) |
 
 ## Docker
 

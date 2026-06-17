@@ -4,5 +4,10 @@ node_modules/
 .env.dev
 *.log
 .DS_Store
+server.log
 downloads/
 temp/
+.git/
+.gitignore
+README.md
+test.sh

@@ -1,17 +1,20 @@
 # tiktok-api-dl-server
 
-Bun API server untuk **fetch** dan **download** post TikTok (video / image / music) memakai package [`tiktok-api-dl`](https://github.com/almafazi/tiktok-api-dl) (fork `almafazi/tiktok-api-dl` @ v1.3.8).
+Bun API server untuk **fetch** dan **download** post TikTok (video / image / music / **slideshow**) memakai package [`tiktok-api-dl`](https://github.com/almafazi/tiktok-api-dl) (fork `almafazi/tiktok-api-dl` @ v1.3.8).
+
+Response JSON dan endpoint path **disamakan** dengan `yt-dlp-wireproxy` (Go gateway di port 9111).
 
 ## Requirement
 
 - [Bun](https://bun.sh) >= 1.2
+- [ffmpeg](https://ffmpeg.org) (diperlukan untuk rendering slideshow photo post → MP4)
 
 ## Install & Run
 
 ```bash
 cd tiktok-api-dl
 bun install
-cp .env.example .env   # opsional, default PORT=7788
+cp .env.example .env   # opsional
 bun run start          # atau: bun run dev (watch mode)
 ```
 
@@ -19,67 +22,118 @@ Server berjalan di `http://localhost:7788`.
 
 ## Endpoints
 
-### `GET /health`
-Cek status server.
+| Method | Path | Auth | Fungsi |
+|---|---|---|---|
+| `GET` | `/` | — | Status service |
+| `GET` | `/health` | — | Health check |
+| `POST` | `/tiktok` | `X-API-Key` (jika `TIKTOK_API_KEY` di-set) | Ekstrak metadata + generate encrypted download links |
+| `GET` | `/tiktok/download` | — | Stream video / image / mp3 / slideshow via `key` |
 
-### `GET|POST /fetch`
-Ambil metadata post + URL media (JSON).
+### `POST /tiktok`
 
-| Param | Lokasi | Wajib | Default | Keterangan |
-|---|---|---|---|---|
-| `url` | query / body | ya | — | URL post TikTok |
-| `version` | query / body | tidak | `v1` | `v1` (Tiktok API) / `v2` (SSSTik) / `v3` (MusicalDown) |
-
-Contoh:
-```bash
-curl -G http://localhost:7788/fetch \
-  --data-urlencode "url=https://www.tiktok.com/@arctic.motion/video/7644267480856136991"
-```
-
-Response (ringkas):
+Body:
 ```json
 {
-  "status": "success",
-  "version": "v1",
-  "type": "video",
-  "id": "7644267480856136991",
-  "description": "...",
-  "author": { "username": "arctic.motion", "nickname": "...", "avatar": "..." },
-  "statistics": { "playCount": 123, "likeCount": 45, ... },
-  "download": {
-    "video": [{ "url": "https://..." }],
-    "images": [],
-    "music":  [{ "url": "https://...", "title": "...", "author": "..." }]
-  },
-  "raw": { ... }
+  "url": "https://www.tiktok.com/@user/video/<id>",
+  "version": "v1",          // opsional, default v1 (v1|v2|v3)
+  "proxy": "http://...",    // opsional
+  "impersonate": "chrome"   // opsional
 }
 ```
 
-### `GET /download`
-Stream langsung file media dari CDN TikTok ke klien (header `Content-Disposition: attachment`).
+**Response (video post — `status: "tunnel"`):**
+```json
+{
+  "status": "tunnel",
+  "extract_source": "web",
+  "title": "...",
+  "description": "...",
+  "statistics": {
+    "play_count": 0,
+    "digg_count": 0,
+    "comment_count": 0,
+    "share_count": 0
+  },
+  "artist": "nickname",
+  "cover": "https://...",
+  "duration": 10053,
+  "audio": "https://...tiktokcdn....mp3",
+  "download_link": {
+    "watermark": "/tiktok/download?key=...",
+    "no_watermark": "/tiktok/download?key=...",
+    "no_watermark_hd": "/tiktok/download?key=...",
+    "mp3": "/tiktok/download?key=..."
+  },
+  "music_duration": 10053,
+  "author": {
+    "nickname": "...",
+    "uniqueId": "username",
+    "signature": "",
+    "avatar": "https://...",
+    "avatarThumb": "https://...",
+    "avatarMedium": "https://...",
+    "avatarLarger": "https://..."
+  }
+}
+```
+
+**Response (photo/slideshow post — `status: "picker"`):**
+```json
+{
+  "status": "picker",
+  "extract_source": "web",
+  "title": "...",
+  "description": "...",
+  "statistics": { "play_count": 0, "digg_count": 0, "comment_count": 0, "share_count": 0 },
+  "artist": "nickname",
+  "cover": "https://...",
+  "duration": 0,
+  "audio": "https://...mp3",
+  "download_link": {
+    "no_watermark": ["/tiktok/download?key=...", "/tiktok/download?key=..."],
+    "mp3": "/tiktok/download?key=..."
+  },
+  "photos": [
+    { "type": "photo", "url": "https://...", "download_link": "/tiktok/download?key=..." },
+    { "type": "photo", "url": "https://...", "download_link": "/tiktok/download?key=..." }
+  ],
+  "download_slideshow": "/tiktok/download?key=...",
+  "author": { "nickname": "...", "uniqueId": "...", ... }
+}
+```
+
+### `GET /tiktok/download`
 
 | Param | Wajib | Default | Keterangan |
 |---|---|---|---|
-| `url` | ya | — | URL post TikTok |
-| `type` | tidak | `video` | `video` / `image` / `music` |
-| `index` | tidak | `0` | Index gambar untuk post slide (`type=image`) |
-| `version` | tidak | `v1` | `v1` / `v2` / `v3` |
+| `key` | ya | — | Download key dari response `/tiktok` |
+| `download` | tidak | `true` | `true` = attachment, `false` = inline |
 
-Contoh:
-```bash
-# video
-curl -G http://localhost:7788/download \
-  --data-urlencode "url=https://www.tiktok.com/@arctic.motion/video/7644267480856136991" \
-  --data-urlencode "type=video" -o video.mp4
+Tipe konten ditentukan oleh session type:
+- `video` → `video/mp4`, filename `{author}_{quality}.mp4`
+- `photo` → `image/jpeg`, filename `{author}_photo_{index}.jpg`
+- `mp3` → `audio/mpeg`, filename `{author}.mp3`
+- `slideshow` → `video/mp4` (hasil ffmpeg), filename `{author}_slideshow.mp4`
 
-# gambar ke-2 dari post slide
-curl -G http://localhost:7788/download \
-  --data-urlencode "url=<URL>" --data-urlencode "type=image" --data-urlencode "index=1" -o img.jpg
+Session key berlaku **5 menit** (300 detik), disimpan di **Redis** (jika `REDIS_URL` di-set) atau in-memory fallback.
 
-# audio/music
-curl -G http://localhost:7788/download \
-  --data-urlencode "url=<URL>" --data-urlencode "type=music" -o audio.mp3
-```
+### Session store & Redis
+
+- **Docker (dev/prod):** otomatis pakai Redis (`redis://redis:6379/0`), session persist saat container restart.
+- **Local tanpa docker:** biarkan `REDIS_URL` kosong → pakai in-memory Map (session hilang saat server restart).
+- Redis key prefix: `tiktok:session:`, TTL 300 detik, policy `allkeys-lru` (maxmemory 128MB).
+- Endpoint `/health` menampilkan `session_backend: "redis"` atau `"memory"` dan `active_sessions` count.
+
+### Slideshow rendering
+
+Saat `key` merujuk ke session type `slideshow`:
+1. Download semua gambar + audio dari CDN TikTok
+2. Render via `ffmpeg`:
+   - Setiap gambar ditampilkan 4 detik
+   - Scale ke 720x1280 (portrait), pad hitam
+   - 24 fps, libx264 `ultrafast` `stillimage` CRF 28
+   - Audio aac 128k (jika ada)
+3. Stream MP4 hasil ke klien dengan `Content-Disposition: attachment`
 
 ## Test
 
@@ -87,16 +141,112 @@ curl -G http://localhost:7788/download \
 ./test.sh
 ```
 
-Menguji `/health`, `/fetch`, dan `/download` untuk dua link TikTok.
+Menguji `/tiktok` (POST) dan `/tiktok/download` (GET) untuk:
+- 2 link video
+- 1 link photo/slideshow (render MP4 via ffmpeg)
 
 ## Struktur
 
 ```
 tiktok-api-dl/
-├── package.json      # dependency: @tobyg74/tiktok-api-dl @ github:almafazi/tiktok-api-dl#master
-├── .env.example      # PORT=7788, DEFAULT_VERSION=v1
+├── package.json
+├── .env.example
+├── Dockerfile
+├── docker-compose.yml    # dev & prod profile + redis service
 ├── src/
-│   ├── index.ts      # Bun.serve: CORS + routing /health /fetch /download
-│   └── tiktok.ts     # wrapper Tiktok.Downloader + helper media URL/filename
+│   ├── index.ts       # Bun.serve: CORS + routing / /health /tiktok /tiktok/download
+│   ├── tiktok.ts      # wrapper Tiktok.Downloader + wireproxy-compatible JSON + key generation
+│   ├── session.ts     # session store: Redis backend + in-memory fallback (TTL 5 menit)
+│   └── slideshow.ts   # ffmpeg slideshow rendering (photo post → MP4)
 └── test.sh
+```
+
+## Environment Variables
+
+| Var | Default | Keterangan |
+|---|---|---|
+| `PORT` | `7788` | Port server |
+| `DEFAULT_VERSION` | `v1` | Default downloader version (`v1`/`v2`/`v3`) |
+| `TIKTOK_API_KEY` | (kosong) | Jika di-set, endpoint `/tiktok` butuh header `X-API-Key` |
+| `FFMPEG_PATH` | `ffmpeg` | Path ke binary ffmpeg |
+| `REDIS_URL` | (kosong) | Jika di-set, session store pakai Redis; jika kosong, pakai in-memory fallback |
+
+## Docker
+
+Dockerized dengan 2 environment: **dev** dan **prod**. Kredensial `TIKTOK_API_KEY` disamakan dengan `yt-dlp-wireproxy`.
+
+### File env
+
+| File | Environment | `TIKTOK_API_KEY` |
+|---|---|---|
+| `.env` | dev | `test` (sama dengan wireproxy `.env`) |
+| `.env.prod` | prod | `aluzsMZWWlr7sqomlf20BAUmbfZCJb` (sama dengan wireproxy `.env.example`) |
+
+### Development (hot-reload)
+
+```bash
+# Build & start dev container (watch mode, source di-mount sebagai volume)
+docker compose --profile dev up --build
+
+# Atau detached
+docker compose --profile dev up -d --build
+
+# Lihat logs
+docker compose logs -f tiktok-api-dev
+
+# Stop
+docker compose --profile dev down
+```
+
+Dev container:
+- Build target `development` dari Dockerfile
+- Source `./src` di-mount read-only → hot reload tanpa rebuild
+- Port `7788` di-expose
+- `TIKTOK_API_KEY=test` (dari `.env`)
+
+### Production
+
+```bash
+# Build & start prod container
+docker compose --profile prod up -d --build
+
+# Lihat logs
+docker compose logs -f tiktok-api-prod
+
+# Stop
+docker compose --profile prod down
+```
+
+Prod container:
+- Build target `production` dari Dockerfile
+- Image `tiktok-api-dl:prod` (self-contained, tidak ada volume mount)
+- Port `7788` di-expose
+- `TIKTOK_API_KEY=aluzsMZWWlr7sqomlf20BAUmbfZCJb` (dari `.env.prod`)
+- Health check via `curl /health` setiap 30 detik
+
+### Test di dalam Docker
+
+```bash
+# Setelah container running (dev atau prod), test dari host:
+curl http://localhost:7788/health
+
+# POST /tiktok (dev: pakai API key "test")
+curl -X POST http://localhost:7788/tiktok \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: test" \
+  -d '{"url":"https://www.tiktok.com/@arctic.motion/video/7644267480856136991"}'
+
+# POST /tiktok (prod: pakai API key dari .env.prod)
+curl -X POST http://localhost:7788/tiktok \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: aluzsMZWWlr7sqomlf20BAUmbfZCJb" \
+  -d '{"url":"https://www.tiktok.com/@arctic.motion/video/7644267480856136991"}'
+```
+
+### Dockerfile stages
+
+```
+base         → oven/bun:1.2-debian + ffmpeg + production deps + src
+├── development  → bun --watch (hot reload, all deps, volume mount)
+└── production   → bun run src/index.ts (self-contained)
 ```

@@ -1,0 +1,71 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: tiktok-api-dl-redis
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - tiktok-api-dl-net
+
+  # ===== Development (hot-reload) =====
+  tiktok-api-dev:
+    build:
+      context: .
+      target: development
+    image: tiktok-api-dl:dev
+    container_name: tiktok-api-dl-dev
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "7788:7788"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=development
+      - REDIS_URL=redis://redis:6379/0
+    volumes:
+      - ./src:/app/src:ro
+      - ./package.json:/app/package.json:ro
+    restart: unless-stopped
+    profiles:
+      - dev
+    networks:
+      - tiktok-api-dl-net
+
+  # ===== Production =====
+  tiktok-api-prod:
+    build:
+      context: .
+      target: production
+    image: tiktok-api-dl:prod
+    container_name: tiktok-api-dl-prod
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${PORT:-7788}:7788"
+    env_file:
+      - .env.prod
+    environment:
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379/0
+    restart: unless-stopped
+    profiles:
+      - prod
+    networks:
+      - tiktok-api-dl-net
+
+networks:
+  tiktok-api-dl-net:
+    driver: bridge
+
+volumes:
+  redis-data:

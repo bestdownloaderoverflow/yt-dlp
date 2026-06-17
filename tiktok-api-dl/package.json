@@ -17,6 +17,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@tobyg74/tiktok-api-dl": "github:almafazi/tiktok-api-dl#master"
+    "@tobyg74/tiktok-api-dl": "github:almafazi/tiktok-api-dl#master",
+    "ioredis": "^5.11.1"
   }
 }

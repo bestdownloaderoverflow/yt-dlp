@@ -1,34 +1,83 @@
 import Tiktok from "@tobyg74/tiktok-api-dl";
+import { createSession } from "./session.ts";
 
 export type DownloaderVersion = "v1" | "v2" | "v3";
-export type MediaType = "video" | "image" | "music";
 
-export interface FetchResult {
-  status: "success";
-  version: DownloaderVersion;
-  type: "video" | "image";
-  id: string;
-  description: string;
-  author: {
-    username: string;
-    nickname: string;
-    avatar: string;
-  };
-  statistics?: Record<string, number>;
-  cover?: string;
-  duration?: number;
-  download: {
-    video: { url: string; quality?: string }[];
-    images: string[];
-    music: { url: string; title?: string; author?: string }[];
-  };
-  raw: any;
-}
-
-export interface FetchOptions {
+export interface ExtractOptions {
   version?: DownloaderVersion;
   proxy?: string;
+  impersonate?: string;
 }
+
+export interface AuthorInfo {
+  nickname: string;
+  uniqueId: string;
+  signature: string;
+  avatar: string;
+  avatarThumb: string;
+  avatarMedium: string;
+  avatarLarger: string;
+}
+
+export interface StatisticsInfo {
+  play_count: number;
+  digg_count: number;
+  comment_count: number;
+  share_count: number;
+}
+
+export interface PhotoItem {
+  type: "photo";
+  url: string;
+  download_link: string;
+}
+
+export interface TikTokVideoResponse {
+  status: "tunnel";
+  extract_source: string | null;
+  title: string;
+  description: string;
+  statistics: StatisticsInfo;
+  artist: string;
+  cover: string;
+  duration: number;
+  audio: string | null;
+  download_link: {
+    watermark?: string;
+    no_watermark?: string;
+    no_watermark_hd?: string;
+    mp3?: string;
+  };
+  music_duration: number;
+  author: AuthorInfo;
+}
+
+export interface TikTokPhotoResponse {
+  status: "picker";
+  extract_source: string | null;
+  title: string;
+  description: string;
+  statistics: StatisticsInfo;
+  artist: string;
+  cover: string;
+  duration: number;
+  audio: string | null;
+  download_link: {
+    no_watermark: string[];
+    mp3?: string;
+  };
+  photos: PhotoItem[];
+  download_slideshow: string;
+  author: AuthorInfo;
+}
+
+export type TikTokResponse = TikTokVideoResponse | TikTokPhotoResponse;
+
+const EXTRACT_SOURCE_BY_VERSION: Record<DownloaderVersion, string> = {
+  v1: "web",
+  v2: "ssstik",
+  v3: "musicaldown",
+};
 
 function firstUrl(value: any): string {
   if (!value) return "";
@@ -41,10 +90,45 @@ function firstUrl(value: any): string {
   return "";
 }
 
-export async function fetchPost(
+function num(value: any): number {
+  if (typeof value === "number" && isFinite(value)) return value;
+  return 0;
+}
+
+function buildAuthor(r: any): AuthorInfo {
+  const nickname = r?.author?.nickname || r?.author?.username || "unknown";
+  const uniqueId = r?.author?.username || r?.author?.nickname || "unknown";
+  const signature = r?.author?.signature || "";
+  const avatar =
+    firstUrl(r?.author?.avatarThumb) ||
+    firstUrl(r?.author?.avatarMedium) ||
+    r?.author?.avatar ||
+    "";
+  return {
+    nickname,
+    uniqueId,
+    signature,
+    avatar,
+    avatarThumb: avatar,
+    avatarMedium: avatar,
+    avatarLarger: avatar,
+  };
+}
+
+function buildStatistics(r: any): StatisticsInfo {
+  const s = r?.statistics || {};
+  return {
+    play_count: num(s.playCount),
+    digg_count: num(s.likeCount),
+    comment_count: num(s.commentCount),
+    share_count: num(s.shareCount),
+  };
+}
+
+export async function extractPost(
   url: string,
-  options: FetchOptions = {}
-): Promise<FetchResult> {
+  options: ExtractOptions = {}
+): Promise<TikTokResponse> {
   const version = options.version || "v1";
 
   const response: any = await (Tiktok as any).Downloader(url, {
@@ -59,112 +143,166 @@ export async function fetchPost(
   const r = response.result;
   if (!r) throw new Error("No result returned from downloader");
 
-  const download = {
-    video: [] as { url: string; quality?: string }[],
-    images: [] as string[],
-    music: [] as { url: string; title?: string; author?: string }[],
-  };
+  const author = buildAuthor(r);
+  const statistics = buildStatistics(r);
+  const durationMs = r?.video?.duration ? num(r.video.duration) : 0;
+  const cover = firstUrl(r?.cover) || firstUrl(r?.video?.cover) || "";
+  const title = r?.desc || r?.title || "";
+  const description = r?.desc || "";
+  const audioUrl = firstUrl(r?.music?.playUrl) || r?.music?.playUrl || null;
+  const safeAuthor = sanitizeFilenamePart(author.nickname, "tiktok");
 
-  // v1 (TiktokAPIResponse)
-  if (version === "v1") {
-    const playAddr = firstUrl(r?.video?.playAddr) || firstUrl(r?.video?.downloadAddr);
-    if (playAddr) download.video.push({ url: playAddr });
-    if (Array.isArray(r?.images)) download.images = r.images.filter(Boolean);
-    const musicUrl = firstUrl(r?.music?.playUrl);
-    if (musicUrl) {
-      download.music.push({
-        url: musicUrl,
-        title: r?.music?.title,
-        author: r?.music?.author,
+  const isPhoto = r.type === "image" || (Array.isArray(r?.images) && r.images.length > 0);
+
+  if (isPhoto) {
+    // Photo / slideshow
+    const imageUrls: string[] = Array.isArray(r?.images) ? r.images.filter(Boolean) : [];
+    const photoKeys: string[] = [];
+    const photos: PhotoItem[] = [];
+
+    for (let i = 0; i < imageUrls.length; i++) {
+      const key = await createSession({
+        url,
+        type: "photo",
+        photo_index: i + 1,
+        direct_url: imageUrls[i],
+        http_headers: {},
+        author: safeAuthor,
+        platform: "tiktok",
+        proxy: options.proxy,
+        impersonate: options.impersonate,
+        duration: durationMs,
       });
+      const link = `/tiktok/download?key=${key}`;
+      photoKeys.push(link);
+      photos.push({ type: "photo", url: imageUrls[i], download_link: link });
     }
+
+    const links: TikTokPhotoResponse["download_link"] = {
+      no_watermark: photoKeys,
+    };
+
+    if (audioUrl) {
+      const mp3Key = await createSession({
+        url,
+        type: "mp3",
+        direct_url: audioUrl,
+        http_headers: {},
+        author: safeAuthor,
+        platform: "tiktok",
+        proxy: options.proxy,
+        impersonate: options.impersonate,
+        duration: durationMs,
+      });
+      links.mp3 = `/tiktok/download?key=${mp3Key}`;
+    }
+
+    const slideshowKey = await createSession({
+      url,
+      type: "slideshow",
+      photo_urls: imageUrls,
+      audio_url: audioUrl || undefined,
+      author: safeAuthor,
+      platform: "tiktok",
+      proxy: options.proxy,
+      impersonate: options.impersonate,
+      duration: durationMs || imageUrls.length * 4,
+    });
+    const slideshowLink = `/tiktok/download?key=${slideshowKey}`;
+
+    return {
+      status: "picker",
+      extract_source: EXTRACT_SOURCE_BY_VERSION[version],
+      title,
+      description,
+      statistics,
+      artist: author.nickname,
+      cover,
+      duration: durationMs,
+      audio: audioUrl,
+      download_link: links,
+      photos,
+      download_slideshow: slideshowLink,
+      author,
+    };
   }
-  // v2 (SSSTikResponse)
-  else if (version === "v2") {
+
+  // Video post
+  const links: TikTokVideoResponse["download_link"] = {};
+
+  // Build candidate video URLs (v1 has playAddr/downloadAddr; v3 has videoHD/videoWatermark)
+  const candidates: { url: string; quality: "watermark" | "no_watermark" | "no_watermark_hd" }[] = [];
+
+  if (version === "v1") {
+    const playAddr = firstUrl(r?.video?.playAddr);
+    const downloadAddr = firstUrl(r?.video?.downloadAddr);
+    if (playAddr) candidates.push({ url: playAddr, quality: "no_watermark_hd" });
+    if (downloadAddr) candidates.push({ url: downloadAddr, quality: "watermark" });
+  } else if (version === "v2") {
     const v = r?.video?.playAddr || r?.direct;
-    if (v) download.video.push({ url: v });
-    if (Array.isArray(r?.images)) download.images = r.images.filter(Boolean);
-    const m = r?.music?.playUrl;
-    if (m) download.music.push({ url: m });
+    if (v) candidates.push({ url: v, quality: "no_watermark" });
+  } else if (version === "v3") {
+    if (r?.videoHD) candidates.push({ url: r.videoHD, quality: "no_watermark_hd" });
+    if (r?.videoWatermark) candidates.push({ url: r.videoWatermark, quality: "watermark" });
   }
-  // v3 (MusicalDownResponse)
-  else if (version === "v3") {
-    if (r?.videoHD) download.video.push({ url: r.videoHD, quality: "HD" });
-    if (r?.videoWatermark) download.video.push({ url: r.videoWatermark, quality: "watermark" });
-    if (Array.isArray(r?.images)) download.images = r.images.filter(Boolean);
-    if (r?.music) download.music.push({ url: r.music });
+
+  // Deduplicate by quality (first wins)
+  const seen = new Set<string>();
+  for (const c of candidates) {
+    if (seen.has(c.quality)) continue;
+    seen.add(c.quality);
+    const key = await createSession({
+      url,
+      type: "video",
+      quality: c.quality,
+      direct_url: c.url,
+      http_headers: {},
+      author: safeAuthor,
+      platform: "tiktok",
+      proxy: options.proxy,
+      impersonate: options.impersonate,
+      duration: durationMs,
+    });
+    links[c.quality] = `/tiktok/download?key=${key}`;
+  }
+
+  if (audioUrl) {
+    const mp3Key = await createSession({
+      url,
+      type: "mp3",
+      direct_url: audioUrl,
+      http_headers: {},
+      author: safeAuthor,
+      platform: "tiktok",
+      proxy: options.proxy,
+      impersonate: options.impersonate,
+      duration: durationMs,
+    });
+    links.mp3 = `/tiktok/download?key=${mp3Key}`;
   }
 
   return {
-    status: "success",
-    version,
-    type: r.type === "image" ? "image" : "video",
-    id: r.id || "",
-    description: r.desc || "",
-    author: {
-      username:
-        r?.author?.username ||
-        r?.author?.nickname ||
-        "",
-      nickname: r?.author?.nickname || r?.author?.nickname || "",
-      avatar: firstUrl(r?.author?.avatarThumb) || r?.author?.avatar || "",
-    },
-    statistics: r?.statistics,
-    cover: firstUrl(r?.cover) || firstUrl(r?.video?.cover),
-    duration: r?.video?.duration,
-    download,
-    raw: r,
+    status: "tunnel",
+    extract_source: EXTRACT_SOURCE_BY_VERSION[version],
+    title,
+    description,
+    statistics,
+    artist: author.nickname,
+    cover,
+    duration: durationMs,
+    audio: audioUrl,
+    download_link: links,
+    music_duration: durationMs,
+    author,
   };
 }
 
-export interface DownloadTarget {
-  url: string;
-  filename: string;
-  contentType: string;
-}
-
-const EXT_BY_TYPE: Record<MediaType, string> = {
-  video: "mp4",
-  image: "jpg",
-  music: "mp3",
-};
-
-const CT_BY_TYPE: Record<MediaType, string> = {
-  video: "video/mp4",
-  image: "image/jpeg",
-  music: "audio/mpeg",
-};
-
-export async function resolveDownload(
-  url: string,
-  type: MediaType,
-  index = 0,
-  version: DownloaderVersion = "v1"
-): Promise<DownloadTarget> {
-  const post = await fetchPost(url, { version });
-
-  let mediaUrl = "";
-  if (type === "video") {
-    mediaUrl = post.download.video[0]?.url || "";
-  } else if (type === "image") {
-    mediaUrl = post.download.images[index] || post.download.images[0] || "";
-  } else if (type === "music") {
-    mediaUrl = post.download.music[0]?.url || "";
-  }
-
-  if (!mediaUrl) {
-    throw new Error(
-      `No ${type} media available for this post (type=${post.type}, videos=${post.download.video.length}, images=${post.download.images.length}, music=${post.download.music.length})`
-    );
-  }
-
-  const base = post.author.username || post.id || "tiktok";
-  const suffix = type === "image" && post.download.images.length > 1 ? `_${index + 1}` : "";
-  const filename = `${base}_${post.id}_${type}${suffix}.${EXT_BY_TYPE[type]}`;
-
-  return { url: mediaUrl, filename, contentType: CT_BY_TYPE[type] };
-}
-
 export function isTiktokUrl(url: string): boolean {
-  return /tiktok\.com|douyin\.com|vt\.tiktok/.test(url);
+  return /tiktok\.com|douyin\.com|vt\.tiktok|vm\.tiktok/.test(url);
+}
+
+export function sanitizeFilenamePart(value: string | undefined | null, fallback: string): string {
+  if (!value) return fallback;
+  const cleaned = value.replace(/[^a-zA-Z0-9]/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+  return cleaned || fallback;
 }

@@ -3,7 +3,7 @@ import Redis from "ioredis";
 import type { ExtractOptions } from "./tiktok.ts";
 
 const REDIS_URL = process.env.REDIS_URL || "";
-const EXTRACT_CACHE_TTL = Number(process.env.TIKTOK_EXTRACT_CACHE_TTL_SECONDS || "90");
+const EXTRACT_CACHE_TTL = Number(process.env.TIKTOK_EXTRACT_CACHE_TTL_SECONDS || "1800");
 
 const LOCK_TTL_SECONDS = 35;
 const STAMPEDE_WAIT_MS = 8000;

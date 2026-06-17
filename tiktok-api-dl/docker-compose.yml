@@ -31,7 +31,7 @@ services:
     environment:
       - NODE_ENV=development
       - REDIS_URL=redis://redis:6379/0
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=90
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
     volumes:
       - ./src:/app/src:ro
       - ./package.json:/app/package.json:ro
@@ -58,7 +58,7 @@ services:
     environment:
       - NODE_ENV=production
       - REDIS_URL=redis://redis:6379/0
-      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=90
+      - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
     restart: unless-stopped
     profiles:
       - prod

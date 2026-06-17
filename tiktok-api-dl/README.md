@@ -130,7 +130,7 @@ Hasil ekstraksi upstream `Tiktok.Downloader()` di-**cache** (Redis jika `REDIS_U
 
 - **Yang di-cache:** raw extraction result (metadata + CDN URL), **bukan** response final. Download links (`/tiktok/download?key=...`) tetap dibuat fresh per request → session baru setiap kali.
 - **Cache key:** `SHA-256(url|proxy|impersonate|version)`, prefix Redis `exinfo:`.
-- **TTL:** `TIKTOK_EXTRACT_CACHE_TTL_SECONDS` (default **90 detik** — menyamai expiry CDN URL TikTok). Bump ke 300 untuk parity dengan wireproxy prod, dengan risiko CDN URL sudah expired pada cache hit tua → download 403 (client re-extract).
+- **TTL:** `TIKTOK_EXTRACT_CACHE_TTL_SECONDS` (default **1800 detik / 30 menit** — CDN URL TikTok berlaku ~6 jam, 30 menit batas aman menghindari stale URL & statistik terlalu tua).
 - **Stampede protection:** Redis `SET NX` lock (TTL 35s); request concurrent ke URL sama menunggu hingga 8 detik lalu fallback ke ekstraksi sendiri.
 - **Graceful degradation:** jika Redis down, otomatis fall-through ke ekstraksi langsung tanpa cache.
 - Endpoint `/health` menampilkan `extract_cache_backend` (`redis`/`memory`) dan `extract_cache_ttl_seconds`.
@@ -182,7 +182,7 @@ tiktok-api-dl/
 | `TIKTOK_API_KEY` | (kosong) | Jika di-set, endpoint `/tiktok` butuh header `X-API-Key` |
 | `FFMPEG_PATH` | `ffmpeg` | Path ke binary ffmpeg |
 | `REDIS_URL` | (kosong) | Jika di-set, session store & extraction cache pakai Redis; jika kosong, pakai in-memory fallback |
-| `TIKTOK_EXTRACT_CACHE_TTL_SECONDS` | `90` | TTL cache hasil ekstraksi `/tiktok` (detik) |
+| `TIKTOK_EXTRACT_CACHE_TTL_SECONDS` | `1800` | TTL cache hasil ekstraksi `/tiktok` (detik, 30 menit) |
 
 ## Docker
 

@@ -25,6 +25,21 @@ const CDN_HEADERS: Record<string, string> = {
   Referer: "https://www.tiktok.com/",
 };
 
+// session.duration is stored in milliseconds (see tiktok.ts durationMs)
+function estimateVideoSize(durationMs?: number): number {
+  const seconds = (durationMs || 0) / 1000;
+  if (seconds <= 0) return -1;
+  // ~2MB/min for 720p, mirrors estimate_video_size() in yt-dlp-wireproxy
+  return Math.round((seconds * 2 * 1024 * 1024) / 60);
+}
+
+function estimateMp3Size(durationMs?: number, bitrateKbps = 192): number {
+  const seconds = (durationMs || 0) / 1000;
+  if (seconds <= 0) return -1;
+  // (bitrate*1000*duration)/8 + 10% margin, mirrors estimate_mp3_size()
+  return Math.round(((bitrateKbps * 1000 * seconds) / 8) * 1.1);
+}
+
 function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
@@ -212,7 +227,17 @@ async function streamDirect(
   respHeaders.set("Content-Disposition", buildContentDisposition(filename, download));
   respHeaders.set("X-Accel-Buffering", "no");
   const cl = upstream.headers.get("content-length");
-  if (cl) respHeaders.set("Content-Length", cl);
+  if (cl) {
+    respHeaders.set("Content-Length", cl);
+  } else if (session.filesize && session.filesize > 0) {
+    respHeaders.set("Content-Length", String(session.filesize));
+  } else if (contentType === "video/mp4") {
+    const est = estimateVideoSize(session.duration);
+    if (est > 0) respHeaders.set("Estimated-Content-Length", String(est));
+  } else if (contentType === "audio/mpeg") {
+    const est = estimateMp3Size(session.duration);
+    if (est > 0) respHeaders.set("Estimated-Content-Length", String(est));
+  }
   const cr = upstream.headers.get("content-range");
   if (cr) respHeaders.set("Content-Range", cr);
   for (const [k, v] of Object.entries(CORS_HEADERS)) respHeaders.set(k, v);

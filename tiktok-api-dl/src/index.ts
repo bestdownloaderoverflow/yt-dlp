@@ -1,3 +1,6 @@
+import * as http from "node:http";
+import { Readable } from "node:stream";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import {
   extractPost,
   isTiktokUrl,
@@ -25,41 +28,36 @@ const CDN_HEADERS: Record<string, string> = {
   Referer: "https://www.tiktok.com/",
 };
 
-// session.duration is stored in milliseconds (see tiktok.ts durationMs)
-function estimateVideoSize(durationMs?: number): number {
-  const seconds = (durationMs || 0) / 1000;
-  if (seconds <= 0) return -1;
-  // ~2MB/min for 720p, mirrors estimate_video_size() in yt-dlp-wireproxy
-  return Math.round((seconds * 2 * 1024 * 1024) / 60);
-}
-
-function estimateMp3Size(durationMs?: number, bitrateKbps = 192): number {
-  const seconds = (durationMs || 0) / 1000;
-  if (seconds <= 0) return -1;
-  // (bitrate*1000*duration)/8 + 10% margin, mirrors estimate_mp3_size()
-  return Math.round(((bitrateKbps * 1000 * seconds) / 8) * 1.1);
-}
-
-function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json; charset=utf-8", ...CORS_HEADERS, ...extraHeaders },
+function sendJson(res: ServerResponse, body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
+  const payload = Buffer.from(JSON.stringify(body));
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Content-Length": String(payload.byteLength),
+    ...CORS_HEADERS,
+    ...extraHeaders,
   });
+  res.end(payload);
 }
 
-function errorJson(message: string, status = 500, code?: string) {
+function sendErrorJson(res: ServerResponse, message: string, status = 500, code?: string) {
   const body: Record<string, string> = { error: message };
   if (code) body.code = code;
-  return json(body, status);
+  sendJson(res, body, status);
 }
 
-function parseQuery(request: Request): URLSearchParams {
-  return new URL(request.url).searchParams;
+function parseQuery(req: IncomingMessage): URLSearchParams {
+  return new URL(req.url || "/", "http://localhost").searchParams;
 }
 
-async function readBody(request: Request): Promise<any> {
+async function readBody(req: IncomingMessage): Promise<any> {
   try {
-    return await request.json();
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(chunk as Buffer);
+    }
+    const raw = Buffer.concat(chunks).toString("utf8");
+    if (!raw) return {};
+    return JSON.parse(raw);
   } catch {
     return {};
   }
@@ -78,12 +76,11 @@ function parseBool(value: string | null | undefined, fallback: boolean): boolean
   return fallback;
 }
 
-function authorize(request: Request): boolean {
+function authorize(req: IncomingMessage): boolean {
   if (!TIKTOK_API_KEY) return true;
-  let key = request.headers.get("X-API-Key");
-  if (!key) {
-    key = parseQuery(request).get("api_key");
-  }
+  let key = req.headers["x-api-key"];
+  if (Array.isArray(key)) key = key[0];
+  if (!key) key = parseQuery(req).get("api_key") || undefined;
   return key === TIKTOK_API_KEY;
 }
 
@@ -100,8 +97,8 @@ function buildContentDisposition(filename: string, download: boolean): string {
 
 // ---------- Handlers ----------
 
-function handleRoot(): Response {
-  return json({
+function handleRoot(res: ServerResponse): void {
+  sendJson(res, {
     service: "tiktok-api-dl-server",
     status: "ok",
     transport: "bun + tiktok-api-dl",
@@ -109,9 +106,9 @@ function handleRoot(): Response {
   });
 }
 
-async function handleHealth(): Promise<Response> {
+async function handleHealth(res: ServerResponse): Promise<void> {
   const sessions = await activeSessionCount();
-  return json({
+  sendJson(res, {
     status: "ok",
     time: new Date().toISOString(),
     version: DEFAULT_VERSION,
@@ -123,18 +120,18 @@ async function handleHealth(): Promise<Response> {
   });
 }
 
-async function handleTikTok(request: Request): Promise<Response> {
-  if (request.method !== "POST") {
-    return errorJson("Method not allowed", 405);
+async function handleTikTok(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== "POST") {
+    return sendErrorJson(res, "Method not allowed", 405);
   }
-  if (!authorize(request)) {
-    return errorJson("Invalid or missing API Key", 401, "unauthorized");
+  if (!authorize(req)) {
+    return sendErrorJson(res, "Invalid or missing API Key", 401, "unauthorized");
   }
 
-  const body = await readBody(request);
+  const body = await readBody(req);
   const url = (body?.url || "").trim();
-  if (!url) return errorJson("URL is required", 400, "bad_request");
-  if (!isTiktokUrl(url)) return errorJson("Only TikTok/Douyin URLs are supported", 400, "bad_request");
+  if (!url) return sendErrorJson(res, "URL is required", 400, "bad_request");
+  if (!isTiktokUrl(url)) return sendErrorJson(res, "Only TikTok/Douyin URLs are supported", 400, "bad_request");
 
   const version = getVersion(body?.version);
   const proxy = body?.proxy ? String(body.proxy).trim() : undefined;
@@ -142,118 +139,144 @@ async function handleTikTok(request: Request): Promise<Response> {
 
   try {
     const result = await extractPost(url, { version, proxy, impersonate });
-    return json(result);
+    sendJson(res, result);
   } catch (err: any) {
     const msg = err?.message || "Failed to extract TikTok post";
     if (/Unsupported URL|not found|Unable to|Could not extract/i.test(msg)) {
-      return errorJson(msg, 400, "not_found");
+      return sendErrorJson(res, msg, 400, "not_found");
     }
     if (/blocked|private|restricted|403|captcha|verify/i.test(msg)) {
-      return errorJson(msg, 403, "ip_blocked");
+      return sendErrorJson(res, msg, 403, "ip_blocked");
     }
-    return errorJson(msg, 500, "internal_error");
+    sendErrorJson(res, msg, 500, "internal_error");
   }
 }
 
-async function handleTikTokDownload(request: Request): Promise<Response> {
-  if (request.method !== "GET") {
-    return errorJson("Method not allowed", 405);
+async function handleTikTokDownload(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (req.method !== "GET") {
+    return sendErrorJson(res, "Method not allowed", 405);
   }
 
-  const q = parseQuery(request);
+  const q = parseQuery(req);
   const key = (q.get("key") || "").trim();
-  if (!key) return errorJson("Missing key query parameter", 400, "bad_request");
+  if (!key) return sendErrorJson(res, "Missing key query parameter", 400, "bad_request");
 
   const download = parseBool(q.get("download"), true);
 
   const session = await getSession(key);
   if (!session) {
-    return errorJson("Download link expired or invalid", 404, "not_found");
+    return sendErrorJson(res, "Download link expired or invalid", 404, "not_found");
   }
 
   const author = sanitizeFilenamePart(session.author, "tiktok");
 
   try {
     if (session.type === "slideshow") {
-      return await streamSlideshow(session, author, download);
+      return await streamSlideshow(res, session, author, download);
     }
     if (session.type === "video") {
       const quality = session.quality || "video";
       const filename = `${author}_${quality}.mp4`;
-      return await streamDirect(session, filename, "video/mp4", download);
+      return await streamDirect(res, session, filename, "video/mp4", download);
     }
     if (session.type === "photo") {
       const idx = session.photo_index || 1;
       const filename = `${author}_photo_${idx}.jpg`;
-      return await streamDirect(session, filename, "image/jpeg", download);
+      return await streamDirect(res, session, filename, "image/jpeg", download);
     }
     if (session.type === "mp3") {
       const filename = `${author}.mp3`;
-      return await streamDirect(session, filename, "audio/mpeg", download);
+      return await streamDirect(res, session, filename, "audio/mpeg", download);
     }
-    return errorJson(`Unknown content type: ${session.type}`, 400, "bad_request");
+    sendErrorJson(res, `Unknown content type: ${session.type}`, 400, "bad_request");
   } catch (err: any) {
+    if (res.headersSent) {
+      res.destroy(err instanceof Error ? err : new Error(String(err)));
+      return;
+    }
     if (err instanceof SlideshowError) {
-      return errorJson(err.message, err.status, "slideshow_error");
+      return sendErrorJson(res, err.message, err.status, "slideshow_error");
     }
     const msg = err?.message || "Failed to stream media";
-    return errorJson(msg, 502, "upstream_error");
+    sendErrorJson(res, msg, 502, "upstream_error");
   }
 }
 
 async function streamDirect(
+  res: ServerResponse,
   session: SessionData,
   filename: string,
   contentType: string,
   download: boolean
-): Promise<Response> {
+): Promise<void> {
   const directUrl = session.direct_url;
-  if (!directUrl) return errorJson("No media URL available in session", 400, "bad_request");
+  if (!directUrl) return sendErrorJson(res, "No media URL available in session", 400, "bad_request");
 
   const headers: Record<string, string> = { ...CDN_HEADERS, ...(session.http_headers || {}) };
   if (session.cookies) headers["Cookie"] = session.cookies;
 
-  const upstream = await fetch(directUrl, {
-    headers,
-    redirect: "follow",
+  const controller = new AbortController();
+  // Stop reading from upstream if the client disconnects (this also fires on
+  // normal completion, where abort()/destroy() are harmless no-ops).
+  res.on("close", () => controller.abort());
+
+  let upstream: Response;
+  try {
+    upstream = await fetch(directUrl, {
+      headers,
+      redirect: "follow",
+      signal: controller.signal,
+    });
+  } catch (err: any) {
+    if (controller.signal.aborted) return; // client already gone
+    return sendErrorJson(res, err?.message || "Failed to reach upstream CDN", 502, "upstream_error");
+  }
+
+  if (!upstream.ok) {
+    return sendErrorJson(res, `Upstream CDN returned ${upstream.status}`, 502, "upstream_error");
+  }
+  if (!upstream.body) {
+    return sendErrorJson(res, "Upstream CDN returned an empty body", 502, "upstream_error");
+  }
+
+  const respHeaders: Record<string, string> = {
+    "Content-Type": contentType,
+    "Content-Disposition": buildContentDisposition(filename, download),
+    ...CORS_HEADERS,
+  };
+  // node:http (unlike Bun.serve's Web Response) honors a manually-set
+  // Content-Length while still truly streaming the body, so we can forward
+  // the upstream CDN's real content-length instead of buffering.
+  const upstreamLength = upstream.headers.get("content-length");
+  if (upstreamLength) respHeaders["Content-Length"] = upstreamLength;
+
+  res.writeHead(200, respHeaders);
+
+  const nodeStream = Readable.fromWeb(upstream.body as any);
+  nodeStream.on("error", (err) => {
+    // Headers (and possibly some bytes) are already sent; the only safe
+    // recovery is to abort the connection so the client sees a failed
+    // download instead of a silently truncated "successful" one.
+    console.error("Upstream stream error while piping:", err);
+    res.destroy(err instanceof Error ? err : new Error(String(err)));
+  });
+  res.on("close", () => {
+    if (!nodeStream.destroyed) nodeStream.destroy();
   });
 
-  if (!upstream.ok && upstream.status !== 206) {
-    return errorJson(`Upstream CDN returned ${upstream.status}`, 502, "upstream_error");
-  }
-
-  const respHeaders = new Headers();
-  respHeaders.set("Content-Type", contentType);
-  respHeaders.set("Content-Disposition", buildContentDisposition(filename, download));
-  respHeaders.set("X-Accel-Buffering", "no");
-  const cl = upstream.headers.get("content-length");
-  if (cl) {
-    respHeaders.set("Content-Length", cl);
-  } else if (session.filesize && session.filesize > 0) {
-    respHeaders.set("Content-Length", String(session.filesize));
-  } else if (contentType === "video/mp4") {
-    const est = estimateVideoSize(session.duration);
-    if (est > 0) respHeaders.set("Estimated-Content-Length", String(est));
-  } else if (contentType === "audio/mpeg") {
-    const est = estimateMp3Size(session.duration);
-    if (est > 0) respHeaders.set("Estimated-Content-Length", String(est));
-  }
-  const cr = upstream.headers.get("content-range");
-  if (cr) respHeaders.set("Content-Range", cr);
-  for (const [k, v] of Object.entries(CORS_HEADERS)) respHeaders.set(k, v);
-
-  return new Response(upstream.body, { status: upstream.status, headers: respHeaders });
+  nodeStream.pipe(res);
 }
 
 async function streamSlideshow(
+  res: ServerResponse,
   session: SessionData,
   author: string,
   download: boolean
-): Promise<Response> {
+): Promise<void> {
   const photoUrls = session.photo_urls || [];
   const audioUrl = session.audio_url;
   if (photoUrls.length === 0) {
-    return errorJson("No photos available for slideshow", 400, "bad_request");
+    return sendErrorJson(res, "No photos available for slideshow", 400, "bad_request");
   }
 
   const { outputPath, tempDir } = await renderSlideshow(photoUrls, audioUrl, {
@@ -265,66 +288,65 @@ async function streamSlideshow(
   cleanupTemp(tempDir);
 
   const filename = `${author}_slideshow.mp4`;
-  const headers = new Headers({
+  res.writeHead(200, {
     "Content-Type": "video/mp4",
     "Content-Disposition": buildContentDisposition(filename, download),
     "Content-Length": String(buf.byteLength),
     "X-Accel-Buffering": "no",
     ...CORS_HEADERS,
   });
-
-  return new Response(buf, { status: 200, headers });
+  res.end(buf);
 }
 
 // ---------- Server ----------
 
-const server = Bun.serve({
-  port: PORT,
-  async fetch(request) {
-    const { pathname } = new URL(request.url);
-    const method = request.method;
+const server = http.createServer(async (req, res) => {
+  const { pathname } = new URL(req.url || "/", "http://localhost");
+  const method = req.method || "GET";
 
-    if (method === "OPTIONS") {
-      return new Response(null, { status: 204, headers: CORS_HEADERS });
-    }
+  if (method === "OPTIONS") {
+    res.writeHead(204, CORS_HEADERS);
+    res.end();
+    return;
+  }
 
-    try {
-      if (pathname === "/") return handleRoot();
-      if (pathname === "/health") return await handleHealth();
-      if (pathname === "/tiktok") return await handleTikTok(request);
-      if (pathname === "/tiktok/download") return await handleTikTokDownload(request);
-      return errorJson("Route not found", 404, "not_found");
-    } catch (err: any) {
-      console.error("Unhandled error:", err);
-      return errorJson(err?.message || "Unexpected server error", 500, "internal_error");
+  try {
+    if (pathname === "/") return handleRoot(res);
+    if (pathname === "/health") return await handleHealth(res);
+    if (pathname === "/tiktok") return await handleTikTok(req, res);
+    if (pathname === "/tiktok/download") return await handleTikTokDownload(req, res);
+    return sendErrorJson(res, "Route not found", 404, "not_found");
+  } catch (err: any) {
+    console.error("Unhandled error:", err);
+    if (!res.headersSent) {
+      sendErrorJson(res, err?.message || "Unexpected server error", 500, "internal_error");
+    } else {
+      res.destroy(err instanceof Error ? err : new Error(String(err)));
     }
-  },
+  }
 });
 
-console.log(`tiktok-api-dl-server listening on http://localhost:${server.port}`);
-console.log(`Default downloader version: ${DEFAULT_VERSION}`);
-console.log(`FFmpeg path: ${FFMPEG_PATH}`);
-if (process.env.REDIS_URL) {
-  console.log(`Redis URL: ${process.env.REDIS_URL.replace(/:[^@]+@/, ":***@")}`);
-} else {
-  console.log("Redis: not configured (using in-memory session store)");
+server.listen(PORT, () => {
+  console.log(`tiktok-api-dl-server listening on http://localhost:${PORT}`);
+  console.log(`Default downloader version: ${DEFAULT_VERSION}`);
+  console.log(`FFmpeg path: ${FFMPEG_PATH}`);
+  if (process.env.REDIS_URL) {
+    console.log(`Redis URL: ${process.env.REDIS_URL.replace(/:[^@]+@/, ":***@")}`);
+  } else {
+    console.log("Redis: not configured (using in-memory session store)");
+  }
+  console.log(`Extraction cache: TTL ${extractCacheTtl()}s, backend ${isExtractCacheRedis() ? "redis" : "memory"}`);
+  console.log(`Endpoints:`);
+  console.log(`  GET  /`);
+  console.log(`  GET  /health`);
+  console.log(`  POST /tiktok            (body: {url, version?, proxy?, impersonate?})`);
+  console.log(`  GET  /tiktok/download   (query: key, download?)`);
+});
+
+async function shutdown() {
+  await closeSessionStore();
+  await closeExtractionCache();
+  server.close(() => process.exit(0));
 }
-console.log(`Extraction cache: TTL ${extractCacheTtl()}s, backend ${isExtractCacheRedis() ? "redis" : "memory"}`);
-console.log(`Endpoints:`);
-console.log(`  GET  /`);
-console.log(`  GET  /health`);
-console.log(`  POST /tiktok            (body: {url, version?, proxy?, impersonate?})`);
-console.log(`  GET  /tiktok/download   (query: key, download?)`);
-
-process.on("SIGINT", async () => {
-  await closeSessionStore();
-  await closeExtractionCache();
-  server.stop();
-  process.exit(0);
-});
-process.on("SIGTERM", async () => {
-  await closeSessionStore();
-  await closeExtractionCache();
-  server.stop();
-  process.exit(0);
-});
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

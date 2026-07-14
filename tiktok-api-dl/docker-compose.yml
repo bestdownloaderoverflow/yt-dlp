@@ -32,9 +32,13 @@ services:
       - NODE_ENV=development
       - REDIS_URL=redis://redis:6379/0
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - SLIDESHOW_MAX_CONCURRENT=1
     volumes:
       - ./src:/app/src:ro
       - ./package.json:/app/package.json:ro
+      - ./deno.json:/app/deno.json:ro
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
     profiles:
       - dev
@@ -59,6 +63,9 @@ services:
       - NODE_ENV=production
       - REDIS_URL=redis://redis:6379/0
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
+      - SLIDESHOW_MAX_CONCURRENT=1
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
     profiles:
       - prod

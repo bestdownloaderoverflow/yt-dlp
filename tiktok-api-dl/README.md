@@ -1,21 +1,22 @@
 # tiktok-api-dl-server
 
-Bun API server untuk **fetch** dan **download** post TikTok (video / image / music / **slideshow**) memakai package [`tiktok-api-dl`](https://github.com/almafazi/tiktok-api-dl) (fork `almafazi/tiktok-api-dl` @ v1.3.8).
+Deno API server untuk **fetch** dan **download** post TikTok (video / image / music / **slideshow**) memakai package [`tiktok-api-dl`](https://github.com/almafazi/tiktok-api-dl) (fork `almafazi/tiktok-api-dl` @ v1.3.8).
 
 Response JSON dan endpoint path **disamakan** dengan `yt-dlp-wireproxy` (Go gateway di port 9111).
 
 ## Requirement
 
-- [Bun](https://bun.sh) >= 1.2
+- [Deno](https://deno.com) >= 2.0
 - [ffmpeg](https://ffmpeg.org) (diperlukan untuk rendering slideshow photo post → MP4)
 
 ## Install & Run
 
 ```bash
 cd tiktok-api-dl
-bun install
+# GitHub deps require bun/npm (deno install cannot resolve github: specs)
+bun install --frozen-lockfile
 cp .env.example .env   # opsional
-bun run start          # atau: bun run dev (watch mode)
+deno task start        # atau: deno task dev (watch mode)
 ```
 
 Server berjalan di `http://localhost:7788`.
@@ -115,7 +116,7 @@ Tipe konten ditentukan oleh session type:
 - `mp3` → `audio/mpeg`, filename `{author}.mp3`
 - `slideshow` → `video/mp4` (hasil ffmpeg), filename `{author}_slideshow.mp4`
 
-Session key berlaku **5 menit** (300 detik), disimpan di **Redis** (jika `REDIS_URL` di-set) atau in-memory fallback.
+Session key berlaku **5 menit** (300 detik), disimpan di **Redis** (jika `REDIS_URL` di-set) atau in-memory fallback. Download memakai **atomic claim** (`GETDEL`/get-and-delete): hanya satu consumer yang dapat key. Jika delivery gagal sebelum media terkirim (CDN error, ffmpeg error, client abort sebelum headers), session di-**restore** dengan sisa TTL agar retry tetap bisa.
 
 ### Session store & Redis
 
@@ -138,13 +139,13 @@ Hasil ekstraksi upstream `Tiktok.Downloader()` di-**cache** (Redis jika `REDIS_U
 ### Slideshow rendering
 
 Saat `key` merujuk ke session type `slideshow`:
-1. Download semua gambar + audio dari CDN TikTok
+1. Download semua gambar + audio dari CDN TikTok (stream ke disk, bukan full buffer)
 2. Render via `ffmpeg`:
    - Setiap gambar ditampilkan 4 detik
    - Scale ke 720x1280 (portrait), pad hitam
    - 24 fps, libx264 `ultrafast` `stillimage` CRF 28
    - Audio aac 128k (jika ada)
-3. Stream MP4 hasil ke klien dengan `Content-Disposition: attachment`
+3. Stream file MP4 ke klien (`createReadStream` + `Content-Length`), lalu hapus temp dir di `finally`
 
 ## Test
 
@@ -161,11 +162,12 @@ Menguji `/tiktok` (POST) dan `/tiktok/download` (GET) untuk:
 ```
 tiktok-api-dl/
 ├── package.json
+├── deno.json
 ├── .env.example
 ├── Dockerfile
-├── docker-compose.yml    # dev & prod profile + redis service
+├── docker-compose.yml    # dev & prod profile + redis service + mem_limit
 ├── src/
-│   ├── index.ts       # Bun.serve: CORS + routing / /health /tiktok /tiktok/download
+│   ├── index.ts       # node:http: CORS + routing / /health /tiktok /tiktok/download
 │   ├── tiktok.ts      # wrapper Tiktok.Downloader + wireproxy-compatible JSON + key generation
 │   ├── extraction_cache.ts # Redis/in-memory cache hasil ekstraksi (TTL + stampede protection)
 │   ├── session.ts     # session store: Redis backend + in-memory fallback (TTL 5 menit)
@@ -183,6 +185,11 @@ tiktok-api-dl/
 | `FFMPEG_PATH` | `ffmpeg` | Path ke binary ffmpeg |
 | `REDIS_URL` | (kosong) | Jika di-set, session store & extraction cache pakai Redis; jika kosong, pakai in-memory fallback |
 | `TIKTOK_EXTRACT_CACHE_TTL_SECONDS` | `1800` | TTL cache hasil ekstraksi `/tiktok` (detik, 30 menit) |
+| `MAX_BODY_BYTES` | `65536` | Batas ukuran body POST (anti unbounded allocation) |
+| `SLIDESHOW_MAX_CONCURRENT` | `1` | Max render slideshow paralel (cegah OOM di mem_limit) |
+| `SLIDESHOW_MAX_PHOTOS` | `35` | Max foto per slideshow |
+| `SLIDESHOW_MAX_FILE_BYTES` | `15728640` | Max size per asset download (15MB) |
+| `SLIDESHOW_MAX_TOTAL_BYTES` | `83886080` | Max total download budget per slideshow (80MB) |
 
 ## Docker
 
@@ -212,9 +219,10 @@ docker compose --profile dev down
 ```
 
 Dev container:
-- Build target `development` dari Dockerfile
+- Build target `development` dari Dockerfile (Deno `--watch`)
 - Source `./src` di-mount read-only → hot reload tanpa rebuild
 - Port `7788` di-expose
+- `mem_limit: 512m`
 - `TIKTOK_API_KEY=test` (dari `.env`)
 
 ### Production
@@ -231,11 +239,12 @@ docker compose --profile prod down
 ```
 
 Prod container:
-- Build target `production` dari Dockerfile
+- Build target `production` dari Dockerfile (Deno)
 - Image `tiktok-api-dl:prod` (self-contained, tidak ada volume mount)
 - Port `7788` di-expose
+- `mem_limit: 512m` + `SLIDESHOW_MAX_CONCURRENT=1` (OOM guard + serial ffmpeg)
 - `TIKTOK_API_KEY=aluzsMZWWlr7sqomlf20BAUmbfZCJb` (dari `.env.prod`)
-- Health check via `curl /health` setiap 30 detik
+- Health check via `curl /health` setiap 30 detik (`rss_mb` / `heap_used_mb` di response)
 
 ### Test di dalam Docker
 
@@ -259,7 +268,7 @@ curl -X POST http://localhost:7788/tiktok \
 ### Dockerfile stages
 
 ```
-base         → oven/bun:1.2-debian + ffmpeg + production deps + src
-├── development  → bun --watch (hot reload, all deps, volume mount)
-└── production   → bun run src/index.ts (self-contained)
+base         → denoland/deno + ffmpeg + npm deps (node_modules) + src
+├── development  → deno run --watch (hot reload, volume mount)
+└── production   → deno run src/index.ts (self-contained)
 ```

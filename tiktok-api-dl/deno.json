@@ -1,0 +1,11 @@
+{
+  "nodeModulesDir": "manual",
+  "tasks": {
+    "start": "deno run --unstable-node-globals --allow-net --allow-env --allow-read --allow-write=/tmp,/deno-dir,/var/folders --allow-run=ffmpeg,/usr/bin/ffmpeg --allow-sys --allow-ffi --node-modules-dir=manual src/index.ts",
+    "dev": "deno run --watch --unstable-node-globals --allow-net --allow-env --allow-read --allow-write=/tmp,/deno-dir,/var/folders --allow-run=ffmpeg,/usr/bin/ffmpeg --allow-sys --allow-ffi --node-modules-dir=manual src/index.ts"
+  },
+  "compilerOptions": {
+    "lib": ["deno.window", "deno.unstable"],
+    "strict": true
+  }
+}

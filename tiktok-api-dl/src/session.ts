@@ -26,7 +26,6 @@ export interface SessionData {
 }
 
 const DEFAULT_TTL_SECONDS = 300;
-const DEFAULT_TTL_MS = DEFAULT_TTL_SECONDS * 1000;
 const REDIS_KEY_PREFIX = "tiktok:session:";
 
 const REDIS_URL = process.env.REDIS_URL || "";
@@ -34,12 +33,14 @@ const REDIS_URL = process.env.REDIS_URL || "";
 interface SessionBackend {
   create(data: Omit<SessionData, "key" | "createdAt" | "expiresAt">, ttlSeconds: number): Promise<string>;
   get(key: string): Promise<SessionData | null>;
+  claim(key: string): Promise<SessionData | null>;
+  restore(session: SessionData): Promise<void>;
   del(key: string): Promise<void>;
   count(): Promise<number>;
   close(): Promise<void>;
 }
 
-// ---------- In-memory backend (fallback ketika REDIS_URL tidak diset) ----------
+// ---------- In-memory backend ----------
 class MemoryBackend implements SessionBackend {
   private sessions = new Map<string, { data: SessionData; timeoutHandle?: ReturnType<typeof setTimeout> }>();
 
@@ -47,12 +48,20 @@ class MemoryBackend implements SessionBackend {
     const key = generateKey();
     const now = Date.now();
     const session: SessionData = { ...data, key, createdAt: now, expiresAt: now + ttlSeconds * 1000 };
-    const entry = { data: session };
+    this.put(session);
+    return key;
+  }
+
+  private put(session: SessionData): void {
+    const key = session.key;
+    const existing = this.sessions.get(key);
+    if (existing?.timeoutHandle) clearTimeout(existing.timeoutHandle);
+    const remaining = Math.max(1, session.expiresAt - Date.now());
+    const entry: { data: SessionData; timeoutHandle?: ReturnType<typeof setTimeout> } = { data: session };
     entry.timeoutHandle = setTimeout(() => {
       this.sessions.delete(key);
-    }, ttlSeconds * 1000);
+    }, remaining);
     this.sessions.set(key, entry);
-    return key;
   }
 
   async get(key: string): Promise<SessionData | null> {
@@ -65,6 +74,26 @@ class MemoryBackend implements SessionBackend {
       return null;
     }
     return entry.data;
+  }
+
+  async claim(key: string): Promise<SessionData | null> {
+    if (!key) return null;
+    const entry = this.sessions.get(key);
+    if (!entry) return null;
+    if (Date.now() >= entry.data.expiresAt) {
+      if (entry.timeoutHandle) clearTimeout(entry.timeoutHandle);
+      this.sessions.delete(key);
+      return null;
+    }
+    if (entry.timeoutHandle) clearTimeout(entry.timeoutHandle);
+    this.sessions.delete(key);
+    return entry.data;
+  }
+
+  async restore(session: SessionData): Promise<void> {
+    if (!session?.key) return;
+    if (Date.now() >= session.expiresAt) return;
+    this.put(session);
   }
 
   async del(key: string): Promise<void> {
@@ -83,8 +112,6 @@ class MemoryBackend implements SessionBackend {
 // ---------- Redis backend ----------
 class RedisBackend implements SessionBackend {
   private client: Redis;
-  private connected = false;
-  private connectPromise: Promise<void> | null = null;
 
   constructor(url: string) {
     this.client = new Redis(url, {
@@ -98,14 +125,10 @@ class RedisBackend implements SessionBackend {
     });
 
     this.client.on("connect", () => {
-      this.connected = true;
       console.log("[session] Redis connected:", maskUrl(url));
     });
     this.client.on("error", (err) => {
       console.error("[session] Redis error:", err.message);
-    });
-    this.client.on("close", () => {
-      this.connected = false;
     });
   }
 
@@ -132,6 +155,27 @@ class RedisBackend implements SessionBackend {
       await this.client.del(this.rkey(key));
       return null;
     }
+  }
+
+  async claim(key: string): Promise<SessionData | null> {
+    if (!key) return null;
+    const raw = await this.client.getdel(this.rkey(key));
+    if (!raw) return null;
+    try {
+      const session = JSON.parse(raw) as SessionData;
+      if (Date.now() >= session.expiresAt) return null;
+      return session;
+    } catch {
+      return null;
+    }
+  }
+
+  async restore(session: SessionData): Promise<void> {
+    if (!session?.key) return;
+    const remainingMs = session.expiresAt - Date.now();
+    if (remainingMs <= 0) return;
+    const ttlSeconds = Math.max(1, Math.ceil(remainingMs / 1000));
+    await this.client.set(this.rkey(session.key), JSON.stringify(session), "EX", ttlSeconds);
   }
 
   async del(key: string): Promise<void> {
@@ -179,6 +223,16 @@ export async function createSession(
 
 export async function getSession(key: string): Promise<SessionData | null> {
   return getBackend().get(key);
+}
+
+/** Atomically claim (get+delete) a session for one-shot download. */
+export async function claimSession(key: string): Promise<SessionData | null> {
+  return getBackend().claim(key);
+}
+
+/** Put a claimed session back with remaining TTL after pre-delivery failure. */
+export async function restoreSession(session: SessionData): Promise<void> {
+  return getBackend().restore(session);
 }
 
 export async function deleteSession(key: string): Promise<void> {

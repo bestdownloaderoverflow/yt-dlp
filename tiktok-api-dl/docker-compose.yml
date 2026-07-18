@@ -64,8 +64,6 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - TIKTOK_EXTRACT_CACHE_TTL_SECONDS=1800
       - SLIDESHOW_MAX_CONCURRENT=1
-    mem_limit: 512m
-    memswap_limit: 512m
     restart: unless-stopped
     profiles:
       - prod

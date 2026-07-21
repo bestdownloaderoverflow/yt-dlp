@@ -1,0 +1,65 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: tiktokdownloader-gateway-redis
+    command: redis-server --maxmemory 128mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - tkdl-gateway-net
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    image: tiktokdownloader-gateway:latest
+    container_name: tiktokdownloader-gateway
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "${PORT:-7790}:7790"
+    env_file:
+      - path: .env.gateway
+        required: false
+    environment:
+      TZ: Asia/Jakarta
+      SERVER_HOST: "0.0.0.0"
+      SERVER_PORT: "7790"
+      REDIS_URL: redis://redis:6379/0
+      TIKTOK_EXTRACT_CACHE_TTL_SECONDS: ${TIKTOK_EXTRACT_CACHE_TTL_SECONDS:-1800}
+      SESSION_TTL_SECONDS: ${SESSION_TTL_SECONDS:-300}
+      TIKTOK_API_KEY: ${TIKTOK_API_KEY:-}
+      DOUYIN_COOKIE: ${DOUYIN_COOKIE:-}
+      TIKTOK_COOKIE: ${TIKTOK_COOKIE:-}
+      PROXY: ${PROXY:-}
+      PROXY_TIKTOK: ${PROXY_TIKTOK:-}
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SLIDESHOW_MAX_CONCURRENT: ${SLIDESHOW_MAX_CONCURRENT:-1}
+      FFMPEG_PATH: ffmpeg
+    volumes:
+      - gateway-volume:/app/Volume
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:7790/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 25s
+      retries: 3
+    networks:
+      - tkdl-gateway-net
+
+networks:
+  tkdl-gateway-net:
+    driver: bridge
+
+volumes:
+  redis-data:
+  gateway-volume:

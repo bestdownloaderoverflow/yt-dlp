@@ -1,0 +1,2 @@
+# Extra deps for gateway mode (headless API)
+redis>=5.0.0,<6

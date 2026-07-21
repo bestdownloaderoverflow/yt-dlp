@@ -136,3 +136,6 @@ yt_dlp_ejs/
 
 # Go binaries
 gateway-go/gateway-go
+
+# Local separate repo (not vendored)
+TikTokDownloader/

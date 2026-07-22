@@ -5,7 +5,7 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --production
 
 # Deno runtime with Debian base (needed for ffmpeg + native npm deps)
-FROM denoland/deno:2.3.1 AS base
+FROM denoland/deno:2.9.3 AS base
 
 USER root
 

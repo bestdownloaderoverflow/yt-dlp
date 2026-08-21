@@ -101,6 +101,12 @@ CURRENT_TMPDIR=""
 
 cleanup() {
   local rc=$?
+  local pids
+  pids="$(jobs -p 2>/dev/null || true)"
+  if [[ -n "$pids" ]]; then
+    kill $pids 2>/dev/null || true
+    wait $pids 2>/dev/null || true
+  fi
   if [[ -n "$CURRENT_TMPDIR" && -d "$CURRENT_TMPDIR" ]]; then
     rm -rf "$CURRENT_TMPDIR"
   fi
@@ -113,6 +119,8 @@ probe_one_container() {
   local i="$1"          # "01".."18"
   local c="wireproxy-${i}"
   local dir="$2"
+
+  [[ -d "$dir" ]] || return 0
 
   # Metrics: wg show style text dari :9080/ (wireproxy info HTML page), stripped by renderer
   docker exec "$c" wget -qO- --timeout=5 --tries=1 \
@@ -130,10 +138,13 @@ probe_one_container() {
   )"
   status_line="$(printf '%s\n' "$probe_out" | tail -n 1)"
   body="$(printf '%s\n' "$probe_out" | sed '$d')"
-  printf '%s' "$body" > "${dir}/ip-${i}"
-  printf '%s\n' "$status_line" > "${dir}/lat-${i}"
 
-  if [[ "$REDIS_AVAILABLE" -eq 1 ]]; then
+  if [[ -d "$dir" ]]; then
+    printf '%s' "$body" > "${dir}/ip-${i}" 2>/dev/null || true
+    printf '%s\n' "$status_line" > "${dir}/lat-${i}" 2>/dev/null || true
+  fi
+
+  if [[ "$REDIS_AVAILABLE" -eq 1 && -d "$dir" ]]; then
     docker exec "${REDIS_CONTAINER}" redis-cli --raw \
       lindex "restart_log:p$((10#$i))" 0 > "${dir}/restart-${i}" 2>/dev/null || true
   fi
@@ -163,6 +174,9 @@ do_iteration() {
   done
 
   # 3. Render
+  if [[ "$MODE" == "watch" ]]; then
+    clear
+  fi
   python3 "$RENDER_PY" "$dir" --count "$PROXY_COUNT"
 
   # 4. Cleanup temp dir (avoid accumulation in watch mode)
@@ -179,7 +193,6 @@ fi
 
 # watch mode
 while true; do
-  clear
   do_iteration
   sleep "$INTERVAL"
 done

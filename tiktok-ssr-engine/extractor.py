@@ -145,8 +145,7 @@ class TikTokSSRExtractor:
             if solved:
                 for k, v in solved.items():
                     session.cookies.set(k, v, domain=".tiktok.com")
-                extra = "; ".join([f"{k}={v}" for k, v in solved.items()])
-                headers["Cookie"] = f"{cookie_str}; {extra}" if cookie_str else extra
+                headers.pop("Cookie", None)
                 resp = await session.get(canonical_url, headers=headers, timeout=15)
                 html = resp.text
 

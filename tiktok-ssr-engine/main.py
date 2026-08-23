@@ -104,17 +104,23 @@ async def extract_tiktok(
     if not target_url:
         raise HTTPException(status_code=400, detail="URL is required")
 
-    proxy = req_proxy or get_next_proxy() or DEFAULT_PROXY or None
     impersonate = req_impersonate or DEFAULT_IMPERSONATE
 
-    try:
-        extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
-        result = await extractor.extract(target_url)
-        return JSONResponse(content=result)
-    except ValueError as ve:
-        raise HTTPException(status_code=400, detail=str(ve))
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Extraction failed: {e}")
+    max_attempts = 3 if not req_proxy else 1
+    last_error = None
+
+    for attempt in range(max_attempts):
+        proxy = req_proxy or get_next_proxy() or DEFAULT_PROXY or None
+        try:
+            extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
+            result = await extractor.extract(target_url)
+            return JSONResponse(content=result)
+        except Exception as e:
+            last_error = e
+            if req_proxy:
+                break
+
+    raise HTTPException(status_code=502, detail=f"Extraction failed: {last_error}")
 
 
 async def stream_rendered_slideshow(

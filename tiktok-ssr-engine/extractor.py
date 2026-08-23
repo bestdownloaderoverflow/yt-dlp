@@ -197,6 +197,27 @@ class TikTokSSRExtractor:
 
         return None
 
+    async def extract_via_embed_ssr(self, session: AsyncSession, item_id: str, canonical_url: str) -> Optional[Dict[str, Any]]:
+        headers = dict(DESKTOP_BROWSER_HEADERS)
+        headers["Referer"] = "https://www.tiktok.com/"
+        embed_url = f"https://www.tiktok.com/embed/v2/{item_id}"
+        resp = await session.get(embed_url, headers=headers, timeout=12)
+        match = re.search(r'<script\s+id="__FRONTITY_CONNECT_STATE__"\s+type="application/json">([^<]+)</script>', resp.text)
+        if not match:
+            return None
+
+        try:
+            d = json.loads(match.group(1))
+            source = d.get("source", {})
+            data = source.get("data", {})
+            for k, v in data.items():
+                if isinstance(v, dict) and "videoData" in v:
+                    vdata = v["videoData"]
+                    return self.build_response_from_frontity(vdata, canonical_url, source="web_embed_ssr")
+        except Exception:
+            pass
+        return None
+
     async def extract_via_web_fallback(self, session: AsyncSession, canonical_url: str) -> Optional[Dict[str, Any]]:
         home_resp = await session.get("https://ssstik.io/en", headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         tt_match = re.search(r's_tt\s*=\s*["\']([^"\']+)["\']', home_resp.text)
@@ -367,16 +388,27 @@ class TikTokSSRExtractor:
                 res = await self.extract_via_web_ssr(session, final_url)
                 if res:
                     return res
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SSR Engine] Web SSR failed on proxy {self.proxy}: {e}")
 
-            # Strategy 2: Web Scraper Fallback Engine
+            # Strategy 2: Official Embed SSR Scraping (__FRONTITY_CONNECT_STATE__)
+            item_id_match = re.search(r'/(?:video|photo)/(\d+)', final_url)
+            if item_id_match:
+                item_id = item_id_match.group(1)
+                try:
+                    res = await self.extract_via_embed_ssr(session, item_id, final_url)
+                    if res:
+                        return res
+                except Exception as e:
+                    print(f"[SSR Engine] Embed SSR failed on proxy {self.proxy}: {e}")
+
+            # Strategy 3: Web Scraper Fallback Engine
             try:
                 res = await self.extract_via_web_fallback(session, final_url)
                 if res:
                     return res
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[SSR Engine] Web Fallback failed on proxy {self.proxy}: {e}")
 
             raise ValueError("Unable to extract video or photo slideshow from TikTok. Verify the post is public.")
 
@@ -570,6 +602,172 @@ class TikTokSSRExtractor:
                 "nickname": nickname,
                 "uniqueId": unique_id,
                 "signature": author_data.get("signature") or "",
+                "avatar": avatar,
+                "avatarThumb": avatar,
+                "avatarMedium": avatar,
+                "avatarLarger": avatar,
+            },
+        }
+
+    def build_response_from_frontity(self, vdata: Dict[str, Any], canonical_url: str, source: str = "web_embed_ssr") -> Dict[str, Any]:
+        item = vdata.get("itemInfos", {})
+        author = vdata.get("authorInfos", {})
+        music = vdata.get("musicInfos", {})
+        stats = vdata.get("authorStats", {})
+        image_post = vdata.get("imagePostInfo")
+
+        title = item.get("text") or ""
+        nickname = author.get("nickName") or author.get("uniqueId") or "unknown"
+        unique_id = author.get("uniqueId") or nickname
+        safe_author = sanitize_filename_part(nickname)
+
+        avatar_list = author.get("coversLarger") or author.get("coversMedium") or author.get("covers") or []
+        avatar = avatar_list[0] if avatar_list else ""
+
+        music_urls = music.get("playUrl") or []
+        music_url = music_urls[0] if music_urls else ""
+
+        covers = item.get("covers") or []
+        cover = covers[0] if covers else ""
+
+        # Case 1: Photo Slideshow
+        if image_post and image_post.get("images"):
+            images = image_post.get("images", [])
+            photos = []
+            image_urls = []
+            for idx, img in enumerate(images, start=1):
+                url_list = img.get("displayImage", {}).get("urlList") or []
+                img_url = url_list[0] if url_list else ""
+                if img_url:
+                    image_urls.append(img_url)
+                    key_photo = create_session({
+                        "url": canonical_url,
+                        "type": "photo",
+                        "index": idx,
+                        "direct_url": img_url,
+                        "author": safe_author,
+                        "proxy": self.proxy,
+                        "impersonate": self.impersonate,
+                    })
+                    photos.append({
+                        "index": idx,
+                        "url": img_url,
+                        "download_url": f"/tiktok/download?key={key_photo}",
+                    })
+
+            download_link = {}
+            if music_url:
+                key_mp3 = create_session({
+                    "url": canonical_url,
+                    "type": "mp3",
+                    "direct_url": music_url,
+                    "author": safe_author,
+                    "proxy": self.proxy,
+                    "impersonate": self.impersonate,
+                })
+                download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
+
+            slideshow_key = create_session({
+                "url": canonical_url,
+                "type": "slideshow_render",
+                "photo_urls": image_urls,
+                "audio_url": music_url,
+                "author": safe_author,
+                "proxy": self.proxy,
+                "impersonate": self.impersonate,
+            })
+
+            return {
+                "status": "picker",
+                "extract_source": source,
+                "title": title,
+                "description": title,
+                "statistics": {
+                    "play_count": item.get("playCount", 0),
+                    "digg_count": item.get("diggCount", 0),
+                    "comment_count": item.get("commentCount", 0),
+                    "share_count": item.get("shareCount", 0),
+                },
+                "artist": nickname,
+                "cover": image_urls[0] if image_urls else cover,
+                "duration": len(image_urls) * 3,
+                "audio": music_url,
+                "download_link": download_link,
+                "photos": photos,
+                "download_slideshow": f"/tiktok/download?key={slideshow_key}",
+                "download_slideshow_link": f"/tiktok/download?key={slideshow_key}",
+                "author": {
+                    "nickname": nickname,
+                    "uniqueId": unique_id,
+                    "signature": author.get("signature", ""),
+                    "avatar": avatar,
+                    "avatarThumb": avatar,
+                    "avatarMedium": avatar,
+                    "avatarLarger": avatar,
+                },
+            }
+
+        # Case 2: Video
+        video_urls = item.get("video", {}).get("urls") or []
+        video_url = video_urls[0] if video_urls else ""
+
+        key_hd = create_session({
+            "url": canonical_url,
+            "type": "video",
+            "quality": "no_watermark_hd",
+            "direct_url": video_url,
+            "author": safe_author,
+            "proxy": self.proxy,
+            "impersonate": self.impersonate,
+        })
+        key_sd = create_session({
+            "url": canonical_url,
+            "type": "video",
+            "quality": "no_watermark",
+            "direct_url": video_url,
+            "author": safe_author,
+            "proxy": self.proxy,
+            "impersonate": self.impersonate,
+        })
+
+        download_link = {
+            "no_watermark": f"/tiktok/download?key={key_sd}",
+            "no_watermark_hd": f"/tiktok/download?key={key_hd}",
+        }
+
+        if music_url:
+            key_mp3 = create_session({
+                "url": canonical_url,
+                "type": "mp3",
+                "direct_url": music_url,
+                "author": safe_author,
+                "proxy": self.proxy,
+                "impersonate": self.impersonate,
+            })
+            download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
+
+        return {
+            "status": "tunnel",
+            "extract_source": source,
+            "title": title,
+            "description": title,
+            "statistics": {
+                "play_count": item.get("playCount", 0),
+                "digg_count": item.get("diggCount", 0),
+                "comment_count": item.get("commentCount", 0),
+                "share_count": item.get("shareCount", 0),
+            },
+            "artist": nickname,
+            "cover": cover,
+            "dynamic_cover": cover,
+            "duration": item.get("video", {}).get("duration", 0),
+            "audio": music_url,
+            "download_link": download_link,
+            "music_duration": music.get("duration", 0),
+            "author": {
+                "nickname": nickname,
+                "uniqueId": unique_id,
+                "signature": author.get("signature", ""),
                 "avatar": avatar,
                 "avatarThumb": avatar,
                 "avatarMedium": avatar,

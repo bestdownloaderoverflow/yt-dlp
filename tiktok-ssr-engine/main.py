@@ -109,17 +109,23 @@ async def extract_tiktok(
     max_attempts = 4 if not req_proxy else 1
     last_error = None
 
-    for attempt in range(max_attempts):
+    print(f"📥 [REQUEST] Extracting: {target_url}", flush=True)
+
+    for attempt in range(1, max_attempts + 1):
         proxy = req_proxy or get_next_proxy() or DEFAULT_PROXY or None
+        print(f"  🔄 [Attempt {attempt}/{max_attempts}] Trying proxy: {proxy}", flush=True)
         try:
             extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
             result = await extractor.extract(target_url)
+            print(f"  ✅ [Attempt {attempt}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
             return JSONResponse(content=result)
         except Exception as e:
             last_error = e
+            print(f"  ⚠️ [Attempt {attempt}] FAILED on {proxy}: {e}", flush=True)
             if req_proxy:
                 break
 
+    print(f"❌ [FAILED] All {max_attempts} attempts failed: {last_error}", flush=True)
     raise HTTPException(status_code=502, detail=f"Extraction failed: {last_error}")
 
 

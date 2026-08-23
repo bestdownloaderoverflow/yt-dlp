@@ -360,6 +360,7 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 	impersonate := strings.TrimSpace(r.URL.Query().Get("impersonate"))
 	preferred := extractWorkerID(r.URL.Query().Get("key"), h.Config.WorkerCount)
 	isYouTube := isYouTubeURL(url)
+	isTikTok := isTikTokURL(url)
 	forceIPv6 := h.Config.YouTubeFetchIPv6Only && isYouTube
 	clientProxyOverride := proxy != ""
 
@@ -386,7 +387,7 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 		return h.selectExtractorWorkerAvoiding(preferred, false, exclude, nil), false
 	}
 
-	autoProxyFailover := isYouTube && !clientProxyOverride && h.ProxyReg != nil
+	autoProxyFailover := (isYouTube || isTikTok) && !clientProxyOverride && h.ProxyReg != nil
 	maxAttempts := 1
 	if autoProxyFailover {
 		maxAttempts = h.Config.MaxRetries
@@ -437,7 +438,7 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 			}
 			proxyArg = selectedProxy.SOCKS5URL
 			h.ProxyReg.IncrementActive(selectedProxy.ID)
-			log.Printf("[extractor:%s] youtube fetch using %s (%s)", workerID, selectedProxy.ID, selectedProxy.SOCKS5URL)
+			log.Printf("[extractor:%s] fetch using %s (%s)", workerID, selectedProxy.ID, selectedProxy.SOCKS5URL)
 		}
 
 		result, rpcErr, err = h.Extractor.Fetch(workerID, url, proxyArg, impersonate, forceIPv6)
@@ -448,7 +449,7 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 
 		if err != nil {
 			if autoProxyFailover && isIPCNetworkError(err) && attempt+1 < maxAttempts {
-				log.Printf("[extractor:%s] youtube fetch ipc retryable error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
+				log.Printf("[extractor:%s] fetch ipc retryable error (attempt %d/%d): %v", workerID, attempt+1, maxAttempts, err)
 				triedWorkers[workerID] = true
 				if selectedProxy != nil {
 					triedProxies[selectedProxy.ID] = true
@@ -459,14 +460,21 @@ func (h *Handlers) handleFetchViaExtractorIPC(w http.ResponseWriter, r *http.Req
 			break
 		}
 		if rpcErr != nil {
-			if autoProxyFailover && isRetryableYouTubeFetchRPCError(rpcErr) && attempt+1 < maxAttempts {
+			isRetryable := (isYouTube && isRetryableYouTubeFetchRPCError(rpcErr)) || (isTikTok && isRetryableTikTokRPCError(rpcErr))
+			if autoProxyFailover && isRetryable && attempt+1 < maxAttempts {
 				log.Printf(
-					"[extractor:%s] youtube fetch rpc retryable error (attempt %d/%d): %s",
+					"[extractor:%s] fetch rpc retryable error (attempt %d/%d): %s",
 					workerID, attempt+1, maxAttempts, rpcErr.Message,
 				)
 				triedWorkers[workerID] = true
 				if selectedProxy != nil {
 					triedProxies[selectedProxy.ID] = true
+					if isTikTok {
+						if penalizeProxy, reasonCode := tiktokRPCErrorProxyPenalty(rpcErr); penalizeProxy {
+							h.ProxyReg.MarkCooldown(selectedProxy.ID)
+							h.scheduleProxyRestart(selectedProxy.ID, reasonCode)
+						}
+					}
 				}
 				h.recordFailover("/fetch", "rpc_retryable")
 				continue
@@ -816,6 +824,16 @@ func isYouTubeURL(rawURL string) bool {
 		host == "m.youtube.com" ||
 		host == "music.youtube.com" ||
 		host == "youtu.be"
+}
+
+func isTikTokURL(rawURL string) bool {
+	parsed, err := neturl.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		lower := strings.ToLower(rawURL)
+		return strings.Contains(lower, "tiktok.com") || strings.Contains(lower, "douyin.com")
+	}
+	host := strings.ToLower(parsed.Hostname())
+	return strings.Contains(host, "tiktok.com") || strings.Contains(host, "douyin.com")
 }
 
 // handleTikTok POST endpoint

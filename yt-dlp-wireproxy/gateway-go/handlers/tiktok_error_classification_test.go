@@ -74,3 +74,23 @@ func TestTikTokRetryableErrorsDoNotAlwaysPenalizeProxy(t *testing.T) {
 		}
 	}
 }
+
+func TestIsTikTokURL(t *testing.T) {
+	cases := []struct {
+		url  string
+		want bool
+	}{
+		{"https://www.tiktok.com/@user/video/1234567890", true},
+		{"https://vm.tiktok.com/ZM8abcde/", true},
+		{"https://www.douyin.com/video/1234567890", true},
+		{"https://www.youtube.com/watch?v=dQw4w9WgXcQ", false},
+		{"https://twitter.com/user/status/123456", false},
+	}
+
+	for _, c := range cases {
+		if got := isTikTokURL(c.url); got != c.want {
+			t.Errorf("isTikTokURL(%q) = %v, want %v", c.url, got, c.want)
+		}
+	}
+}
+

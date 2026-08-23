@@ -122,15 +122,6 @@ class YoutubeDLManager:
         self._max_requests_per_instance = int(os.getenv("YTDLP_MAX_REQUESTS_PER_INSTANCE", "200"))
         self._acquire_timeout = float(os.getenv("YTDLP_ACQUIRE_TIMEOUT", "30"))
         self._last_cleanup = time.time()
-        self._tiktok_device_id = os.getenv("TIKTOK_DEVICE_ID", _default_tiktok_device_id()).strip()
-        self._tiktok_app_name = os.getenv("TIKTOK_APP_NAME", "trill").strip() or "trill"
-        self._tiktok_app_version = os.getenv("TIKTOK_APP_VERSION", "34.1.2").strip() or "34.1.2"
-        self._tiktok_manifest_app_version = (
-            os.getenv("TIKTOK_MANIFEST_APP_VERSION", "2023401020").strip() or "2023401020"
-        )
-        self._tiktok_aid = os.getenv("TIKTOK_AID", "1180").strip() or "1180"
-        # Optional full override (single value or comma-separated values).
-        self._tiktok_app_info_override = os.getenv("TIKTOK_APP_INFO", "").strip()
         self._js_runtimes = _env_js_runtimes()
         self._cookiefile = os.getenv("YTDLP_COOKIEFILE", "").strip()
         self._cookiefile_readonly = _env_bool("YTDLP_COOKIEFILE_READONLY", True)
@@ -154,22 +145,10 @@ class YoutubeDLManager:
                 " (read-only)" if self._cookiefile_readonly else "",
             )
 
-    def _build_tiktok_app_info_list(self) -> List[str]:
-        if self._tiktok_app_info_override:
-            return [v.strip() for v in self._tiktok_app_info_override.split(",") if v.strip()]
-        return [
-            (
-                f"{self._tiktok_device_id}/"
-                f"{self._tiktok_app_name}/"
-                f"{self._tiktok_app_version}/"
-                f"{self._tiktok_manifest_app_version}/"
-                f"{self._tiktok_aid}"
-            )
-        ]
-
     @staticmethod
     def _build_opts_key(proxy: Optional[str], impersonate: Optional[str], force_ipv6: bool) -> str:
-        return f"{proxy or 'none'}:{impersonate or 'none'}:{'v6' if force_ipv6 else 'default'}"
+        effective_imp = impersonate or "chrome"
+        return f"{proxy or 'none'}:{effective_imp}:{'v6' if force_ipv6 else 'default'}"
 
     def _create_ydl(self, proxy: Optional[str] = None,
                     impersonate: Optional[str] = None,
@@ -190,15 +169,6 @@ class YoutubeDLManager:
             "retries": 2,
             "fragment_retries": 2,
             "extractor_retries": 2,
-            # Force TikTok extractor to try mobile API first.
-            # If mobile API path fails, yt-dlp TikTok extractor already
-            # falls back to web extraction automatically.
-            "extractor_args": {
-                "tiktok": {
-                    "app_info": self._build_tiktok_app_info_list(),
-                    "device_id": [self._tiktok_device_id],
-                }
-            },
         }
         if proxy:
             opts["proxy"] = proxy
@@ -207,26 +177,26 @@ class YoutubeDLManager:
             opts["source_address"] = "::"
         if self._cookiefile:
             opts["cookiefile"] = self._cookiefile
-        if impersonate:
-            target_str = impersonate if isinstance(impersonate, str) else str(impersonate)
-            with YoutubeDLManager._impersonate_cache_lock:
-                if target_str not in YoutubeDLManager._impersonate_cache:
-                    YoutubeDLManager._impersonate_cache[target_str] = _check_impersonate_available(target_str)
-                    if YoutubeDLManager._impersonate_cache[target_str]:
-                        logger.info(f"Impersonate target '{target_str}' is available")
-                    else:
-                        logger.warning(
-                            f"Impersonate target '{target_str}' not available. "
-                            f"Falling back to default. Install 'curl_cffi' for impersonate support."
-                        )
-                available = YoutubeDLManager._impersonate_cache[target_str]
-            if available:
-                impersonate_target = (
-                    impersonate
-                    if isinstance(impersonate, ImpersonateTarget)
-                    else ImpersonateTarget.from_str(target_str)
-                )
-                opts["impersonate"] = impersonate_target
+        target_imp = impersonate or "chrome"
+        target_str = target_imp if isinstance(target_imp, str) else str(target_imp)
+        with YoutubeDLManager._impersonate_cache_lock:
+            if target_str not in YoutubeDLManager._impersonate_cache:
+                YoutubeDLManager._impersonate_cache[target_str] = _check_impersonate_available(target_str)
+                if YoutubeDLManager._impersonate_cache[target_str]:
+                    logger.info(f"Impersonate target '{target_str}' is available")
+                else:
+                    logger.warning(
+                        f"Impersonate target '{target_str}' not available. "
+                        f"Falling back to default. Install 'curl_cffi' for impersonate support."
+                    )
+            available = YoutubeDLManager._impersonate_cache[target_str]
+        if available:
+            impersonate_target = (
+                target_imp
+                if isinstance(target_imp, ImpersonateTarget)
+                else ImpersonateTarget.from_str(target_str)
+            )
+            opts["impersonate"] = impersonate_target
 
         ydl = yt_dlp.YoutubeDL(opts)
         if self._cookiefile and self._cookiefile_readonly:

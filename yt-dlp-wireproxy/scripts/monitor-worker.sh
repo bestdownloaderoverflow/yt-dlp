@@ -9,10 +9,21 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PORT="${PORT:-9111}"
 HOST="http://127.0.0.1:${PORT}"
 CONTAINER_NAME="tiktok-ssr-engine"
 REDIS_CONTAINER="ytdlp-redis-wireproxy"
+
+# Auto-detect TIKTOK_API_KEY from environment, .env file, or container inspect
+if [[ -z "${TIKTOK_API_KEY:-}" ]]; then
+  if [[ -f "${PROJECT_DIR}/.env" ]]; then
+    TIKTOK_API_KEY=$(grep -E '^(TIKTOK_API_KEY|API_KEY)=' "${PROJECT_DIR}/.env" | head -n1 | cut -d '=' -f2- | tr -d '"' | tr -d "'" | tr -d '\r' || true)
+  fi
+fi
+if [[ -z "${TIKTOK_API_KEY:-}" ]]; then
+  TIKTOK_API_KEY=$(docker inspect "${CONTAINER_NAME}" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null | grep -E '^TIKTOK_API_KEY=' | cut -d '=' -f2- || true)
+fi
 
 GREEN="\033[0;32m"
 RED="\033[0;31m"
@@ -29,7 +40,7 @@ run_test() {
   local response
   response=$(curl -s -w "\n%{http_code}" -X POST "${HOST}/tiktok" \
     -H "Content-Type: application/json" \
-    -H "X-API-Key: ${TIKTOK_API_KEY:-test}" \
+    -H "X-API-Key: ${TIKTOK_API_KEY:-}" \
     -d '{"url":"https://www.tiktok.com/@jjtrailwalker/video/7660242147043544334"}' 2>/dev/null || echo -e "{}\n000")
   
   local http_code

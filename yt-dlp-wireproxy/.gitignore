@@ -49,8 +49,10 @@ monitor-tmp/
 Thumbs.db
 
 # Cookies
-# cookie/*.txt
-# !cookie/.gitkeep
+cookie/*.txt
+!cookie/.gitkeep
+cookie.txt
+
 
 # Go binary
 gateway-go/gateway-go

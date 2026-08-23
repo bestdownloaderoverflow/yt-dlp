@@ -3,6 +3,8 @@
 !serverpy/nginx.multi.conf
 cookies
 *cookies.txt
+*cookie.txt
+**/cookie/*.txt
 .netrc
 
 # Downloaded

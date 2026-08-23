@@ -1,0 +1,309 @@
+import asyncio
+import os
+from pathlib import Path
+import shutil
+import tempfile
+import time
+from typing import Optional
+from urllib.parse import quote
+
+from curl_cffi.requests import AsyncSession
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
+
+from config import DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, PORT, TIKTOK_API_KEY, get_next_proxy
+from extractor import TikTokSSRExtractor
+from session import get_session
+
+app = FastAPI(title="TikTok Direct Async SSR Scraper", version="1.0.0")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+START_TIME = time.time()
+
+
+class TikTokRequest(BaseModel):
+    url: str
+    proxy: Optional[str] = None
+    impersonate: Optional[str] = None
+
+
+def check_auth(x_api_key: Optional[str] = None, api_key_query: Optional[str] = None):
+    if not TIKTOK_API_KEY:
+        return
+    token = x_api_key or api_key_query
+    if token != TIKTOK_API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized: invalid or missing API key")
+
+
+@app.get("/")
+async def root():
+    return {
+        "service": "tiktok-ssr-engine",
+        "transport": "granian rust + fastapi + curl_cffi async ssr",
+        "status": "ok",
+        "uptime_seconds": int(time.time() - START_TIME),
+    }
+
+
+@app.get("/health")
+@app.get("/readyz")
+@app.get("/livez")
+async def health():
+    return {
+        "status": "healthy",
+        "service": "tiktok-ssr-engine",
+        "uptime_seconds": int(time.time() - START_TIME),
+    }
+
+
+@app.get("/metrics")
+async def metrics():
+    return Response(
+        content=f"# HELP tiktok_ssr_uptime_seconds Uptime in seconds\ntiktok_ssr_uptime_seconds {int(time.time() - START_TIME)}\n",
+        media_type="text/plain",
+    )
+
+
+@app.post("/tiktok")
+@app.get("/tiktok")
+@app.post("/fetch")
+@app.get("/fetch")
+async def extract_tiktok(
+    request: Request,
+    url: Optional[str] = Query(None, description="TikTok post URL"),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    api_key: Optional[str] = Query(None, alias="api_key"),
+):
+    check_auth(x_api_key, api_key)
+
+    target_url = ""
+    req_proxy = None
+    req_impersonate = None
+
+    if request.method == "POST":
+        try:
+            body = await request.json()
+            target_url = (body.get("url") or "").strip()
+            req_proxy = body.get("proxy")
+            req_impersonate = body.get("impersonate")
+        except Exception:
+            pass
+
+    if not target_url and url:
+        target_url = url.strip()
+
+    if not target_url:
+        raise HTTPException(status_code=400, detail="URL is required")
+
+    proxy = req_proxy or get_next_proxy() or DEFAULT_PROXY or None
+    impersonate = req_impersonate or DEFAULT_IMPERSONATE
+
+    try:
+        extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
+        result = await extractor.extract(target_url)
+        return JSONResponse(content=result)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Extraction failed: {e}")
+
+
+async def stream_rendered_slideshow(
+    photo_urls: list,
+    audio_url: Optional[str],
+    proxy: Optional[str],
+    impersonate: str,
+    duration_per_image: int = 3,
+):
+    temp_dir = tempfile.mkdtemp(prefix="tiktok_slideshow_")
+    work_dir = Path(temp_dir)
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    try:
+        async with AsyncSession(impersonate=impersonate, proxies=proxies) as session:
+            image_paths = []
+            for i, img_url in enumerate(photo_urls):
+                img_path = work_dir / f"img_{i}.jpg"
+                res = await session.get(img_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.tiktok.com/"}, timeout=15)
+                img_path.write_bytes(res.content)
+                image_paths.append(str(img_path))
+
+            audio_path = None
+            if audio_url:
+                aud_file = work_dir / "audio.mp3"
+                res_aud = await session.get(audio_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.tiktok.com/"}, timeout=15)
+                aud_file.write_bytes(res_aud.content)
+                audio_path = str(aud_file)
+
+        list_path = work_dir / "images.txt"
+        with open(list_path, "w", encoding="utf-8") as f:
+            for p in image_paths:
+                f.write(f"file '{p}'\nduration {duration_per_image}\n")
+            f.write(f"file '{image_paths[-1]}'\n")
+
+        out_mp4 = work_dir / "slideshow.mp4"
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-f", "concat", "-safe", "0", "-i", str(list_path)
+        ]
+        if audio_path:
+            cmd.extend(["-stream_loop", "-1", "-i", audio_path])
+
+        filter_parts = [
+            "[0:v]scale=w=720:h=1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=24[vout]"
+        ]
+        if audio_path:
+            total_duration = len(image_paths) * duration_per_image
+            filter_parts.append(f"[1:a]atrim=0:{total_duration},asetpts=PTS-STARTPTS[aout]")
+            filter_complex = ";".join(filter_parts)
+            cmd.extend([
+                "-filter_complex", filter_complex,
+                "-map", "[vout]", "-map", "[aout]"
+            ])
+        else:
+            cmd.extend(["-filter_complex", filter_parts[0], "-map", "[vout]"])
+
+        cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p", str(out_mp4)])
+
+        proc = await asyncio.create_subprocess_exec(*cmd)
+        await proc.communicate()
+
+        if out_mp4.exists():
+            with open(out_mp4, "rb") as vf:
+                while chunk := vf.read(64 * 1024):
+                    yield chunk
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@app.api_route("/tiktok/download", methods=["GET", "HEAD"])
+@app.api_route("/download", methods=["GET", "HEAD"])
+@app.api_route("/tunnel", methods=["GET", "HEAD"])
+async def download_tiktok_media(
+    request: Request,
+    key: str = Query(..., description="Session key for download"),
+    download: bool = Query(True, description="Download as attachment or stream inline"),
+):
+    session_data = get_session(key)
+    if not session_data:
+        raise HTTPException(status_code=404, detail="Download session expired or invalid")
+
+    author = session_data.get("author") or "tiktok"
+    media_type = session_data.get("type") or "video"
+    proxy = session_data.get("proxy") or DEFAULT_PROXY or None
+    impersonate = session_data.get("impersonate") or DEFAULT_IMPERSONATE
+    disposition = "attachment" if download else "inline"
+
+    # Slideshow video renderer
+    if media_type == "slideshow":
+        photo_urls = session_data.get("photo_urls") or []
+        audio_url = session_data.get("audio_url")
+        if not photo_urls:
+            raise HTTPException(status_code=400, detail="No photos in slideshow session")
+        filename = f"{author}_slideshow.mp4"
+        safe_filename = quote(filename)
+        return StreamingResponse(
+            stream_rendered_slideshow(photo_urls, audio_url, proxy, impersonate),
+            media_type="video/mp4",
+            headers={
+                "Content-Type": "video/mp4",
+                "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=UTF-8''{safe_filename}",
+            },
+        )
+
+    direct_url = session_data.get("direct_url")
+    if not direct_url:
+        raise HTTPException(status_code=400, detail="Session does not contain direct_url")
+
+    ext = "mp4"
+    content_type = "video/mp4"
+    if media_type == "mp3":
+        ext = "mp3"
+        content_type = "audio/mpeg"
+    elif media_type == "photo":
+        ext = "jpeg"
+        content_type = "image/jpeg"
+
+    filename = f"{author}_{media_type}.{ext}"
+    safe_filename = quote(filename)
+
+    proxies = {"http": proxy, "https": proxy} if proxy else None
+    upstream_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://www.tiktok.com/",
+    }
+
+    range_header = request.headers.get("Range")
+    if range_header:
+        upstream_headers["Range"] = range_header
+
+    try:
+        client = AsyncSession(impersonate=impersonate, proxies=proxies)
+        resp = await client.get(direct_url, headers=upstream_headers, stream=True, timeout=30)
+
+        response_headers = {
+            "Content-Type": resp.headers.get("Content-Type", content_type),
+            "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=UTF-8''{safe_filename}",
+            "Accept-Ranges": "bytes",
+        }
+        if "Content-Length" in resp.headers:
+            response_headers["Content-Length"] = resp.headers["Content-Length"]
+        if "Content-Range" in resp.headers:
+            response_headers["Content-Range"] = resp.headers["Content-Range"]
+
+        async def stream_generator():
+            try:
+                async for chunk in resp.aiter_content(chunk_size=64 * 1024):
+                    yield chunk
+            finally:
+                await client.close()
+
+        status_code = resp.status_code if resp.status_code in (200, 206) else 200
+        return StreamingResponse(
+            stream_generator(),
+            status_code=status_code,
+            headers=response_headers,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Streaming error: {e}")
+
+
+def get_auto_workers() -> int:
+    env_workers = os.getenv("WORKERS") or os.getenv("GRANIAN_WORKERS")
+    if env_workers:
+        try:
+            return int(env_workers)
+        except ValueError:
+            pass
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            return max(1, len(os.sched_getaffinity(0)))
+        except Exception:
+            pass
+    return max(1, os.cpu_count() or 2)
+
+
+if __name__ == "__main__":
+    from granian import Granian
+    from granian.constants import Interfaces
+
+    auto_workers = get_auto_workers()
+    print(f"🚀 Starting Granian on {HOST}:{PORT} with {auto_workers} auto-detected CPU workers")
+    server = Granian(
+        "main:app",
+        address=HOST,
+        port=PORT,
+        interface=Interfaces.ASGI,
+        workers=auto_workers,
+        runtime_threads=2,
+    )
+    server.serve()

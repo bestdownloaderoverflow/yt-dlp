@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  tiktok-ssr-engine:
+    build: .
+    container_name: tiktok-ssr-engine
+    restart: unless-stopped
+    ports:
+      - "7799:7799"
+    environment:
+      - PORT=7799
+      - TIKTOK_API_KEY=${TIKTOK_API_KEY:-test}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      - DEFAULT_IMPERSONATE=chrome120
+    volumes:
+      - ../yt-dlp-wireproxy/cookie:/app/cookie:ro
+    networks:
+      - tiktok-net
+
+networks:
+  tiktok-net:
+    driver: bridge

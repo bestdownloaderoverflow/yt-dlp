@@ -24,8 +24,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RENDER_PY="${SCRIPT_DIR}/monitor-wireproxy-render.py"
 
-GATEWAY_CONTAINER="${GATEWAY_CONTAINER:-ytdlp-gateway-wireproxy}"
-SOCKS_PROBE_CONTAINER="${SOCKS_PROBE_CONTAINER:-ytdlp-worker-1}"
+if [[ -z "${GATEWAY_CONTAINER:-}" ]]; then
+  if docker ps --filter "name=^/tiktok-ssr-engine$" --format '{{.Names}}' | grep -qx "tiktok-ssr-engine"; then
+    GATEWAY_CONTAINER="tiktok-ssr-engine"
+    SOCKS_PROBE_CONTAINER="${SOCKS_PROBE_CONTAINER:-tiktok-ssr-engine}"
+  else
+    GATEWAY_CONTAINER="ytdlp-gateway-wireproxy"
+    SOCKS_PROBE_CONTAINER="${SOCKS_PROBE_CONTAINER:-ytdlp-worker-1}"
+  fi
+else
+  SOCKS_PROBE_CONTAINER="${SOCKS_PROBE_CONTAINER:-${GATEWAY_CONTAINER}}"
+fi
 REDIS_CONTAINER="${REDIS_CONTAINER:-ytdlp-redis-wireproxy}"
 GATEWAY_PORT="${GATEWAY_PORT:-9111}"
 PROXY_COUNT="${PROXY_COUNT:-18}"

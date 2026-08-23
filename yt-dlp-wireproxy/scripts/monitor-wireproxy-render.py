@@ -328,12 +328,27 @@ def main() -> int:
         )
         exit_ip = safe_read(os.path.join(cycle_dir, f"ip-{idx}")).strip()
 
+        # Determine country
+        country = ph.get("country")
+        if not country or country == "?":
+            if 1 <= i <= 6:
+                country = "Indonesia"
+            elif 7 <= i <= 12:
+                country = "Singapore"
+            elif 13 <= i <= 18:
+                country = "Vietnam"
+            else:
+                country = "Wireproxy"
+
+        is_probe_ok = (http_code == 200 and bool(exit_ip))
+        is_healthy = bool(ph.get("healthy")) if "healthy" in ph else is_probe_ok
+
         row = {
             "index": i,
             "container": cid,
             "proxy_id": pid,
-            "country": ph.get("country", "?"),
-            "healthy": bool(ph.get("healthy", False)),
+            "country": country,
+            "healthy": is_healthy,
             "exit_ip": exit_ip,
             "latency_ms": round(latency_s * 1000, 1) if latency_s else 0.0,
             "http_code": http_code,

@@ -328,6 +328,11 @@ services:
       - wireproxy-17
       - wireproxy-18
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     networks:
       - ytdlp-wireproxy-network
 

@@ -20,9 +20,20 @@ RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 def get_proxy_pool() -> List[str]:
     """
     Returns list of SOCKS5 proxies from PROXY_LIST or auto-generated wireproxy-01..wireproxy-18.
+    Interleaves regions (ID -> SG -> VN -> ID -> SG -> VN...) so every 3 consecutive attempts
+    are guaranteed to touch different geographic regions!
     """
     if RAW_PROXY_LIST:
         return [p.strip() for p in RAW_PROXY_LIST.split(",") if p.strip()]
+    if PROXY_COUNT == 18:
+        # Group 1: 01..06 (Indonesia), Group 2: 07..12 (Singapore), Group 3: 13..18 (Vietnam)
+        id_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(1, 7)]
+        sg_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(7, 13)]
+        vn_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(13, 19)]
+        interleaved = []
+        for i in range(6):
+            interleaved.extend([id_list[i], sg_list[i], vn_list[i]])
+        return interleaved
     if PROXY_COUNT > 0:
         return [
             f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}"

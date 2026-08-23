@@ -106,7 +106,7 @@ async def extract_tiktok(
 
     impersonate = req_impersonate or DEFAULT_IMPERSONATE
 
-    max_attempts = 3 if not req_proxy else 1
+    max_attempts = 4 if not req_proxy else 1
     last_error = None
 
     for attempt in range(max_attempts):

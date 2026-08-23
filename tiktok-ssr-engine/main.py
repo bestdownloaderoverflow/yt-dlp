@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from config import DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, PORT, TIKTOK_API_KEY, get_next_proxy
+from config import DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, PORT, TIKTOK_API_KEY, VERBOSE_LOGS, get_next_proxy
 from extractor import TikTokSSRExtractor
 from session import get_session
 
@@ -21,10 +21,11 @@ app = FastAPI(title="TikTok Direct Async SSR Scraper", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r".*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 START_TIME = time.time()
@@ -109,23 +110,27 @@ async def extract_tiktok(
     max_attempts = 4 if not req_proxy else 1
     last_error = None
 
-    print(f"📥 [REQUEST] Extracting: {target_url}", flush=True)
+    if VERBOSE_LOGS:
+        print(f"📥 [REQUEST] Extracting: {target_url}", flush=True)
 
     for attempt in range(1, max_attempts + 1):
         proxy = req_proxy or get_next_proxy() or DEFAULT_PROXY or None
-        print(f"  🔄 [Attempt {attempt}/{max_attempts}] Trying proxy: {proxy}", flush=True)
+        if VERBOSE_LOGS:
+            print(f"  🔄 [Attempt {attempt}/{max_attempts}] Trying proxy: {proxy}", flush=True)
         try:
             extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
             result = await extractor.extract(target_url)
-            print(f"  ✅ [Attempt {attempt}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
+            if VERBOSE_LOGS:
+                print(f"  ✅ [Attempt {attempt}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
             return JSONResponse(content=result)
         except Exception as e:
             last_error = e
-            print(f"  ⚠️ [Attempt {attempt}] FAILED on {proxy}: {e}", flush=True)
+            if VERBOSE_LOGS:
+                print(f"  ⚠️ [Attempt {attempt}] FAILED on {proxy}: {e}", flush=True)
             if req_proxy:
                 break
 
-    print(f"❌ [FAILED] All {max_attempts} attempts failed: {last_error}", flush=True)
+    print(f"❌ [FAILED] All {max_attempts} attempts failed for {target_url}: {last_error}", flush=True)
     raise HTTPException(status_code=502, detail=f"Extraction failed: {last_error}")
 
 

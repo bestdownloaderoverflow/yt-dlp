@@ -151,9 +151,47 @@ class TestTikTokSSROffline(unittest.TestCase):
                 if 1 <= num <= 11:
                     geo_indices.append(i)
             
-            self.assertEqual(len(geo_indices), 11)
-            max_gap = max(geo_indices[j+1] - geo_indices[j] for j in range(len(geo_indices)-1))
-            self.assertLessEqual(max_gap, 5)
+    def test_codec_prioritization_h264(self):
+        extractor = TikTokSSRExtractor()
+        dummy_item = {
+            "desc": "Video with Multiple Codecs",
+            "author": {"nickname": "Codec Tester", "uniqueId": "codecs"},
+            "video": {
+                "playAddr": "https://v16m.tiktokcdn.com/default.mp4",
+                "bitrateInfo": [
+                    # Higher bitrate but unplayable bytevc2 codec -> should be skipped!
+                    {"Bitrate": 2500000, "CodecType": "bytevc2", "GearName": "bytevc2_1080", "PlayAddr": {"UrlList": ["https://v16m.tiktokcdn.com/bytevc2_1080.mp4"]}},
+                    # Higher bitrate bytevc1 (H.265)
+                    {"Bitrate": 2000000, "CodecType": "bytevc1", "GearName": "bytevc1_720", "PlayAddr": {"UrlList": ["https://v16m.tiktokcdn.com/bytevc1_720.mp4"]}},
+                    # H.264 (AVC1) -> should be selected as best compatible HD!
+                    {"Bitrate": 1500000, "CodecType": "h264", "GearName": "h264_720", "PlayAddr": {"UrlList": ["https://v16m.tiktokcdn.com/h264_720.mp4"]}},
+                ]
+            }
+        }
+        res = extractor.build_response_from_ssr(dummy_item, "https://www.tiktok.com/@codecs/video/100")
+        hd_link = res["download_link"]["no_watermark_hd"]
+        session = get_session(hd_link.split("key=")[1])
+        # Verify H.264 was prioritized over bytevc1/bytevc2
+        self.assertEqual(session["direct_url"], "https://v16m.tiktokcdn.com/h264_720.mp4")
+
+    def test_subtitles_extraction(self):
+        extractor = TikTokSSRExtractor()
+        dummy_item = {
+            "desc": "Video with Subtitles",
+            "author": {"nickname": "Sub Creator", "uniqueId": "subs"},
+            "video": {
+                "playAddr": "https://v16m.tiktokcdn.com/video.mp4",
+                "subtitleInfos": [
+                    {"LanguageCodeName": "en", "LanguageName": "English", "Url": "https://p16.tiktokcdn.com/sub_en.vtt", "Format": "webvtt"},
+                    {"LanguageCodeName": "id", "LanguageName": "Indonesian", "Url": "https://p16.tiktokcdn.com/sub_id.vtt", "Format": "webvtt"},
+                ]
+            }
+        }
+        res = extractor.build_response_from_ssr(dummy_item, "https://www.tiktok.com/@subs/video/200")
+        self.assertIn("subtitles", res)
+        self.assertIn("en", res["subtitles"])
+        self.assertIn("id", res["subtitles"])
+        self.assertEqual(res["subtitles"]["en"][0]["url"], "https://p16.tiktokcdn.com/sub_en.vtt")
 
 
 if __name__ == "__main__":

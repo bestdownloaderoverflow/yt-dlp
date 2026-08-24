@@ -57,7 +57,7 @@ def _first_url(val: Any) -> str:
         if isinstance(item, dict):
             return item.get("url", "") or item.get("urlList", [""])[0] or item.get("url_list", [""])[0]
     if isinstance(val, dict):
-        return val.get("url", "") or val.get("urlList", [""])[0] or val.get("url_list", [""])[0]
+        return val.get("url", "") or val.get("UrlList", [""])[0] or val.get("urlList", [""])[0] or val.get("url_list", [""])[0]
     return ""
 
 
@@ -174,9 +174,21 @@ class TikTokSSRExtractor:
                 data = json.loads(match.group(1))
                 scope = data.get("__DEFAULT_SCOPE__", {})
                 detail = scope.get("webapp.video-detail", {})
+                
+                # Status code classification
+                status_code = detail.get("statusCode")
+                if status_code == 10204:
+                    raise ValueError("TikTok IP blocked / WAF challenge (code 10204)")
+                elif status_code in (10216, 10222):
+                    raise ValueError(f"TikTok content is private, removed, or region-restricted (code {status_code})")
+                
                 item = detail.get("itemInfo", {}).get("itemStruct")
                 if item:
+                    if item.get("isContentClassified") and not item.get("video") and not item.get("imagePost"):
+                        raise ValueError("TikTok content is age-classified / login required")
                     return self.build_response_from_ssr(item, canonical_url, source="web_ssr", cookies=session_cookies)
+            except ValueError:
+                raise
             except Exception:
                 pass
 
@@ -546,17 +558,71 @@ class TikTokSSRExtractor:
         dynamic_cover = _first_url(video_data.get("dynamicCover"))
         duration = int(video_data.get("duration") or 0)
 
-        # Look for HD bitrate if present
+        # Codec detection & Selection
+        # Prioritize H.264 / AVC1 for 100% universal playback compatibility
+        # Filter out bytevc2 (unplayable) and /media-video-hvc1/ (broken 404 stream)
         hd_play_addr = ""
         bitrate_info = video_data.get("bitrateInfo") or []
         if bitrate_info and isinstance(bitrate_info, list):
-            sorted_bitrates = sorted(
-                bitrate_info,
-                key=lambda b: int(b.get("Bitrate", 0) or b.get("bitrate", 0)),
-                reverse=True,
-            )
-            if sorted_bitrates:
-                hd_play_addr = _first_url(sorted_bitrates[0].get("PlayAddr") or sorted_bitrates[0].get("playAddr"))
+            valid_bitrates = []
+            for b in bitrate_info:
+                if not isinstance(b, dict):
+                    continue
+                p_addr = _first_url(b.get("PlayAddr") or b.get("playAddr"))
+                if not p_addr:
+                    continue
+                if "/media-video-hvc1/" in p_addr:
+                    continue
+                gear = str(b.get("GearName") or "").lower()
+                codec_type = str(b.get("CodecType") or "").lower()
+                url_key = str(b.get("PlayAddr", {}).get("UrlKey") or "")
+                
+                # Exclude bytevc2 (unplayable custom codec)
+                if "bytevc2" in gear or "bytevc2" in codec_type or "bytevc2" in url_key:
+                    continue
+                
+                # Priority: H.264/AVC1 is preferred over bytevc1 (H.265)
+                is_h264 = "h264" in gear or "h264" in codec_type or "h264" in url_key or "avc1" in codec_type
+                bitrate_val = int(b.get("Bitrate", 0) or b.get("bitrate", 0) or 0)
+                
+                valid_bitrates.append({
+                    "url": p_addr,
+                    "bitrate": bitrate_val,
+                    "is_h264": is_h264,
+                })
+            
+            if valid_bitrates:
+                valid_bitrates.sort(key=lambda x: (x["is_h264"], x["bitrate"]), reverse=True)
+                hd_play_addr = valid_bitrates[0]["url"]
+
+        # Subtitles / Captions
+        subtitles = {}
+        subtitle_infos = video_data.get("subtitleInfos") or item.get("subtitleInfos") or []
+        if isinstance(subtitle_infos, list):
+            for sub in subtitle_infos:
+                if isinstance(sub, dict):
+                    lang = sub.get("LanguageCodeName") or sub.get("Language") or "en"
+                    sub_url = sub.get("Url") or sub.get("url") or ""
+                    if sub_url:
+                        subtitles.setdefault(lang, []).append({
+                            "url": sub_url,
+                            "lang": sub.get("LanguageName") or lang,
+                            "ext": "vtt" if "vtt" in sub.get("Format", "").lower() else "webvtt",
+                        })
+        cla_info = item.get("cla_info") or video_data.get("claInfo") or {}
+        if isinstance(cla_info, dict):
+            captions = cla_info.get("captions") or []
+            if isinstance(captions, list):
+                for c in captions:
+                    if isinstance(c, dict):
+                        lang = c.get("lang") or "en"
+                        c_url = c.get("url") or ""
+                        if c_url:
+                            subtitles.setdefault(lang, []).append({
+                                "url": c_url,
+                                "lang": c.get("lang_name") or lang,
+                                "ext": "vtt",
+                            })
 
         download_link = {}
         if hd_play_addr:
@@ -616,7 +682,7 @@ class TikTokSSRExtractor:
             })
             download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
 
-        return {
+        res_dict = {
             "status": "tunnel",
             "extract_source": source,
             "title": title,
@@ -639,6 +705,9 @@ class TikTokSSRExtractor:
                 "avatarLarger": avatar,
             },
         }
+        if subtitles:
+            res_dict["subtitles"] = subtitles
+        return res_dict
 
     def build_response_from_frontity(self, vdata: Dict[str, Any], canonical_url: str, source: str = "web_embed_ssr", cookies: str = "") -> Dict[str, Any]:
         item = vdata.get("itemInfos", {})
@@ -681,14 +750,15 @@ class TikTokSSRExtractor:
                         "impersonate": self.impersonate,
                         "cookies": cookies,
                     })
+                    link = f"/tiktok/download?key={key_photo}"
                     photos.append({
-                        "index": idx,
+                        "type": "photo",
                         "url": img_url,
-                        "download_url": f"/tiktok/download?key={key_photo}",
+                        "download_link": link,
                     })
 
             download_link = {
-                "no_watermark": [p["download_url"] for p in photos],
+                "no_watermark": [p["download_link"] for p in photos],
             }
             if music_url:
                 key_mp3 = create_session({

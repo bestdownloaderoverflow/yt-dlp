@@ -58,7 +58,13 @@ UNIT_FACTOR = {
     "tib": 1024 ** 4, "tb": 1000 ** 4,
 }
 
-COUNTRY_ORDER = {"Indonesia": 0, "Singapore": 1, "Vietnam": 2, "WARP": 3}
+COUNTRY_ORDER = {
+    "Cloudflare WARP (IPv6)": 0,
+    "Mullvad VPN (Dual-Stack)": 1,
+    "Surfshark VPN (IPv4)": 2,
+    "Indonesia": 3,
+    "Singapore": 4,
+}
 
 
 # --- Parsers -----------------------------------------------------------------
@@ -328,17 +334,15 @@ def main() -> int:
         )
         exit_ip = safe_read(os.path.join(cycle_dir, f"ip-{idx}")).strip()
 
-        # Determine country
-        country = ph.get("country")
-        if not country or country == "?":
-            if 1 <= i <= 6:
-                country = "Indonesia"
-            elif 7 <= i <= 12:
-                country = "Singapore"
-            elif 13 <= i <= 18:
-                country = "Vietnam"
-            else:
-                country = "Wireproxy"
+        # Determine provider & country
+        if 12 <= i <= 18:
+            country = "Cloudflare WARP (IPv6)"
+        elif 7 <= i <= 11:
+            country = "Mullvad VPN (Dual-Stack)"
+        elif 1 <= i <= 6:
+            country = "Surfshark VPN (IPv4)"
+        else:
+            country = "Wireproxy"
 
         is_probe_ok = (http_code == 200 and bool(exit_ip))
         is_healthy = bool(ph.get("healthy")) if "healthy" in ph else is_probe_ok

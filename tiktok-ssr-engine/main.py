@@ -266,45 +266,65 @@ async def download_tiktok_media(
     filename = f"{author}_{media_type}.{ext}"
     safe_filename = quote(filename)
 
-    proxies = {"http": proxy, "https": proxy} if proxy else None
     upstream_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Referer": "https://www.tiktok.com/",
+        "Accept": "*/*",
     }
 
     range_header = request.headers.get("Range")
     if range_header:
         upstream_headers["Range"] = range_header
+    elif media_type in ("video", "mp3"):
+        upstream_headers["Range"] = "bytes=0-"
 
-    try:
-        client = AsyncSession(impersonate=impersonate, proxies=proxies)
-        resp = await client.get(direct_url, headers=upstream_headers, stream=True, timeout=30)
+    resp = None
+    client = None
+    proxy_dict = {"http": proxy, "https": proxy} if proxy else None
+    stream_proxy_candidates = [proxy_dict, None] if proxy_dict else [None]
 
-        response_headers = {
-            "Content-Type": resp.headers.get("Content-Type", content_type),
-            "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=UTF-8''{safe_filename}",
-            "Accept-Ranges": "bytes",
-        }
-        if "Content-Length" in resp.headers:
-            response_headers["Content-Length"] = resp.headers["Content-Length"]
-        if "Content-Range" in resp.headers:
-            response_headers["Content-Range"] = resp.headers["Content-Range"]
+    for p in stream_proxy_candidates:
+        try:
+            client = AsyncSession(impersonate=impersonate, proxies=p)
+            resp = await client.get(direct_url, headers=upstream_headers, stream=True, allow_redirects=True, timeout=30)
+            if resp.status_code in (200, 206):
+                break
+            await client.close()
+            client = None
+        except Exception:
+            if client:
+                await client.close()
+                client = None
 
-        async def stream_generator():
-            try:
-                async for chunk in resp.aiter_content(chunk_size=64 * 1024):
-                    yield chunk
-            finally:
+    if not resp or resp.status_code not in (200, 206):
+        if client:
+            await client.close()
+        status_err = resp.status_code if resp else "timeout"
+        raise HTTPException(status_code=502, detail=f"CDN streaming error: HTTP {status_err}")
+
+    response_headers = {
+        "Content-Type": resp.headers.get("Content-Type", content_type),
+        "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=UTF-8''{safe_filename}",
+        "Accept-Ranges": "bytes",
+    }
+    if "Content-Length" in resp.headers:
+        response_headers["Content-Length"] = resp.headers["Content-Length"]
+    if "Content-Range" in resp.headers:
+        response_headers["Content-Range"] = resp.headers["Content-Range"]
+
+    async def stream_generator():
+        try:
+            async for chunk in resp.aiter_content(chunk_size=64 * 1024):
+                yield chunk
+        finally:
+            if client:
                 await client.close()
 
-        status_code = resp.status_code if resp.status_code in (200, 206) else 200
-        return StreamingResponse(
-            stream_generator(),
-            status_code=status_code,
-            headers=response_headers,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Streaming error: {e}")
+    return StreamingResponse(
+        stream_generator(),
+        status_code=resp.status_code,
+        headers=response_headers,
+    )
 
 
 def get_auto_workers() -> int:

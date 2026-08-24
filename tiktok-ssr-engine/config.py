@@ -66,13 +66,43 @@ def get_proxy_pool() -> List[str]:
         return [DEFAULT_PROXY]
     return []
 
-_proxy_index = random.randint(0, 1000)
+def get_warp_proxies() -> List[str]:
+    if PROXY_COUNT >= 12:
+        return [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(12, PROXY_COUNT + 1)]
+    return []
 
-def get_next_proxy() -> Optional[str]:
-    global _proxy_index
+
+def get_geo_proxies() -> List[str]:
+    """Returns Indonesia & Singapore proxies (Surfshark 01..06 + Mullvad 07..11) for geo-locked content."""
+    if PROXY_COUNT >= 11:
+        surfshark = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(1, 7)]
+        mullvad = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(7, 12)]
+        res = []
+        for i in range(max(len(surfshark), len(mullvad))):
+            if i < len(surfshark):
+                res.append(surfshark[i])
+            if i < len(mullvad):
+                res.append(mullvad[i])
+        return res
+    return []
+
+
+_proxy_index = random.randint(0, 1000)
+_geo_index = random.randint(0, 1000)
+
+
+def get_next_proxy(prefer_geo: bool = False) -> Optional[str]:
+    global _proxy_index, _geo_index
+    if prefer_geo:
+        geo_pool = get_geo_proxies()
+        if geo_pool:
+            p = geo_pool[_geo_index % len(geo_pool)]
+            _geo_index = (_geo_index + 1) % len(geo_pool)
+            return p
+
     pool = get_proxy_pool()
     if not pool:
-        return None
+        return DEFAULT_PROXY or None
     p = pool[_proxy_index % len(pool)]
     _proxy_index = (_proxy_index + 1) % len(pool)
     return p

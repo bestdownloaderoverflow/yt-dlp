@@ -121,9 +121,12 @@ async def extract_tiktok(
         print(f"📥 [REQUEST] Extracting: {target_url}", flush=True)
 
     for attempt in range(1, max_attempts + 1):
-        proxy = req_proxy or get_next_proxy() or DEFAULT_PROXY or None
+        # On retry (attempt >= 2), automatically prioritize Indonesia/Singapore Geo-Proxies
+        # to guarantee resolving regional geo-blocks (e.g. Vidio Sports) instantly without looping!
+        prefer_geo = (attempt >= 2) if not req_proxy else False
+        proxy = req_proxy or get_next_proxy(prefer_geo=prefer_geo) or DEFAULT_PROXY or None
         if VERBOSE_LOGS:
-            print(f"  🔄 [Attempt {attempt}/{max_attempts}] Trying proxy: {proxy}", flush=True)
+            print(f"  🔄 [Attempt {attempt}/{max_attempts}] Trying proxy: {proxy} (Geo-Priority: {prefer_geo})", flush=True)
         try:
             extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
             result = await extractor.extract(target_url)

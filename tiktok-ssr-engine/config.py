@@ -9,8 +9,9 @@ TIKTOK_API_KEY = os.getenv("TIKTOK_API_KEY", "")
 REDIS_URL = os.getenv("REDIS_URL", "")
 DEFAULT_PROXY = os.getenv("DEFAULT_PROXY", "")
 DEFAULT_IMPERSONATE = os.getenv("DEFAULT_IMPERSONATE", "chrome120")
-CACHE_TTL = int(os.getenv("CACHE_TTL", "120"))  # 2 minutes extraction cache
+CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))  # 5 minutes extraction cache
 VERBOSE_LOGS = os.getenv("VERBOSE_LOGS", "0").lower() in ("1", "true", "yes")
+MAX_ATTEMPTS = int(os.getenv("MAX_ATTEMPTS", "4"))
 
 # Proxy Pool Configuration
 PROXY_COUNT = int(os.getenv("PROXY_COUNT", "0"))

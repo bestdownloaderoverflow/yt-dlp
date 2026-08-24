@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from config import CACHE_TTL, DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, PORT, TIKTOK_API_KEY, VERBOSE_LOGS, get_next_proxy
+from config import CACHE_TTL, DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, MAX_ATTEMPTS, PORT, TIKTOK_API_KEY, VERBOSE_LOGS, get_next_proxy
 from extractor import TikTokSSRExtractor
 from session import get_cached_extraction, get_session, set_cached_extraction
 
@@ -114,7 +114,7 @@ async def extract_tiktok(
 
     impersonate = req_impersonate or DEFAULT_IMPERSONATE
 
-    max_attempts = 4 if not req_proxy else 1
+    max_attempts = MAX_ATTEMPTS if not req_proxy else 1
     last_error = None
 
     if VERBOSE_LOGS:

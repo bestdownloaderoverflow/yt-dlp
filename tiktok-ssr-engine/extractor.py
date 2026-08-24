@@ -731,35 +731,35 @@ class TikTokSSRExtractor:
         cover = covers[0] if covers else ""
 
         # Case 1: Photo Slideshow
-        if image_post and image_post.get("images"):
-            images = image_post.get("images", [])
-            photos = []
-            image_urls = []
-            for idx, img in enumerate(images, start=1):
-                url_list = img.get("displayImage", {}).get("urlList") or []
-                img_url = url_list[0] if url_list else ""
-                if img_url:
-                    image_urls.append(img_url)
-                    key_photo = create_session({
-                        "url": canonical_url,
-                        "type": "photo",
-                        "index": idx,
-                        "direct_url": img_url,
-                        "author": safe_author,
-                        "proxy": self.proxy,
-                        "impersonate": self.impersonate,
-                        "cookies": cookies,
-                    })
-                    link = f"/tiktok/download?key={key_photo}"
-                    photos.append({
-                        "type": "photo",
-                        "url": img_url,
-                        "download_link": link,
-                    })
+        if image_post:
+            images = image_post.get("displayImages") or image_post.get("images") or []
+            if images:
+                photos = []
+                image_urls = []
+                for idx, img in enumerate(images, start=1):
+                    img_url = _first_url(img.get("displayImage") or img.get("urlList") or img.get("imageURL") or img)
+                    if img_url:
+                        image_urls.append(img_url)
+                        key_photo = create_session({
+                            "url": canonical_url,
+                            "type": "photo",
+                            "photo_index": idx,
+                            "direct_url": img_url,
+                            "author": safe_author,
+                            "proxy": self.proxy,
+                            "impersonate": self.impersonate,
+                            "cookies": cookies,
+                        })
+                        link = f"/tiktok/download?key={key_photo}"
+                        photos.append({
+                            "type": "photo",
+                            "url": img_url,
+                            "download_link": link,
+                        })
 
-            download_link = {
-                "no_watermark": [p["download_link"] for p in photos],
-            }
+                download_link = {
+                    "no_watermark": [p["download_link"] for p in photos],
+                }
             if music_url:
                 key_mp3 = create_session({
                     "url": canonical_url,

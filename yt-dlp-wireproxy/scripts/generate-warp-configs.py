@@ -91,9 +91,11 @@ def generate_single_warp_config(proxy: str = None) -> dict:
 
 def format_wireproxy_conf(warp: dict, socks5_port: int = 1080) -> str:
     """Format into wireproxy config file."""
+    v4 = warp['ipv4'] if warp['ipv4'].endswith('/32') else f"{warp['ipv4']}/32"
+    v6 = warp['ipv6'] if warp['ipv6'].endswith('/128') else f"{warp['ipv6']}/128"
     return f"""[Interface]
 # Cloudflare WARP Account ID: {warp['account_id']}
-Address = {warp['ipv4']}, {warp['ipv6']}
+Address = {v4}, {v6}
 PrivateKey = {warp['private_key']}
 DNS = 1.1.1.1, 2606:4700:4700::1111
 

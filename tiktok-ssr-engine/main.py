@@ -234,7 +234,7 @@ async def download_tiktok_media(
     disposition = "attachment" if download else "inline"
 
     # Slideshow video renderer
-    if media_type == "slideshow":
+    if media_type in ("slideshow", "slideshow_render"):
         photo_urls = session_data.get("photo_urls") or []
         audio_url = session_data.get("audio_url")
         if not photo_urls:

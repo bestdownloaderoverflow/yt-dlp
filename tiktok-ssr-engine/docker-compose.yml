@@ -6,9 +6,9 @@ services:
     container_name: tiktok-ssr-engine
     restart: unless-stopped
     ports:
-      - "7799:7799"
+      - "9111:9111"
     environment:
-      - PORT=7799
+      - PORT=9111
       - TIKTOK_API_KEY=${TIKTOK_API_KEY:-test}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
       - DEFAULT_IMPERSONATE=chrome120

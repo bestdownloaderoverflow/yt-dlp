@@ -2,7 +2,7 @@ import asyncio
 import httpx
 
 async def test_api():
-    async with httpx.AsyncClient(base_url="http://127.0.0.1:7799") as client:
+    async with httpx.AsyncClient(base_url="http://127.0.0.1:9111") as client:
         # 1. Health check
         h = await client.get("/health")
         print("Health status:", h.status_code, h.json())

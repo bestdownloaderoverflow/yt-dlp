@@ -670,7 +670,7 @@ class TikTokSSRExtractor:
 
             slideshow_key = create_session({
                 "url": canonical_url,
-                "type": "slideshow_render",
+                "type": "slideshow",
                 "photo_urls": image_urls,
                 "audio_url": music_url,
                 "author": safe_author,

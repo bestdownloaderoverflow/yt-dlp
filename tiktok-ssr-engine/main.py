@@ -13,9 +13,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from config import DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, PORT, TIKTOK_API_KEY, VERBOSE_LOGS, get_next_proxy
+from config import CACHE_TTL, DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, PORT, TIKTOK_API_KEY, VERBOSE_LOGS, get_next_proxy
 from extractor import TikTokSSRExtractor
-from session import get_session
+from session import get_cached_extraction, get_session, set_cached_extraction
 
 app = FastAPI(title="TikTok Direct Async SSR Scraper", version="1.0.0")
 
@@ -105,6 +105,13 @@ async def extract_tiktok(
     if not target_url:
         raise HTTPException(status_code=400, detail="URL is required")
 
+    # 1. Check Redis / In-Memory Extraction Cache first (0.5ms response for viral videos)
+    cached = get_cached_extraction(target_url)
+    if cached:
+        if VERBOSE_LOGS:
+            print(f"⚡ [CACHE HIT] Returning cached result for {target_url}", flush=True)
+        return JSONResponse(content=cached)
+
     impersonate = req_impersonate or DEFAULT_IMPERSONATE
 
     max_attempts = 4 if not req_proxy else 1
@@ -122,6 +129,9 @@ async def extract_tiktok(
             result = await extractor.extract(target_url)
             if VERBOSE_LOGS:
                 print(f"  ✅ [Attempt {attempt}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
+            
+            # Save successful extraction to cache
+            set_cached_extraction(target_url, result, ttl=CACHE_TTL or 300)
             return JSONResponse(content=result)
         except Exception as e:
             last_error = e

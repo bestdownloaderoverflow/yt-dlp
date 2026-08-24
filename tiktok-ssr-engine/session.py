@@ -60,3 +60,43 @@ def get_session(key: str) -> Optional[Dict[str, Any]]:
             return data
         _in_memory_sessions.pop(key, None)
     return None
+
+
+import hashlib
+
+def get_cached_extraction(url: str) -> Optional[Dict[str, Any]]:
+    if not url:
+        return None
+    url_hash = hashlib.sha256(url.strip().encode()).hexdigest()[:32]
+    if _redis_client:
+        try:
+            raw = _redis_client.get(f"extract:{url_hash}")
+            if raw:
+                return json.loads(raw)
+        except Exception:
+            pass
+
+    _cleanup_expired()
+    item = _in_memory_sessions.get(f"extract:{url_hash}")
+    if item:
+        data, exp = item
+        if exp >= time.time():
+            return data
+        _in_memory_sessions.pop(f"extract:{url_hash}", None)
+    return None
+
+
+def set_cached_extraction(url: str, data: Dict[str, Any], ttl: int = 300):
+    if not url or not data:
+        return
+    url_hash = hashlib.sha256(url.strip().encode()).hexdigest()[:32]
+    if _redis_client:
+        try:
+            _redis_client.setex(f"extract:{url_hash}", ttl, json.dumps(data))
+            return
+        except Exception:
+            pass
+
+    _cleanup_expired()
+    _in_memory_sessions[f"extract:{url_hash}"] = (data, time.time() + ttl)
+

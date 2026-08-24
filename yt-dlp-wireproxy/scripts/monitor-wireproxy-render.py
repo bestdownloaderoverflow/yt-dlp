@@ -255,13 +255,13 @@ COLS = [
     ("IDX", 3),
     ("CN", 10),
     ("STATUS", 7),
-    ("EXIT IP", 15),
+    ("EXIT IP", 32),
     ("LAT(ms)", 8),
     ("ACT", 3),
     ("FAIL", 4),
     ("COOL", 4),
     ("RST", 3),
-    ("LAST RESTART MESSAGE", 52),
+    ("LAST RESTART MESSAGE", 40),
     ("RX/TX", 13),
 ]
 

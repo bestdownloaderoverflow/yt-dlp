@@ -43,7 +43,7 @@ if [[ "${DETECTED_COUNT}" -gt 0 ]]; then
 else
   PROXY_COUNT="${PROXY_COUNT:-50}"
 fi
-IP_CHECK_URL="${IP_CHECK_URL:-https://api.ipify.org}"
+IP_CHECK_URL="${IP_CHECK_URL:-https://api64.ipify.org}"
 
 INTERVAL=5
 MODE="watch"

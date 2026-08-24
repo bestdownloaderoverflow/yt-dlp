@@ -120,13 +120,14 @@ class TikTokSSRExtractor:
         self.impersonate = impersonate or DEFAULT_IMPERSONATE
 
     async def resolve_url(self, session: AsyncSession, url: str) -> str:
-        parsed = urlparse(url)
+        clean_url = url.split("?")[0].strip()
+        parsed = urlparse(clean_url)
         if any(h in parsed.netloc for h in ["vm.tiktok.com", "vt.tiktok.com", "t.tiktok.com", "m.tiktok.com"]):
             headers = dict(DESKTOP_BROWSER_HEADERS)
             headers["Referer"] = "https://www.tiktok.com/"
             resp = await session.get(url, headers=headers, allow_redirects=True, timeout=10)
-            return resp.url
-        return url
+            return resp.url.split("?")[0].strip()
+        return clean_url
 
     async def extract_via_web_ssr(self, session: AsyncSession, canonical_url: str) -> Optional[Dict[str, Any]]:
         cookie_str = load_cookie_string()

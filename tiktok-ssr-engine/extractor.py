@@ -624,6 +624,9 @@ class TikTokSSRExtractor:
                                 "ext": "vtt",
                             })
 
+        if not play_addr and not hd_play_addr and not download_addr:
+            return None
+
         download_link = {}
         if hd_play_addr:
             key_hd = create_session({
@@ -814,8 +817,12 @@ class TikTokSSRExtractor:
             }
 
         # Case 2: Video
-        video_urls = item.get("video", {}).get("urls") or []
+        video_obj = item.get("video") or {}
+        video_urls = video_obj.get("urls") or []
         video_url = video_urls[0] if video_urls else ""
+
+        if not video_url:
+            return None
 
         key_hd = create_session({
             "url": canonical_url,

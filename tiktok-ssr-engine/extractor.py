@@ -114,6 +114,18 @@ def solve_slardar_challenge(html: str) -> Optional[Dict[str, str]]:
         return None
 
 
+def _session_cookie_string(session: AsyncSession) -> str:
+    try:
+        if not session or not session.cookies:
+            return ""
+        cookie_dict = dict(session.cookies)
+        if cookie_dict:
+            return "; ".join(f"{k}={v}" for k, v in cookie_dict.items())
+    except Exception:
+        pass
+    return ""
+
+
 class TikTokSSRExtractor:
     def __init__(self, proxy: Optional[str] = None, impersonate: Optional[str] = None):
         self.proxy = proxy
@@ -150,6 +162,8 @@ class TikTokSSRExtractor:
                 resp = await session.get(canonical_url, headers=headers, timeout=15)
                 html = resp.text
 
+        session_cookies = _session_cookie_string(session)
+
         # 1. Primary: __UNIVERSAL_DATA_FOR_REHYDRATION__
         match = re.search(
             r'<script\s+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"\s+type="application/json">([^<]+)</script>',
@@ -162,7 +176,7 @@ class TikTokSSRExtractor:
                 detail = scope.get("webapp.video-detail", {})
                 item = detail.get("itemInfo", {}).get("itemStruct")
                 if item:
-                    return self.build_response_from_ssr(item, canonical_url, source="web_ssr")
+                    return self.build_response_from_ssr(item, canonical_url, source="web_ssr", cookies=session_cookies)
             except Exception:
                 pass
 
@@ -177,7 +191,7 @@ class TikTokSSRExtractor:
                 items = data.get("ItemModule", {})
                 if items:
                     item = next(iter(items.values()))
-                    return self.build_response_from_ssr(item, canonical_url, source="web_sigi")
+                    return self.build_response_from_ssr(item, canonical_url, source="web_sigi", cookies=session_cookies)
             except Exception:
                 pass
 
@@ -192,7 +206,7 @@ class TikTokSSRExtractor:
                 props = data.get("props", {}).get("pageProps", {})
                 item = props.get("itemInfo", {}).get("itemStruct")
                 if item:
-                    return self.build_response_from_ssr(item, canonical_url, source="web_next")
+                    return self.build_response_from_ssr(item, canonical_url, source="web_next", cookies=session_cookies)
             except Exception:
                 pass
 
@@ -207,6 +221,8 @@ class TikTokSSRExtractor:
         if not match:
             return None
 
+        session_cookies = _session_cookie_string(session)
+
         try:
             d = json.loads(match.group(1))
             source = d.get("source", {})
@@ -214,7 +230,7 @@ class TikTokSSRExtractor:
             for k, v in data.items():
                 if isinstance(v, dict) and "videoData" in v:
                     vdata = v["videoData"]
-                    return self.build_response_from_frontity(vdata, canonical_url, source="web_embed_ssr")
+                    return self.build_response_from_frontity(vdata, canonical_url, source="web_embed_ssr", cookies=session_cookies)
         except Exception:
             pass
         return None
@@ -242,6 +258,8 @@ class TikTokSSRExtractor:
         title = title_match.group(1).strip() if title_match else ""
         safe_author = sanitize_filename_part(nickname)
 
+        session_cookies = _session_cookie_string(session)
+
         # Check Photo / Slide elements
         slide_matches = re.findall(r'href=["\'](https://tikcdn\.io/ssstik/[^"\'m/][^"\']*)["\']', html) or re.findall(r'data-splide-lazy=["\'](https://[^"\']+)["\']', html)
         if slide_matches:
@@ -268,6 +286,7 @@ class TikTokSSRExtractor:
                     "author": safe_author,
                     "proxy": self.proxy,
                     "impersonate": self.impersonate,
+                    "cookies": session_cookies,
                 })
                 link = f"/tiktok/download?key={k}"
                 photo_keys.append(link)
@@ -282,6 +301,7 @@ class TikTokSSRExtractor:
                     "author": safe_author,
                     "proxy": self.proxy,
                     "impersonate": self.impersonate,
+                    "cookies": session_cookies,
                 })
                 download_link["mp3"] = f"/tiktok/download?key={mp3_key}"
 
@@ -293,6 +313,7 @@ class TikTokSSRExtractor:
                 "author": safe_author,
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
+                "cookies": session_cookies,
             })
 
             return {
@@ -338,6 +359,7 @@ class TikTokSSRExtractor:
             "author": safe_author,
             "proxy": self.proxy,
             "impersonate": self.impersonate,
+            "cookies": session_cookies,
         })
 
         download_link = {
@@ -353,6 +375,7 @@ class TikTokSSRExtractor:
                 "author": safe_author,
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
+                "cookies": session_cookies,
             })
             download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
 
@@ -413,7 +436,7 @@ class TikTokSSRExtractor:
 
             raise ValueError("Unable to extract video or photo slideshow from TikTok. Verify the post is public.")
 
-    def build_response_from_ssr(self, item: Dict[str, Any], canonical_url: str, source: str = "web_ssr") -> Dict[str, Any]:
+    def build_response_from_ssr(self, item: Dict[str, Any], canonical_url: str, source: str = "web_ssr", cookies: str = "") -> Dict[str, Any]:
         author_data = item.get("author", {})
         nickname = author_data.get("nickname") or author_data.get("uniqueId") or "unknown"
         unique_id = author_data.get("uniqueId") or nickname
@@ -460,6 +483,7 @@ class TikTokSSRExtractor:
                     "author": safe_author,
                     "proxy": self.proxy,
                     "impersonate": self.impersonate,
+                    "cookies": cookies,
                 })
                 link = f"/tiktok/download?key={k}"
                 photo_keys.append(link)
@@ -474,6 +498,7 @@ class TikTokSSRExtractor:
                     "author": safe_author,
                     "proxy": self.proxy,
                     "impersonate": self.impersonate,
+                    "cookies": cookies,
                 })
                 download_link["mp3"] = f"/tiktok/download?key={mp3_key}"
 
@@ -485,6 +510,7 @@ class TikTokSSRExtractor:
                 "author": safe_author,
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
+                "cookies": cookies,
             })
 
             return {
@@ -543,6 +569,7 @@ class TikTokSSRExtractor:
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
                 "duration": duration,
+                "cookies": cookies,
             })
             download_link["no_watermark_hd"] = f"/tiktok/download?key={key_hd}"
 
@@ -556,6 +583,7 @@ class TikTokSSRExtractor:
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
                 "duration": duration,
+                "cookies": cookies,
             })
             download_link["no_watermark"] = f"/tiktok/download?key={key_sd}"
             if "no_watermark_hd" not in download_link:
@@ -571,6 +599,7 @@ class TikTokSSRExtractor:
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
                 "duration": duration,
+                "cookies": cookies,
             })
             download_link["watermark"] = f"/tiktok/download?key={key_wm}"
 
@@ -583,6 +612,7 @@ class TikTokSSRExtractor:
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
                 "duration": music_duration or duration,
+                "cookies": cookies,
             })
             download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
 
@@ -610,7 +640,7 @@ class TikTokSSRExtractor:
             },
         }
 
-    def build_response_from_frontity(self, vdata: Dict[str, Any], canonical_url: str, source: str = "web_embed_ssr") -> Dict[str, Any]:
+    def build_response_from_frontity(self, vdata: Dict[str, Any], canonical_url: str, source: str = "web_embed_ssr", cookies: str = "") -> Dict[str, Any]:
         item = vdata.get("itemInfos", {})
         author = vdata.get("authorInfos", {})
         music = vdata.get("musicInfos", {})
@@ -649,6 +679,7 @@ class TikTokSSRExtractor:
                         "author": safe_author,
                         "proxy": self.proxy,
                         "impersonate": self.impersonate,
+                        "cookies": cookies,
                     })
                     photos.append({
                         "index": idx,
@@ -656,7 +687,9 @@ class TikTokSSRExtractor:
                         "download_url": f"/tiktok/download?key={key_photo}",
                     })
 
-            download_link = {}
+            download_link = {
+                "no_watermark": [p["download_url"] for p in photos],
+            }
             if music_url:
                 key_mp3 = create_session({
                     "url": canonical_url,
@@ -665,6 +698,7 @@ class TikTokSSRExtractor:
                     "author": safe_author,
                     "proxy": self.proxy,
                     "impersonate": self.impersonate,
+                    "cookies": cookies,
                 })
                 download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
 
@@ -676,6 +710,7 @@ class TikTokSSRExtractor:
                 "author": safe_author,
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
+                "cookies": cookies,
             })
 
             return {
@@ -720,6 +755,7 @@ class TikTokSSRExtractor:
             "author": safe_author,
             "proxy": self.proxy,
             "impersonate": self.impersonate,
+            "cookies": cookies,
         })
         key_sd = create_session({
             "url": canonical_url,
@@ -729,6 +765,7 @@ class TikTokSSRExtractor:
             "author": safe_author,
             "proxy": self.proxy,
             "impersonate": self.impersonate,
+            "cookies": cookies,
         })
 
         download_link = {
@@ -744,6 +781,7 @@ class TikTokSSRExtractor:
                 "author": safe_author,
                 "proxy": self.proxy,
                 "impersonate": self.impersonate,
+                "cookies": cookies,
             })
             download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
 

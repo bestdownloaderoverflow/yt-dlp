@@ -153,24 +153,32 @@ async def stream_rendered_slideshow(
     proxy: Optional[str],
     impersonate: str,
     duration_per_image: int = 3,
+    cookies: Optional[str] = None,
 ):
     temp_dir = tempfile.mkdtemp(prefix="tiktok_slideshow_")
     work_dir = Path(temp_dir)
     proxies = {"http": proxy, "https": proxy} if proxy else None
+
+    fetch_headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://www.tiktok.com/",
+    }
+    if cookies:
+        fetch_headers["Cookie"] = cookies
 
     try:
         async with AsyncSession(impersonate=impersonate, proxies=proxies) as session:
             image_paths = []
             for i, img_url in enumerate(photo_urls):
                 img_path = work_dir / f"img_{i}.jpg"
-                res = await session.get(img_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.tiktok.com/"}, timeout=15)
+                res = await session.get(img_url, headers=fetch_headers, timeout=15)
                 img_path.write_bytes(res.content)
                 image_paths.append(str(img_path))
 
             audio_path = None
             if audio_url:
                 aud_file = work_dir / "audio.mp3"
-                res_aud = await session.get(audio_url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://www.tiktok.com/"}, timeout=15)
+                res_aud = await session.get(audio_url, headers=fetch_headers, timeout=15)
                 aud_file.write_bytes(res_aud.content)
                 audio_path = str(aud_file)
 
@@ -231,6 +239,7 @@ async def download_tiktok_media(
     media_type = session_data.get("type") or "video"
     proxy = session_data.get("proxy") or DEFAULT_PROXY or None
     impersonate = session_data.get("impersonate") or DEFAULT_IMPERSONATE
+    session_cookies = session_data.get("cookies")
     disposition = "attachment" if download else "inline"
 
     # Slideshow video renderer
@@ -242,7 +251,7 @@ async def download_tiktok_media(
         filename = f"{author}_slideshow.mp4"
         safe_filename = quote(filename)
         return StreamingResponse(
-            stream_rendered_slideshow(photo_urls, audio_url, proxy, impersonate),
+            stream_rendered_slideshow(photo_urls, audio_url, proxy, impersonate, cookies=session_cookies),
             media_type="video/mp4",
             headers={
                 "Content-Type": "video/mp4",
@@ -272,6 +281,8 @@ async def download_tiktok_media(
         "Accept": "*/*",
         "Accept-Encoding": "identity",
     }
+    if session_cookies:
+        upstream_headers["Cookie"] = session_cookies
 
     range_header = request.headers.get("Range")
     if range_header:

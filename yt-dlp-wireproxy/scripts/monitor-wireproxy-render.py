@@ -60,7 +60,7 @@ UNIT_FACTOR = {
 
 COUNTRY_ORDER = {
     "Cloudflare WARP (IPv6)": 0,
-    "Mullvad VPN (Dual-Stack)": 1,
+    "Mullvad VPN (IPv4)": 1,
     "Surfshark VPN (IPv4)": 2,
     "Indonesia": 3,
     "Singapore": 4,
@@ -338,7 +338,7 @@ def main() -> int:
         if 12 <= i:
             country = "Cloudflare WARP (IPv6)"
         elif 7 <= i <= 11:
-            country = "Mullvad VPN (Dual-Stack)"
+            country = "Mullvad VPN (IPv4)"
         elif 1 <= i <= 6:
             country = "Surfshark VPN (IPv4)"
         else:

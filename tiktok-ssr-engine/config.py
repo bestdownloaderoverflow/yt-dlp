@@ -34,7 +34,7 @@ def get_proxy_pool() -> List[str]:
         return [p.strip() for p in RAW_PROXY_LIST.split(",") if p.strip()]
     if PROXY_COUNT >= 12:
         # Group 1: 12..PROXY_COUNT (Cloudflare WARP IPv6 Anycast - 39 nodes)
-        # Group 2: 07..11 (Mullvad Dual-Stack ID/SG - 5 nodes)
+        # Group 2: 07..11 (Mullvad IPv4 ID/SG - 5 nodes)
         # Group 3: 01..06 (Surfshark IPv4 ID/SG - 6 nodes)
         warp_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(12, PROXY_COUNT + 1)]
         mullvad_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(7, 12)]

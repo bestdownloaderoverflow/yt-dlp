@@ -26,24 +26,34 @@ def get_proxy_pool() -> List[str]:
     """
     if RAW_PROXY_LIST:
         return [p.strip() for p in RAW_PROXY_LIST.split(",") if p.strip()]
-    if PROXY_COUNT == 18:
-        # Group 1: 12..18 (Cloudflare WARP IPv6 Anycast)
+    if PROXY_COUNT >= 12:
+        # Group 1: 12..PROXY_COUNT (Cloudflare WARP IPv6 Anycast)
         # Group 2: 07..11 (Mullvad Dual-Stack ID/SG)
         # Group 3: 01..06 (Surfshark IPv4 ID/SG)
-        warp_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(12, 19)]
+        warp_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(12, PROXY_COUNT + 1)]
         mullvad_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(7, 12)]
         surfshark_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(1, 7)]
         
         interleaved = []
-        for i in range(7):
-            interleaved.append(warp_list[i])
+        max_len = max(len(warp_list), len(mullvad_list), len(surfshark_list))
+        for i in range(max_len):
+            if i < len(warp_list):
+                interleaved.append(warp_list[i])
             interleaved.append(mullvad_list[i % len(mullvad_list)])
             interleaved.append(surfshark_list[i % len(surfshark_list)])
-        # Limit to unique 18 proxies in balanced sequence
+            if i + 1 < len(warp_list):
+                interleaved.append(warp_list[i + 1])
+        
+        # Preserve all unique proxies in balanced order
         seen = set()
         final_pool = []
         for p in interleaved:
-            if p not in seen:
+            if p not in seen and len(final_pool) < PROXY_COUNT:
+                seen.add(p)
+                final_pool.append(p)
+        # Add any remaining warp nodes
+        for p in warp_list:
+            if p not in seen and len(final_pool) < PROXY_COUNT:
                 seen.add(p)
                 final_pool.append(p)
         return final_pool

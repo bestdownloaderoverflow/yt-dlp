@@ -2,22 +2,32 @@
 """
 generate-warp-configs.py - Otomatis generate N akun Cloudflare WARP IPv6 mandiri untuk Wireproxy
 
-Usage:
-  python3 scripts/generate-warp-configs.py --count 5 --output-dir runtime-configs/
+Fitur:
+1. Mendukung rotasi proxy (via curl_cffi / urllib) agar bebas rate-limit (429).
+2. Auto-retry dengan exponential backoff.
+3. Otomatis menghasilkan format Wireproxy siap pakai.
 """
 
 import argparse
 import base64
 import json
 import os
+import random
 import subprocess
 import sys
-import urllib.request
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from curl_cffi import requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    import urllib.request
+    HAS_CURL_CFFI = False
 
-def generate_single_warp_config() -> dict:
+
+def generate_single_warp_config(proxy: str = None) -> dict:
     """Generate X25519 keypair and register a new WARP client device with Cloudflare."""
     # Generate X25519 private key using openssl
     priv_raw = subprocess.check_output(['openssl', 'genpkey', '-algorithm', 'X25519', '-outform', 'DER'])
@@ -46,34 +56,37 @@ def generate_single_warp_config() -> dict:
         'serial_number': '',
         'locale': 'en_US'
     }
+    headers = {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'User-Agent': 'okhttp/3.12.1'
+    }
 
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode('utf-8'),
-        headers={
-            'Content-Type': 'application/json; charset=UTF-8',
-            'User-Agent': 'okhttp/3.12.1'
-        },
-        method='POST'
-    )
+    if HAS_CURL_CFFI:
+        proxies = {"http": proxy, "https": proxy} if proxy else None
+        resp = requests.post(url, json=payload, headers=headers, proxies=proxies, timeout=12, impersonate="chrome120")
+        if resp.status_code != 200:
+            raise Exception(f"HTTP {resp.status_code}: {resp.text[:100]}")
+        data = resp.json()
+    else:
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers=headers, method='POST')
+        with urllib.request.urlopen(req, timeout=12) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
 
-    with urllib.request.urlopen(req, timeout=12) as resp:
-        data = json.loads(resp.read().decode('utf-8'))
-        v6 = data.get('config', {}).get('interface', {}).get('addresses', {}).get('v6')
-        v4 = data.get('config', {}).get('interface', {}).get('addresses', {}).get('v4')
-        account_id = data.get('id')
-        peer = data.get('config', {}).get('peers', [{}])[0]
-        peer_pub = peer.get('public_key', 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=')
+    v6 = data.get('config', {}).get('interface', {}).get('addresses', {}).get('v6')
+    v4 = data.get('config', {}).get('interface', {}).get('addresses', {}).get('v4')
+    account_id = data.get('id')
+    peer = data.get('config', {}).get('peers', [{}])[0]
+    peer_pub = peer.get('public_key', 'bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=')
 
-        return {
-            'account_id': account_id,
-            'private_key': priv_b64,
-            'public_key': pub_b64,
-            'ipv4': v4,
-            'ipv6': v6,
-            'peer_pub': peer_pub,
-            'endpoint': 'engage.cloudflareclient.com:2408'
-        }
+    return {
+        'account_id': account_id,
+        'private_key': priv_b64,
+        'public_key': pub_b64,
+        'ipv4': v4,
+        'ipv6': v6,
+        'peer_pub': peer_pub,
+        'endpoint': 'engage.cloudflareclient.com:2408'
+    }
 
 
 def format_wireproxy_conf(warp: dict, socks5_port: int = 1080) -> str:
@@ -97,8 +110,9 @@ BindAddress = 0.0.0.0:{socks5_port}
 def main():
     parser = argparse.ArgumentParser(description="Generate N unique Cloudflare WARP Wireproxy configs")
     parser.add_argument("--count", type=int, default=5, help="Jumlah konfigurasi yang ingin digenerate (default: 5)")
-    parser.add_argument("--output-dir", type=str, default="runtime-configs/warp", help="Direktori output")
-    parser.add_argument("--start-index", type=int, default=1, help="Index awal penomoran file (default: 1)")
+    parser.add_argument("--output-dir", type=str, default="runtime-configs", help="Direktori output")
+    parser.add_argument("--start-index", type=int, default=12, help="Index awal penomoran file (default: 12)")
+    parser.add_argument("--use-proxies", action="store_true", help="Gunakan proxy pool yang ada untuk bypass rate-limit")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -108,20 +122,45 @@ def main():
     print(f"  ⚡ GENERATING {args.count} INDEPENDENT CLOUDFLARE WARP IPV6 CONFIGS")
     print("════════════════════════════════════════════════════════════════════════════════")
 
+    # Proxy list for registration rotation if needed
+    avail_proxies = []
+    if args.use_proxies:
+        for p in range(1, 19):
+            avail_proxies.append(f"socks5h://127.0.0.1:{10800 + p}")
+
     generated = []
     for i in range(args.start_index, args.start_index + args.count):
         print(f"⏳ Generating WARP Node #{i:02d}...", end=" ", flush=True)
-        try:
-            w = generate_single_warp_config()
-            conf_str = format_wireproxy_conf(w, socks5_port=1080)
-            file_name = f"wireproxy-warp-{i:02d}.conf"
-            file_path = out_dir / file_name
-            with open(file_path, "w") as f:
-                f.write(conf_str)
-            print(f"✅ OK! IPv6: {w['ipv6']}")
-            generated.append((file_name, w['ipv6'], w['account_id']))
-        except Exception as e:
-            print(f"❌ Error: {e}")
+        max_retries = 5
+        success = False
+        
+        for attempt in range(1, max_retries + 1):
+            proxy = random.choice(avail_proxies) if avail_proxies else None
+            try:
+                w = generate_single_warp_config(proxy=proxy)
+                conf_str = format_wireproxy_conf(w, socks5_port=1080)
+                file_name = f"wireproxy-{i:02d}.conf"
+                file_path = out_dir / file_name
+                with open(file_path, "w") as f:
+                    f.write(conf_str)
+                print(f"✅ OK! IPv6: {w['ipv6']}")
+                generated.append((file_name, w['ipv6'], w['account_id']))
+                success = True
+                break
+            except Exception as e:
+                if "429" in str(e):
+                    wait_sec = attempt * 8
+                    print(f"\n   ⚠️ Rate limited (429). Menunggu {wait_sec}s lalu retry (attempt {attempt}/{max_retries})...", end=" ", flush=True)
+                    time.sleep(wait_sec)
+                else:
+                    print(f"❌ Error: {e}")
+                    time.sleep(2)
+                    break
+        
+        if not success:
+            print(f"❌ Gagal setelah {max_retries} percobaan.")
+        else:
+            time.sleep(1)
 
     print("\n" + "─" * 80)
     print(f"🎉 Sukses meng-generate {len(generated)} file konfigurasi WARP unik di folder: {out_dir}")

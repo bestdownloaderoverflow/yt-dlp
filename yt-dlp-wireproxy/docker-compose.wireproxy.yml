@@ -280,6 +280,486 @@ services:
     networks:
       - ytdlp-wireproxy-network
 
+  wireproxy-19:
+    <<: *wireproxy
+    container_name: wireproxy-19
+    volumes:
+      - ./runtime-configs/wireproxy-19.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-20:
+    <<: *wireproxy
+    container_name: wireproxy-20
+    volumes:
+      - ./runtime-configs/wireproxy-20.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-21:
+    <<: *wireproxy
+    container_name: wireproxy-21
+    volumes:
+      - ./runtime-configs/wireproxy-21.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-22:
+    <<: *wireproxy
+    container_name: wireproxy-22
+    volumes:
+      - ./runtime-configs/wireproxy-22.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-23:
+    <<: *wireproxy
+    container_name: wireproxy-23
+    volumes:
+      - ./runtime-configs/wireproxy-23.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-24:
+    <<: *wireproxy
+    container_name: wireproxy-24
+    volumes:
+      - ./runtime-configs/wireproxy-24.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-25:
+    <<: *wireproxy
+    container_name: wireproxy-25
+    volumes:
+      - ./runtime-configs/wireproxy-25.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-26:
+    <<: *wireproxy
+    container_name: wireproxy-26
+    volumes:
+      - ./runtime-configs/wireproxy-26.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-27:
+    <<: *wireproxy
+    container_name: wireproxy-27
+    volumes:
+      - ./runtime-configs/wireproxy-27.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-28:
+    <<: *wireproxy
+    container_name: wireproxy-28
+    volumes:
+      - ./runtime-configs/wireproxy-28.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-29:
+    <<: *wireproxy
+    container_name: wireproxy-29
+    volumes:
+      - ./runtime-configs/wireproxy-29.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-30:
+    <<: *wireproxy
+    container_name: wireproxy-30
+    volumes:
+      - ./runtime-configs/wireproxy-30.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-31:
+    <<: *wireproxy
+    container_name: wireproxy-31
+    volumes:
+      - ./runtime-configs/wireproxy-31.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-32:
+    <<: *wireproxy
+    container_name: wireproxy-32
+    volumes:
+      - ./runtime-configs/wireproxy-32.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-33:
+    <<: *wireproxy
+    container_name: wireproxy-33
+    volumes:
+      - ./runtime-configs/wireproxy-33.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-34:
+    <<: *wireproxy
+    container_name: wireproxy-34
+    volumes:
+      - ./runtime-configs/wireproxy-34.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-35:
+    <<: *wireproxy
+    container_name: wireproxy-35
+    volumes:
+      - ./runtime-configs/wireproxy-35.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-36:
+    <<: *wireproxy
+    container_name: wireproxy-36
+    volumes:
+      - ./runtime-configs/wireproxy-36.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-37:
+    <<: *wireproxy
+    container_name: wireproxy-37
+    volumes:
+      - ./runtime-configs/wireproxy-37.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-38:
+    <<: *wireproxy
+    container_name: wireproxy-38
+    volumes:
+      - ./runtime-configs/wireproxy-38.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-39:
+    <<: *wireproxy
+    container_name: wireproxy-39
+    volumes:
+      - ./runtime-configs/wireproxy-39.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-40:
+    <<: *wireproxy
+    container_name: wireproxy-40
+    volumes:
+      - ./runtime-configs/wireproxy-40.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-41:
+    <<: *wireproxy
+    container_name: wireproxy-41
+    volumes:
+      - ./runtime-configs/wireproxy-41.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-42:
+    <<: *wireproxy
+    container_name: wireproxy-42
+    volumes:
+      - ./runtime-configs/wireproxy-42.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-43:
+    <<: *wireproxy
+    container_name: wireproxy-43
+    volumes:
+      - ./runtime-configs/wireproxy-43.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-44:
+    <<: *wireproxy
+    container_name: wireproxy-44
+    volumes:
+      - ./runtime-configs/wireproxy-44.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-45:
+    <<: *wireproxy
+    container_name: wireproxy-45
+    volumes:
+      - ./runtime-configs/wireproxy-45.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-46:
+    <<: *wireproxy
+    container_name: wireproxy-46
+    volumes:
+      - ./runtime-configs/wireproxy-46.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-47:
+    <<: *wireproxy
+    container_name: wireproxy-47
+    volumes:
+      - ./runtime-configs/wireproxy-47.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-48:
+    <<: *wireproxy
+    container_name: wireproxy-48
+    volumes:
+      - ./runtime-configs/wireproxy-48.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-49:
+    <<: *wireproxy
+    container_name: wireproxy-49
+    volumes:
+      - ./runtime-configs/wireproxy-49.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
+  wireproxy-50:
+    <<: *wireproxy
+    container_name: wireproxy-50
+    volumes:
+      - ./runtime-configs/wireproxy-50.conf:/etc/wireproxy/wireproxy.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - ytdlp-wireproxy-network
+
   redis:
     image: redis:7-alpine
     container_name: ytdlp-redis-wireproxy
@@ -300,7 +780,7 @@ services:
       - "9111:9111"
     environment:
       - PORT=9111
-      - PROXY_COUNT=18
+      - PROXY_COUNT=50
       - PROXY_HOST_PREFIX=wireproxy
       - PROXY_PORT=1080
       - TIKTOK_API_KEY=${TIKTOK_API_KEY}
@@ -327,6 +807,38 @@ services:
       - wireproxy-16
       - wireproxy-17
       - wireproxy-18
+      - wireproxy-19
+      - wireproxy-20
+      - wireproxy-21
+      - wireproxy-22
+      - wireproxy-23
+      - wireproxy-24
+      - wireproxy-25
+      - wireproxy-26
+      - wireproxy-27
+      - wireproxy-28
+      - wireproxy-29
+      - wireproxy-30
+      - wireproxy-31
+      - wireproxy-32
+      - wireproxy-33
+      - wireproxy-34
+      - wireproxy-35
+      - wireproxy-36
+      - wireproxy-37
+      - wireproxy-38
+      - wireproxy-39
+      - wireproxy-40
+      - wireproxy-41
+      - wireproxy-42
+      - wireproxy-43
+      - wireproxy-44
+      - wireproxy-45
+      - wireproxy-46
+      - wireproxy-47
+      - wireproxy-48
+      - wireproxy-49
+      - wireproxy-50
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -342,4 +854,3 @@ networks:
 
 volumes:
   redis-data:
-

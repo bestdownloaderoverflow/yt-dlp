@@ -37,7 +37,12 @@ else
 fi
 REDIS_CONTAINER="${REDIS_CONTAINER:-ytdlp-redis-wireproxy}"
 GATEWAY_PORT="${GATEWAY_PORT:-9111}"
-PROXY_COUNT="${PROXY_COUNT:-18}"
+DETECTED_COUNT=$(docker ps --filter "name=^/wireproxy-" --format '{{.Names}}' 2>/dev/null | wc -l | tr -d ' ' || echo "0")
+if [[ "${DETECTED_COUNT}" -gt 0 ]]; then
+  PROXY_COUNT="${PROXY_COUNT:-${DETECTED_COUNT}}"
+else
+  PROXY_COUNT="${PROXY_COUNT:-50}"
+fi
 IP_CHECK_URL="${IP_CHECK_URL:-https://api.ipify.org}"
 
 INTERVAL=5

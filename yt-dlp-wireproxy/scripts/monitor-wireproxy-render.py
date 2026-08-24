@@ -335,7 +335,7 @@ def main() -> int:
         exit_ip = safe_read(os.path.join(cycle_dir, f"ip-{idx}")).strip()
 
         # Determine provider & country
-        if 12 <= i <= 18:
+        if 12 <= i:
             country = "Cloudflare WARP (IPv6)"
         elif 7 <= i <= 11:
             country = "Mullvad VPN (Dual-Stack)"

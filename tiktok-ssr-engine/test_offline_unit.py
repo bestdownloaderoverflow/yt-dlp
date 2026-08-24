@@ -7,13 +7,28 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
-from config import get_proxy_pool
+from config import get_indo_proxies, get_next_proxy, get_proxy_pool
 from extractor import (
+    TikTokExtractError,
+    TikTokGeoBlockedError,
+    TikTokInfraError,
+    TikTokRegionRestrictedError,
     TikTokSSRExtractor,
+    _classify_error,
     _decode_ssstik_url,
     _first_url,
+    build_filename,
     sanitize_filename_part,
     solve_slardar_challenge,
+)
+from proxy_state import (
+    dec_in_flight,
+    get_in_flight,
+    inc_in_flight,
+    is_proxy_usable,
+    mark_proxy_cooldown,
+    mark_proxy_dead,
+    mark_proxy_usable,
 )
 from session import (
     create_session,
@@ -192,6 +207,107 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertIn("en", res["subtitles"])
         self.assertIn("id", res["subtitles"])
         self.assertEqual(res["subtitles"]["en"][0]["url"], "https://p16.tiktokcdn.com/sub_en.vtt")
+
+
+    def test_indo_proxy_pool(self):
+        with patch("config.PROXY_COUNT", 50):
+            pool = get_indo_proxies()
+            self.assertEqual(pool, [
+                "socks5h://wireproxy-01:1080",
+                "socks5h://wireproxy-02:1080",
+                "socks5h://wireproxy-06:1080",
+                "socks5h://wireproxy-07:1080",
+            ])
+        with patch("config.PROXY_COUNT", 3):
+            self.assertEqual(get_indo_proxies(), ["socks5h://wireproxy-01:1080", "socks5h://wireproxy-02:1080"])
+
+    def test_error_classification(self):
+        class DummyErr(Exception):
+            pass
+
+        e = DummyErr("boom")
+        e.code = 5
+        self.assertIsInstance(_classify_error(e), TikTokInfraError)
+
+        e2 = DummyErr("timed out after 15s")
+        self.assertIsInstance(_classify_error(e2), TikTokInfraError)
+
+        e3 = DummyErr("could not resolve proxy")
+        self.assertIsInstance(_classify_error(e3), TikTokInfraError)
+
+        geo = TikTokGeoBlockedError()
+        self.assertIsInstance(_classify_error(geo), TikTokGeoBlockedError)
+
+        region = TikTokRegionRestrictedError()
+        self.assertIsInstance(_classify_error(region), TikTokRegionRestrictedError)
+
+        generic = _classify_error(DummyErr("some parse error"))
+        self.assertIsInstance(generic, TikTokExtractError)
+        self.assertNotIsInstance(generic, TikTokInfraError)
+
+    def test_build_filename_photo(self):
+        s = {"type": "photo", "photo_index": 3, "author": "M_Yusuf"}
+        self.assertEqual(build_filename(s), "M_Yusuf_photo_3.jpeg")
+
+    def test_build_filename_video(self):
+        s = {"type": "video", "quality": "no_watermark_hd", "author": "Joey_Batt"}
+        self.assertEqual(build_filename(s), "Joey_Batt_video_no_watermark_hd.mp4")
+
+    def test_build_filename_mp3(self):
+        s = {"type": "mp3", "author": "M_Yusuf"}
+        self.assertEqual(build_filename(s), "M_Yusuf_mp3.mp3")
+
+    def test_build_filename_slideshow(self):
+        s = {"type": "slideshow", "author": "M_Yusuf"}
+        self.assertEqual(build_filename(s), "M_Yusuf_slideshow.mp4")
+
+    def test_build_filename_fallbacks(self):
+        self.assertEqual(build_filename({"type": "video", "author": "X"}), "X_video.mp4")
+        self.assertEqual(build_filename({"author": "X"}), "X_video.mp4")
+        self.assertEqual(build_filename({"type": "photo", "author": "A", "index": 2}), "A_photo_2.jpeg")
+
+    def test_proxy_state_cooldown(self):
+        mark_proxy_cooldown("socks5h://wireproxy-01:1080", 5)
+        self.assertFalse(is_proxy_usable("socks5h://wireproxy-01:1080"))
+        self.assertTrue(is_proxy_usable("socks5h://wireproxy-99:1080"))
+        mark_proxy_usable("socks5h://wireproxy-01:1080")
+        self.assertTrue(is_proxy_usable("socks5h://wireproxy-01:1080"))
+
+    def test_proxy_state_dead_expiry(self):
+        mark_proxy_dead("socks5h://wireproxy-02:1080", 0)
+        self.assertTrue(is_proxy_usable("socks5h://wireproxy-02:1080"))
+        mark_proxy_dead("socks5h://wireproxy-02:1080", 5)
+        self.assertFalse(is_proxy_usable("socks5h://wireproxy-02:1080"))
+        mark_proxy_usable("socks5h://wireproxy-02:1080")
+
+    def test_in_flight_counter(self):
+        inc_in_flight("p1")
+        inc_in_flight("p1")
+        self.assertEqual(get_in_flight("p1"), 2)
+        dec_in_flight("p1")
+        self.assertEqual(get_in_flight("p1"), 1)
+        dec_in_flight("p1")
+        self.assertEqual(get_in_flight("p1"), 0)
+        dec_in_flight("p1")
+        self.assertEqual(get_in_flight("p1"), 0)
+
+    def test_get_next_proxy_skips_dead(self):
+        with patch("config.is_proxy_usable", side_effect=lambda p: "-01:" not in p):
+            with patch("config.PROXY_COUNT", 5):
+                for _ in range(20):
+                    p = get_next_proxy()
+                    self.assertIsNotNone(p)
+                    self.assertNotIn("-01:", p)
+
+    def test_get_next_proxy_least_loaded(self):
+        with patch("config.PROXY_COUNT", 3):
+            p_busy = "socks5h://wireproxy-01:1080"
+            p_idle = "socks5h://wireproxy-02:1080"
+            inc_in_flight(p_busy)
+            with patch("config.random.random", return_value=0.5):
+                for _ in range(10):
+                    self.assertEqual(get_next_proxy(), p_idle)
+            dec_in_flight(p_busy)
 
 
 if __name__ == "__main__":

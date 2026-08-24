@@ -1,5 +1,6 @@
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 import shutil
 import tempfile
@@ -14,10 +15,27 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from config import CACHE_TTL, DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, MAX_ATTEMPTS, PORT, TIKTOK_API_KEY, VERBOSE_LOGS, get_next_proxy
-from extractor import TikTokSSRExtractor
+from extractor import (
+    TikTokExtractError,
+    TikTokGeoBlockedError,
+    TikTokInfraError,
+    TikTokRegionRestrictedError,
+    TikTokSSRExtractor,
+    build_filename,
+)
+from proxy_state import dec_in_flight, inc_in_flight, mark_proxy_cooldown, mark_proxy_usable
 from session import get_cached_extraction, get_session, set_cached_extraction
 
-app = FastAPI(title="TikTok Direct Async SSR Scraper", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    from proxy_health import start_prober, stop_prober
+    start_prober()
+    yield
+    await stop_prober()
+
+
+app = FastAPI(title="TikTok Direct Async SSR Scraper", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -115,35 +133,83 @@ async def extract_tiktok(
     impersonate = req_impersonate or DEFAULT_IMPERSONATE
 
     max_attempts = MAX_ATTEMPTS if not req_proxy else 1
+    max_touches = 8
+    real_attempts = 0
+    touches = 0
+    prefer_indo = False
     last_error = None
 
     if VERBOSE_LOGS:
         print(f"📥 [REQUEST] Extracting: {target_url}", flush=True)
 
-    for attempt in range(1, max_attempts + 1):
-        # On retry (attempt >= 2), automatically prioritize Indonesia/Singapore Geo-Proxies
-        # to guarantee resolving regional geo-blocks (e.g. Vidio Sports) instantly without looping!
-        prefer_geo = (attempt >= 2) if not req_proxy else False
-        proxy = req_proxy or get_next_proxy(prefer_geo=prefer_geo) or DEFAULT_PROXY or None
+    while real_attempts < max_attempts and touches < max_touches:
+        touches += 1
+        real_attempts += 1
+
+        if prefer_indo:
+            proxy = req_proxy or get_next_proxy(indo_only=True) or get_next_proxy(prefer_geo=True)
+        else:
+            proxy = req_proxy or get_next_proxy(prefer_geo=(real_attempts >= 2))
+        proxy = proxy or DEFAULT_PROXY or None
+
         if VERBOSE_LOGS:
-            print(f"  🔄 [Attempt {attempt}/{max_attempts}] Trying proxy: {proxy} (Geo-Priority: {prefer_geo})", flush=True)
+            print(f"  🔄 [Attempt {real_attempts}/{max_attempts}] Trying proxy: {proxy} (Indo-Priority: {prefer_indo})", flush=True)
+        inc_in_flight(proxy)
         try:
             extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
             result = await extractor.extract(target_url)
+            mark_proxy_usable(proxy)
             if VERBOSE_LOGS:
-                print(f"  ✅ [Attempt {attempt}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
-            
+                print(f"  ✅ [Attempt {real_attempts}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
+
             # Save successful extraction to cache
             set_cached_extraction(target_url, result, ttl=CACHE_TTL or 300)
             return JSONResponse(content=result)
-        except Exception as e:
+        except TikTokInfraError as e:
+            # Proxy infrastructure failure: switch proxy WITHOUT consuming an attempt
+            real_attempts -= 1
             last_error = e
+            mark_proxy_cooldown(proxy, 60)
             if VERBOSE_LOGS:
-                print(f"  ⚠️ [Attempt {attempt}] FAILED on {proxy}: {e}", flush=True)
+                print(f"  ⚠️ [Touch {touches}] INFRA FAIL on {proxy} (attempt not consumed, cooldown 60s): {e}", flush=True)
             if req_proxy:
                 break
+        except TikTokRegionRestrictedError as e:
+            # Region-restricted content: go straight to Indonesia nodes
+            last_error = e
+            mark_proxy_cooldown(proxy, 30)
+            if VERBOSE_LOGS:
+                print(f"  ⚠️ [Attempt {real_attempts}] REGION-RESTRICTED on {proxy} (cooldown 30s) -> switching to Indonesia nodes", flush=True)
+            if req_proxy:
+                break
+            prefer_indo = True
+        except TikTokGeoBlockedError as e:
+            # IP blocked / WAF: go straight to Indonesia nodes
+            last_error = e
+            mark_proxy_cooldown(proxy, 30)
+            if VERBOSE_LOGS:
+                print(f"  ⚠️ [Attempt {real_attempts}] GEO-BLOCKED on {proxy} (cooldown 30s) -> switching to Indonesia nodes", flush=True)
+            if req_proxy:
+                break
+            prefer_indo = True
+        except TikTokExtractError as e:
+            last_error = e
+            mark_proxy_cooldown(proxy, 15)
+            if VERBOSE_LOGS:
+                print(f"  ⚠️ [Attempt {real_attempts}] FAILED on {proxy} (cooldown 15s): {e}", flush=True)
+            if req_proxy:
+                break
+        except Exception as e:
+            last_error = e
+            mark_proxy_cooldown(proxy, 15)
+            if VERBOSE_LOGS:
+                print(f"  ⚠️ [Attempt {real_attempts}] FAILED on {proxy} (cooldown 15s): {e}", flush=True)
+            if req_proxy:
+                break
+        finally:
+            dec_in_flight(proxy)
 
-    print(f"❌ [FAILED] All {max_attempts} attempts failed for {target_url}: {last_error}", flush=True)
+    print(f"❌ [FAILED] Extraction failed for {target_url} after {touches} proxy touches: {last_error}", flush=True)
     raise HTTPException(status_code=502, detail=f"Extraction failed: {last_error}")
 
 
@@ -248,7 +314,7 @@ async def download_tiktok_media(
         audio_url = session_data.get("audio_url")
         if not photo_urls:
             raise HTTPException(status_code=400, detail="No photos in slideshow session")
-        filename = f"{author}_slideshow.mp4"
+        filename = build_filename(session_data)
         safe_filename = quote(filename)
         return StreamingResponse(
             stream_rendered_slideshow(photo_urls, audio_url, proxy, impersonate, cookies=session_cookies),
@@ -272,7 +338,7 @@ async def download_tiktok_media(
         ext = "jpeg"
         content_type = "image/jpeg"
 
-    filename = f"{author}_{media_type}.{ext}"
+    filename = build_filename(session_data)
     safe_filename = quote(filename)
 
     upstream_headers = {
@@ -315,7 +381,8 @@ async def download_tiktok_media(
         raise HTTPException(status_code=502, detail=f"CDN streaming error: HTTP {status_err}")
 
     response_headers = {
-        "Content-Type": resp.headers.get("Content-Type", content_type),
+        # For mp3 keep our explicit type: upstream CDN sometimes reports video/mp4
+        "Content-Type": content_type if media_type == "mp3" else resp.headers.get("Content-Type", content_type),
         "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=UTF-8''{safe_filename}",
         "Accept-Ranges": "bytes",
     }

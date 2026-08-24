@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import hashlib
 import json
@@ -22,6 +23,46 @@ def generate_blockbuster_headers(min_headers: int = 2, max_headers: int = 6) -> 
     }
 
 
+class TikTokExtractError(Exception):
+    """Base class for TikTok extraction errors with retry semantics."""
+
+    retryable = True
+    message = "TikTok extraction failed"
+
+    def __init__(self, msg: str = ""):
+        super().__init__(msg or self.message)
+
+
+class TikTokGeoBlockedError(TikTokExtractError):
+    """IP blocked / WAF challenge (status 10204). Retry with geo/ID proxies."""
+
+    message = "TikTok IP blocked / WAF challenge (code 10204)"
+
+
+class TikTokRegionRestrictedError(TikTokExtractError):
+    """Content is region-restricted or private (status 10216/10222/classified)."""
+
+    message = "TikTok content is private, removed, or region-restricted"
+
+
+class TikTokInfraError(TikTokExtractError):
+    """Proxy infrastructure failure (DNS resolve, connect refused, timeout)."""
+
+    message = "Proxy infrastructure failure"
+
+
+def _classify_error(e: Exception) -> TikTokExtractError:
+    if isinstance(e, TikTokExtractError):
+        return e
+    code = getattr(e, "code", None)
+    msg = str(e).lower()
+    if code in (5, 7, 28) or any(
+        s in msg for s in ("could not resolve", "connection refused", "timed out", "resolve proxy")
+    ):
+        return TikTokInfraError(str(e))
+    return TikTokExtractError(str(e))
+
+
 DESKTOP_BROWSER_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9,id;q=0.8",
@@ -43,6 +84,22 @@ def sanitize_filename_part(value: Optional[str], fallback: str = "tiktok") -> st
         return fallback
     cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "_", value).strip("_")
     return cleaned or fallback
+
+
+def build_filename(session_data: Dict[str, Any]) -> str:
+    author = session_data.get("author") or "tiktok"
+    media_type = session_data.get("type") or "video"
+    if media_type == "photo":
+        idx = session_data.get("photo_index") or session_data.get("index") or 1
+        return f"{author}_photo_{idx}.jpeg"
+    if media_type == "mp3":
+        return f"{author}_mp3.mp3"
+    if media_type in ("slideshow", "slideshow_render"):
+        return f"{author}_slideshow.mp4"
+    quality = session_data.get("quality") or ""
+    if quality:
+        return f"{author}_video_{quality}.mp4"
+    return f"{author}_video.mp4"
 
 
 def _first_url(val: Any) -> str:
@@ -154,7 +211,9 @@ class TikTokSSRExtractor:
 
         # Solve challenge if present
         if "SlardarWAF" in html or "_wafchallengeid" in html:
-            solved = solve_slardar_challenge(html)
+            # CPU-bound (up to 1M SHA256 iterations): run in a thread so the
+            # event loop keeps serving other requests during the solve.
+            solved = await asyncio.to_thread(solve_slardar_challenge, html)
             if solved:
                 for k, v in solved.items():
                     session.cookies.set(k, v, domain=".tiktok.com")
@@ -178,16 +237,16 @@ class TikTokSSRExtractor:
                 # Status code classification
                 status_code = detail.get("statusCode")
                 if status_code == 10204:
-                    raise ValueError("TikTok IP blocked / WAF challenge (code 10204)")
+                    raise TikTokGeoBlockedError()
                 elif status_code in (10216, 10222):
-                    raise ValueError(f"TikTok content is private, removed, or region-restricted (code {status_code})")
+                    raise TikTokRegionRestrictedError(f"TikTok content is private, removed, or region-restricted (code {status_code})")
                 
                 item = detail.get("itemInfo", {}).get("itemStruct")
                 if item:
                     if item.get("isContentClassified") and not item.get("video") and not item.get("imagePost"):
-                        raise ValueError("TikTok content is age-classified / login required")
+                        raise TikTokRegionRestrictedError("TikTok content is age-classified / login required")
                     return self.build_response_from_ssr(item, canonical_url, source="web_ssr", cookies=session_cookies)
-            except ValueError:
+            except TikTokExtractError:
                 raise
             except Exception:
                 pass
@@ -419,13 +478,18 @@ class TikTokSSRExtractor:
         async with AsyncSession(impersonate=self.impersonate, proxies=proxies) as session:
             final_url = await self.resolve_url(session, url)
 
+            classified_error: Optional[TikTokExtractError] = None
+
             # Strategy 1: Direct Web SSR Scraping
             try:
                 res = await self.extract_via_web_ssr(session, final_url)
                 if res:
                     return res
             except Exception as e:
+                classified_error = _classify_error(e)
                 print(f"[SSR Engine] Web SSR failed on proxy {self.proxy}: {e}")
+                if isinstance(classified_error, TikTokInfraError):
+                    raise classified_error
 
             # Strategy 2: Official Embed SSR Scraping (__FRONTITY_CONNECT_STATE__)
             item_id_match = re.search(r'/(?:video|photo)/(\d+)', final_url)
@@ -436,7 +500,10 @@ class TikTokSSRExtractor:
                     if res:
                         return res
                 except Exception as e:
+                    classified_error = _classify_error(e)
                     print(f"[SSR Engine] Embed SSR failed on proxy {self.proxy}: {e}")
+                    if isinstance(classified_error, TikTokInfraError):
+                        raise classified_error
 
             # Strategy 3: Web Scraper Fallback Engine
             try:
@@ -444,9 +511,14 @@ class TikTokSSRExtractor:
                 if res:
                     return res
             except Exception as e:
+                classified_error = _classify_error(e)
                 print(f"[SSR Engine] Web Fallback failed on proxy {self.proxy}: {e}")
+                if isinstance(classified_error, TikTokInfraError):
+                    raise classified_error
 
-            raise ValueError("Unable to extract video or photo slideshow from TikTok. Verify the post is public.")
+            if classified_error is not None:
+                raise classified_error
+            raise TikTokExtractError("Unable to extract video or photo slideshow from TikTok. Verify the post is public.")
 
     def build_response_from_ssr(self, item: Dict[str, Any], canonical_url: str, source: str = "web_ssr", cookies: str = "") -> Dict[str, Any]:
         author_data = item.get("author", {})
@@ -471,19 +543,18 @@ class TikTokSSRExtractor:
 
         # Check Photo / Slideshow
         image_post = item.get("imagePost") or item.get("images")
-        if image_post:
-            images = []
-            if isinstance(image_post, dict) and "images" in image_post:
-                images = image_post["images"]
-            elif isinstance(image_post, list):
-                images = image_post
+        images = []
+        if isinstance(image_post, dict) and "images" in image_post:
+            images = image_post["images"]
+        elif isinstance(image_post, list):
+            images = image_post
+        image_urls = [
+            _first_url(img.get("imageURL") if isinstance(img, dict) else img)
+            for img in images
+        ]
+        image_urls = [u for u in image_urls if u]
 
-            image_urls = []
-            for img in images:
-                u = _first_url(img.get("imageURL") if isinstance(img, dict) else img)
-                if u:
-                    image_urls.append(u)
-
+        if image_post and image_urls:
             photo_keys = []
             photos = []
             for i, img_url in enumerate(image_urls):
@@ -736,85 +807,87 @@ class TikTokSSRExtractor:
         # Case 1: Photo Slideshow
         if image_post:
             images = image_post.get("displayImages") or image_post.get("images") or []
-            if images:
+            image_urls = []
+            for img in images:
+                u = _first_url(img.get("displayImage") or img.get("urlList") or img.get("imageURL") or img)
+                if u:
+                    image_urls.append(u)
+
+            if image_urls:
                 photos = []
-                image_urls = []
-                for idx, img in enumerate(images, start=1):
-                    img_url = _first_url(img.get("displayImage") or img.get("urlList") or img.get("imageURL") or img)
-                    if img_url:
-                        image_urls.append(img_url)
-                        key_photo = create_session({
-                            "url": canonical_url,
-                            "type": "photo",
-                            "photo_index": idx,
-                            "direct_url": img_url,
-                            "author": safe_author,
-                            "proxy": self.proxy,
-                            "impersonate": self.impersonate,
-                            "cookies": cookies,
-                        })
-                        link = f"/tiktok/download?key={key_photo}"
-                        photos.append({
-                            "type": "photo",
-                            "url": img_url,
-                            "download_link": link,
-                        })
+                for idx, img_url in enumerate(image_urls, start=1):
+                    key_photo = create_session({
+                        "url": canonical_url,
+                        "type": "photo",
+                        "photo_index": idx,
+                        "direct_url": img_url,
+                        "author": safe_author,
+                        "proxy": self.proxy,
+                        "impersonate": self.impersonate,
+                        "cookies": cookies,
+                    })
+                    link = f"/tiktok/download?key={key_photo}"
+                    photos.append({
+                        "type": "photo",
+                        "url": img_url,
+                        "download_link": link,
+                    })
 
                 download_link = {
                     "no_watermark": [p["download_link"] for p in photos],
                 }
-            if music_url:
-                key_mp3 = create_session({
+                if music_url:
+                    key_mp3 = create_session({
+                        "url": canonical_url,
+                        "type": "mp3",
+                        "direct_url": music_url,
+                        "author": safe_author,
+                        "proxy": self.proxy,
+                        "impersonate": self.impersonate,
+                        "cookies": cookies,
+                    })
+                    download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
+
+                slideshow_key = create_session({
                     "url": canonical_url,
-                    "type": "mp3",
-                    "direct_url": music_url,
+                    "type": "slideshow",
+                    "photo_urls": image_urls,
+                    "audio_url": music_url,
                     "author": safe_author,
                     "proxy": self.proxy,
                     "impersonate": self.impersonate,
                     "cookies": cookies,
                 })
-                download_link["mp3"] = f"/tiktok/download?key={key_mp3}"
 
-            slideshow_key = create_session({
-                "url": canonical_url,
-                "type": "slideshow",
-                "photo_urls": image_urls,
-                "audio_url": music_url,
-                "author": safe_author,
-                "proxy": self.proxy,
-                "impersonate": self.impersonate,
-                "cookies": cookies,
-            })
-
-            return {
-                "status": "picker",
-                "extract_source": source,
-                "title": title,
-                "description": title,
-                "statistics": {
-                    "play_count": item.get("playCount", 0),
-                    "digg_count": item.get("diggCount", 0),
-                    "comment_count": item.get("commentCount", 0),
-                    "share_count": item.get("shareCount", 0),
-                },
-                "artist": nickname,
-                "cover": image_urls[0] if image_urls else cover,
-                "duration": len(image_urls) * 3,
-                "audio": music_url,
-                "download_link": download_link,
-                "photos": photos,
-                "download_slideshow": f"/tiktok/download?key={slideshow_key}",
-                "download_slideshow_link": f"/tiktok/download?key={slideshow_key}",
-                "author": {
-                    "nickname": nickname,
-                    "uniqueId": unique_id,
-                    "signature": author.get("signature", ""),
-                    "avatar": avatar,
-                    "avatarThumb": avatar,
-                    "avatarMedium": avatar,
-                    "avatarLarger": avatar,
-                },
-            }
+                return {
+                    "status": "picker",
+                    "extract_source": source,
+                    "title": title,
+                    "description": title,
+                    "statistics": {
+                        "play_count": item.get("playCount", 0),
+                        "digg_count": item.get("diggCount", 0),
+                        "comment_count": item.get("commentCount", 0),
+                        "share_count": item.get("shareCount", 0),
+                    },
+                    "artist": nickname,
+                    "cover": image_urls[0] if image_urls else cover,
+                    "duration": len(image_urls) * 3,
+                    "audio": music_url,
+                    "download_link": download_link,
+                    "photos": photos,
+                    "download_slideshow": f"/tiktok/download?key={slideshow_key}",
+                    "download_slideshow_link": f"/tiktok/download?key={slideshow_key}",
+                    "author": {
+                        "nickname": nickname,
+                        "uniqueId": unique_id,
+                        "signature": author.get("signature", ""),
+                        "avatar": avatar,
+                        "avatarThumb": avatar,
+                        "avatarMedium": avatar,
+                        "avatarLarger": avatar,
+                    },
+                }
 
         # Case 2: Video
         video_obj = item.get("video") or {}

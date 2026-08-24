@@ -3,6 +3,8 @@ import random
 from pathlib import Path
 from typing import List, Optional
 
+from proxy_state import get_in_flight, is_proxy_usable
+
 PORT = int(os.getenv("PORT", "9111"))
 HOST = os.getenv("HOST", "0.0.0.0")
 TIKTOK_API_KEY = os.getenv("TIKTOK_API_KEY", "")
@@ -11,13 +13,16 @@ DEFAULT_PROXY = os.getenv("DEFAULT_PROXY", "")
 DEFAULT_IMPERSONATE = os.getenv("DEFAULT_IMPERSONATE", "chrome120")
 CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))  # 5 minutes extraction cache
 VERBOSE_LOGS = os.getenv("VERBOSE_LOGS", "0").lower() in ("1", "true", "yes")
-MAX_ATTEMPTS = int(os.getenv("MAX_ATTEMPTS", "4"))
+MAX_ATTEMPTS = int(os.getenv("MAX_ATTEMPTS", "3"))
 
 # Proxy Pool Configuration
 PROXY_COUNT = int(os.getenv("PROXY_COUNT", "0"))
 PROXY_HOST_PREFIX = os.getenv("PROXY_HOST_PREFIX", "wireproxy")
 PROXY_PORT = int(os.getenv("PROXY_PORT", "1080"))
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
+INDONESIA_PROXY_INDEXES = [
+    int(i) for i in os.getenv("INDONESIA_PROXIES", "1,2,6,7").split(",") if i.strip().isdigit()
+]
 
 def get_proxy_pool() -> List[str]:
     """
@@ -91,25 +96,37 @@ def get_geo_proxies() -> List[str]:
     return []
 
 
-_proxy_index = random.randint(0, 1000)
-_geo_index = random.randint(0, 1000)
+def get_indo_proxies() -> List[str]:
+    """Returns Indonesia-only proxies for region-restricted content."""
+    return [
+        f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}"
+        for i in INDONESIA_PROXY_INDEXES
+        if 1 <= i <= PROXY_COUNT
+    ]
 
 
-def get_next_proxy(prefer_geo: bool = False) -> Optional[str]:
-    global _proxy_index, _geo_index
-    if prefer_geo:
-        geo_pool = get_geo_proxies()
-        if geo_pool:
-            p = geo_pool[_geo_index % len(geo_pool)]
-            _geo_index = (_geo_index + 1) % len(geo_pool)
+def _pick_from(candidates: List[str]) -> Optional[str]:
+    """Pick the best candidate: skip dead/cooldown proxies, prefer least-loaded."""
+    usable = [p for p in candidates if p and is_proxy_usable(p)]
+    if not usable:
+        return None
+    usable.sort(key=lambda p: (get_in_flight(p), random.random()))
+    return usable[0]
+
+
+def get_next_proxy(prefer_geo: bool = False, indo_only: bool = False) -> Optional[str]:
+    if indo_only:
+        p = _pick_from(get_indo_proxies())
+        if p:
             return p
-
-    pool = get_proxy_pool()
-    if not pool:
-        return DEFAULT_PROXY or None
-    p = pool[_proxy_index % len(pool)]
-    _proxy_index = (_proxy_index + 1) % len(pool)
-    return p
+    if prefer_geo:
+        p = _pick_from(get_geo_proxies())
+        if p:
+            return p
+    p = _pick_from(get_proxy_pool())
+    if p:
+        return p
+    return DEFAULT_PROXY or None
 
 # Cookie file path search
 COOKIE_PATHS = [

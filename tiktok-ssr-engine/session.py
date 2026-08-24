@@ -29,11 +29,15 @@ def _cleanup_expired():
 def create_session(data: Dict[str, Any]) -> str:
     key = secrets.token_urlsafe(24)
     if _redis_client:
-        try:
-            _redis_client.setex(f"session:{key}", SESSION_TTL_SECONDS, json.dumps(data))
-            return key
-        except Exception:
-            pass
+        for attempt in range(2):
+            try:
+                _redis_client.setex(f"session:{key}", SESSION_TTL_SECONDS, json.dumps(data))
+                return key
+            except Exception as e:
+                if attempt == 0:
+                    print(f"[Session] Redis setex failed, retrying once: {e}", flush=True)
+                else:
+                    print(f"[Session] Redis setex failed twice, falling back to in-memory: {e}", flush=True)
 
     _cleanup_expired()
     _in_memory_sessions[key] = (data, time.time() + SESSION_TTL_SECONDS)
@@ -45,12 +49,17 @@ def get_session(key: str) -> Optional[Dict[str, Any]]:
         return None
 
     if _redis_client:
-        try:
-            raw = _redis_client.get(f"session:{key}")
-            if raw:
-                return json.loads(raw)
-        except Exception:
-            pass
+        for attempt in range(2):
+            try:
+                raw = _redis_client.get(f"session:{key}")
+                if raw:
+                    return json.loads(raw)
+                break
+            except Exception as e:
+                if attempt == 0:
+                    print(f"[Session] Redis get failed, retrying once: {e}", flush=True)
+                else:
+                    print(f"[Session] Redis get failed twice, falling back to in-memory: {e}", flush=True)
 
     _cleanup_expired()
     item = _in_memory_sessions.get(key)
@@ -91,11 +100,15 @@ def set_cached_extraction(url: str, data: Dict[str, Any], ttl: int = 300):
         return
     url_hash = hashlib.sha256(url.strip().encode()).hexdigest()[:32]
     if _redis_client:
-        try:
-            _redis_client.setex(f"extract:{url_hash}", ttl, json.dumps(data))
-            return
-        except Exception:
-            pass
+        for attempt in range(2):
+            try:
+                _redis_client.setex(f"extract:{url_hash}", ttl, json.dumps(data))
+                return
+            except Exception as e:
+                if attempt == 0:
+                    print(f"[Session] Redis cache set failed, retrying once: {e}", flush=True)
+                else:
+                    print(f"[Session] Redis cache set failed twice, falling back to in-memory: {e}", flush=True)
 
     _cleanup_expired()
     _in_memory_sessions[f"extract:{url_hash}"] = (data, time.time() + ttl)

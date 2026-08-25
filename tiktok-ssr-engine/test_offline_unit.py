@@ -7,6 +7,8 @@ import json
 import unittest
 from unittest.mock import MagicMock, patch
 
+from fastapi import HTTPException
+
 from config import get_indo_proxies, get_next_proxy, get_proxy_pool, get_warp_proxies
 from extractor import (
     TikTokExtractError,
@@ -22,9 +24,12 @@ from extractor import (
     solve_slardar_challenge,
 )
 from proxy_health import apply_block_verdicts, classify_block_response
+from main import extraction_cache_key, validate_tiktok_post_url
 from proxy_state import (
     clear_proxy_blocked,
+    clear_proxy_exit_ip,
     dec_in_flight,
+    get_proxy_exit_ip,
     get_in_flight,
     get_in_flight_many,
     inc_in_flight,
@@ -33,7 +38,9 @@ from proxy_state import (
     mark_proxy_blocked,
     mark_proxy_cooldown,
     mark_proxy_dead,
+    mark_proxy_tunnel_alive,
     mark_proxy_usable,
+    set_proxy_exit_ip,
 )
 from session import (
     create_session,
@@ -44,6 +51,16 @@ from session import (
 
 
 class TestTikTokSSROffline(unittest.TestCase):
+
+    def test_tiktok_url_validation_and_cache_normalization(self):
+        url = validate_tiktok_post_url(
+            "https://www.tiktok.com/@user/video/123?is_from_webapp=1&sender_device=pc"
+        )
+        self.assertEqual(extraction_cache_key(url), "https://www.tiktok.com/@user/video/123")
+        with self.assertRaises(HTTPException):
+            validate_tiktok_post_url("https://example.com/video/123")
+        with self.assertRaises(HTTPException):
+            validate_tiktok_post_url("https://www.tiktok.com/about")
 
     def test_sanitize_filename_part(self):
         self.assertEqual(sanitize_filename_part("User @Special!"), "User_Special")
@@ -212,6 +229,28 @@ class TestTikTokSSROffline(unittest.TestCase):
         # Verify H.264 was prioritized over bytevc1/bytevc2
         self.assertEqual(session["direct_url"], "https://v16m.tiktokcdn.com/h264_720.mp4")
 
+    def test_duplicate_video_variants_are_not_advertised(self):
+        extractor = TikTokSSRExtractor()
+        shared = {"UrlKey": "h264_1080p_same", "UrlList": ["https://v16.example/video/object.mp4"]}
+        dummy_item = {
+            "author": {"nickname": "Tester"},
+            "video": {
+                "playAddr": shared,
+                "downloadAddr": shared,
+                "hasWatermark": False,
+                "bitrateInfo": [{
+                    "Bitrate": 1500000,
+                    "CodecType": "h264",
+                    "GearName": "h264_1080",
+                    "PlayAddr": shared,
+                }],
+            },
+        }
+        links = extractor.build_response_from_ssr(
+            dummy_item, "https://www.tiktok.com/@tester/video/123"
+        )["download_link"]
+        self.assertEqual(set(links), {"no_watermark"})
+
     def test_subtitles_extraction(self):
         extractor = TikTokSSRExtractor()
         dummy_item = {
@@ -261,6 +300,17 @@ class TestTikTokSSROffline(unittest.TestCase):
                 for w in warp:
                     clear_proxy_blocked(w)
 
+    def test_indo_only_selection_is_strict(self):
+        with patch("config.PROXY_COUNT", 21):
+            indo = get_indo_proxies()
+            for proxy in indo:
+                mark_proxy_blocked(proxy, 60)
+            try:
+                self.assertIsNone(get_next_proxy(indo_only=True))
+            finally:
+                for proxy in indo:
+                    clear_proxy_blocked(proxy)
+
     def test_blocked_proxy_is_not_usable(self):
         p = "socks5h://wireproxy-18:1080"
         self.assertFalse(is_proxy_blocked(p))
@@ -269,6 +319,24 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertFalse(is_proxy_usable(p))
         clear_proxy_blocked(p)
         self.assertTrue(is_proxy_usable(p))
+
+    def test_tunnel_liveness_does_not_clear_tiktok_block(self):
+        p = "socks5h://wireproxy-18:1080"
+        mark_proxy_blocked(p, 60)
+        try:
+            mark_proxy_tunnel_alive(p)
+            self.assertTrue(is_proxy_blocked(p))
+            self.assertFalse(is_proxy_usable(p))
+        finally:
+            clear_proxy_blocked(p)
+
+    def test_exit_ip_tracking(self):
+        p = "socks5h://audit-proxy.invalid:1080"
+        try:
+            set_proxy_exit_ip(p, "203.0.113.9")
+            self.assertEqual(get_proxy_exit_ip(p), "203.0.113.9")
+        finally:
+            clear_proxy_exit_ip(p)
 
     def test_block_classification(self):
         # Marker present means TikTok served real data: never a block.
@@ -299,6 +367,16 @@ class TestTikTokSSROffline(unittest.TestCase):
             self.assertFalse(is_proxy_blocked("socks5h://wireproxy-19:1080"))
         finally:
             for url in mixed:
+                clear_proxy_blocked(url)
+
+    def test_broken_block_probe_preserves_previous_verdict(self):
+        urls = [f"socks5h://wireproxy-{i:02d}:1080" for i in range(1, 6)]
+        mark_proxy_blocked(urls[0], 60)
+        try:
+            self.assertFalse(apply_block_verdicts({url: True for url in urls}))
+            self.assertTrue(is_proxy_blocked(urls[0]))
+        finally:
+            for url in urls:
                 clear_proxy_blocked(url)
 
     def test_error_classification(self):
@@ -414,7 +492,7 @@ class TestTikTokSSROffline(unittest.TestCase):
                     self.assertNotIn("-01:", p)
 
     def test_get_next_proxy_least_loaded(self):
-        with patch("config.PROXY_COUNT", 3):
+        with patch("config.PROXY_COUNT", 2):
             p_busy = "socks5h://wireproxy-01:1080"
             p_idle = "socks5h://wireproxy-02:1080"
             inc_in_flight(p_busy)

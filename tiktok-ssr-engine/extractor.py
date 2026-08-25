@@ -118,6 +118,20 @@ def _first_url(val: Any) -> str:
     return ""
 
 
+def _media_identity(value: Any) -> str:
+    """Best-effort identity used to avoid advertising CDN mirrors as qualities."""
+    if isinstance(value, dict):
+        key = value.get("UrlKey") or value.get("urlKey") or value.get("url_key")
+        if key:
+            return f"key:{key}"
+    url = _first_url(value)
+    if not url:
+        return ""
+    parsed = urlparse(url)
+    # TikTok frequently serves the same object from v16/v19 mirror hosts.
+    return f"path:{parsed.path}"
+
+
 def _decode_ssstik_url(url: str) -> str:
     if not url:
         return ""
@@ -435,7 +449,6 @@ class TikTokSSRExtractor:
 
         download_link = {
             "no_watermark": f"/tiktok/download?key={key_sd}",
-            "no_watermark_hd": f"/tiktok/download?key={key_sd}",
         }
 
         if music_url:
@@ -623,8 +636,10 @@ class TikTokSSRExtractor:
 
         # Video Post
         video_data = item.get("video", {})
-        play_addr = _first_url(video_data.get("playAddr"))
-        download_addr = _first_url(video_data.get("downloadAddr"))
+        play_addr_data = video_data.get("playAddr")
+        download_addr_data = video_data.get("downloadAddr")
+        play_addr = _first_url(play_addr_data)
+        download_addr = _first_url(download_addr_data)
         cover = _first_url(video_data.get("cover")) or _first_url(video_data.get("originCover"))
         dynamic_cover = _first_url(video_data.get("dynamicCover"))
         duration = int(video_data.get("duration") or 0)
@@ -633,6 +648,7 @@ class TikTokSSRExtractor:
         # Prioritize H.264 / AVC1 for 100% universal playback compatibility
         # Filter out bytevc2 (unplayable) and /media-video-hvc1/ (broken 404 stream)
         hd_play_addr = ""
+        hd_play_identity = ""
         bitrate_info = video_data.get("bitrateInfo") or []
         if bitrate_info and isinstance(bitrate_info, list):
             valid_bitrates = []
@@ -658,6 +674,7 @@ class TikTokSSRExtractor:
                 
                 valid_bitrates.append({
                     "url": p_addr,
+                    "identity": _media_identity(b.get("PlayAddr") or b.get("playAddr")),
                     "bitrate": bitrate_val,
                     "is_h264": is_h264,
                 })
@@ -665,6 +682,7 @@ class TikTokSSRExtractor:
             if valid_bitrates:
                 valid_bitrates.sort(key=lambda x: (x["is_h264"], x["bitrate"]), reverse=True)
                 hd_play_addr = valid_bitrates[0]["url"]
+                hd_play_identity = valid_bitrates[0]["identity"]
 
         # Subtitles / Captions
         subtitles = {}
@@ -699,20 +717,7 @@ class TikTokSSRExtractor:
             return None
 
         download_link = {}
-        if hd_play_addr:
-            key_hd = create_session({
-                "url": canonical_url,
-                "type": "video",
-                "quality": "no_watermark_hd",
-                "direct_url": hd_play_addr,
-                "author": safe_author,
-                "proxy": self.proxy,
-                "impersonate": self.impersonate,
-                "duration": duration,
-                "cookies": cookies,
-            })
-            download_link["no_watermark_hd"] = f"/tiktok/download?key={key_hd}"
-
+        play_identity = _media_identity(play_addr_data)
         if play_addr:
             key_sd = create_session({
                 "url": canonical_url,
@@ -726,10 +731,27 @@ class TikTokSSRExtractor:
                 "cookies": cookies,
             })
             download_link["no_watermark"] = f"/tiktok/download?key={key_sd}"
-            if "no_watermark_hd" not in download_link:
-                download_link["no_watermark_hd"] = f"/tiktok/download?key={key_sd}"
 
-        if download_addr:
+        if hd_play_addr and (not play_addr or hd_play_identity != play_identity):
+            key_hd = create_session({
+                "url": canonical_url,
+                "type": "video",
+                "quality": "no_watermark_hd",
+                "direct_url": hd_play_addr,
+                "author": safe_author,
+                "proxy": self.proxy,
+                "impersonate": self.impersonate,
+                "duration": duration,
+                "cookies": cookies,
+            })
+            download_link["no_watermark_hd"] = f"/tiktok/download?key={key_hd}"
+            if "no_watermark" not in download_link:
+                download_link["no_watermark"] = download_link["no_watermark_hd"]
+
+        has_watermark = bool(video_data.get("hasWatermark") or video_data.get("has_watermark"))
+        download_identity = _media_identity(download_addr_data)
+        known_identities = {identity for identity in (play_identity, hd_play_identity) if identity}
+        if download_addr and has_watermark and download_identity not in known_identities:
             key_wm = create_session({
                 "url": canonical_url,
                 "type": "video",
@@ -897,16 +919,6 @@ class TikTokSSRExtractor:
         if not video_url:
             return None
 
-        key_hd = create_session({
-            "url": canonical_url,
-            "type": "video",
-            "quality": "no_watermark_hd",
-            "direct_url": video_url,
-            "author": safe_author,
-            "proxy": self.proxy,
-            "impersonate": self.impersonate,
-            "cookies": cookies,
-        })
         key_sd = create_session({
             "url": canonical_url,
             "type": "video",
@@ -920,7 +932,6 @@ class TikTokSSRExtractor:
 
         download_link = {
             "no_watermark": f"/tiktok/download?key={key_sd}",
-            "no_watermark_hd": f"/tiktok/download?key={key_hd}",
         }
 
         if music_url:

@@ -3,7 +3,7 @@ import random
 from pathlib import Path
 from typing import List, Optional
 
-from proxy_state import get_in_flight_many, is_proxy_usable
+from proxy_state import get_in_flight_many, get_proxy_exit_ips_many, is_proxy_usable
 
 PORT = int(os.getenv("PORT", "9111"))
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -119,34 +119,59 @@ def get_indo_proxies() -> List[str]:
     ]
 
 
-def _pick_from(candidates: List[str]) -> Optional[str]:
-    """Pick the best candidate: skip dead/cooldown/blocked proxies, prefer least-loaded."""
-    usable = [p for p in candidates if p and is_proxy_usable(p)]
+def _pick_from(candidates: List[str], exclude: Optional[set[str]] = None,
+               exclude_exit_ips: Optional[set[str]] = None) -> Optional[str]:
+    """Pick a least-loaded candidate while weighting each public exit IP once."""
+    excluded = exclude or set()
+    excluded_ips = exclude_exit_ips or set()
+    usable = [p for p in candidates if p and p not in excluded and is_proxy_usable(p)]
     if not usable:
         return None
-    # One batched read for the whole candidate list; the load figure is shared
-    # across workers, so this reflects the service's real load, not this worker's.
+
     loads = get_in_flight_many(usable)
-    usable.sort(key=lambda p: (loads.get(p, 0), random.random()))
-    return usable[0]
+    exit_ips = get_proxy_exit_ips_many(usable)
+
+    # Multiple WARP configs can resolve to one public IP. Treat that as one exit
+    # group so three containers sharing an IP do not receive triple traffic.
+    groups: dict[str, list[str]] = {}
+    for proxy in usable:
+        exit_ip = exit_ips.get(proxy, "")
+        if exit_ip and exit_ip in excluded_ips:
+            continue
+        group_key = exit_ip or f"unknown:{proxy}"
+        groups.setdefault(group_key, []).append(proxy)
+    if not groups:
+        return None
+
+    group_loads = {
+        group_key: sum(loads.get(proxy, 0) for proxy in proxies)
+        for group_key, proxies in groups.items()
+    }
+    best_group_load = min(group_loads.values())
+    best_groups = [key for key, load in group_loads.items() if load == best_group_load]
+    selected_group = random.choice(best_groups)
+    proxies = groups[selected_group]
+    best_proxy_load = min(loads.get(proxy, 0) for proxy in proxies)
+    best_proxies = [proxy for proxy in proxies if loads.get(proxy, 0) == best_proxy_load]
+    return random.choice(best_proxies)
 
 
 def get_next_proxy(prefer_geo: bool = False, indo_only: bool = False,
-                   warp_only: bool = False) -> Optional[str]:
+                   warp_only: bool = False, exclude: Optional[set[str]] = None,
+                   exclude_exit_ips: Optional[set[str]] = None) -> Optional[str]:
     if warp_only:
         # Strict on purpose: the first attempt asks for Cloudflare or nothing, so
         # the caller decides the fallback instead of silently landing on a geo
         # node it was trying to save.
-        return _pick_from(get_warp_proxies())
+        return _pick_from(get_warp_proxies(), exclude, exclude_exit_ips)
     if indo_only:
-        p = _pick_from(get_indo_proxies())
-        if p:
-            return p
+        # Strict like warp_only: callers explicitly decide the fallback lane.
+        return _pick_from(get_indo_proxies(), exclude, exclude_exit_ips)
     if prefer_geo:
-        p = _pick_from(get_geo_proxies())
+        p = _pick_from(get_geo_proxies(), exclude, exclude_exit_ips)
         if p:
             return p
-    p = _pick_from(get_proxy_pool())
+    p = _pick_from(get_proxy_pool(), exclude, exclude_exit_ips)
     if p:
         return p
     return DEFAULT_PROXY or None

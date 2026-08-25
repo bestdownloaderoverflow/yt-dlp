@@ -29,12 +29,14 @@ if REDIS_URL:
         _redis_client = None
 
 _in_memory_until: Dict[str, float] = {}
+_in_memory_exit_ips: Dict[str, str] = {}
 _in_flight: Dict[str, int] = {}
 _lock = threading.Lock()
 
 DEAD_TTL_SECONDS = int(os.getenv("PROXY_DEAD_TTL", "120"))
 COOLDOWN_SECONDS = int(os.getenv("PROXY_COOLDOWN", "60"))
 BLOCKED_TTL_SECONDS = int(os.getenv("PROXY_BLOCKED_TTL", "300"))
+EXIT_IP_TTL_SECONDS = int(os.getenv("PROXY_EXIT_IP_TTL", "600"))
 # Safety net for counters orphaned by a worker that died mid-request: the key is
 # refreshed on every increment, so it only expires once a proxy has been idle
 # this long. Must comfortably exceed the slowest single extraction.
@@ -60,7 +62,7 @@ def _redis_set(name: str, until: float, ttl: int):
     if _redis_client is None:
         return
     try:
-        _redis_client.setex(name, max(ttl, 1), str(until))
+        _redis_client.set(name, str(until), ex=max(ttl, 1))
     except Exception:
         pass
 
@@ -132,6 +134,16 @@ def clear_proxy_blocked(proxy_url: str):
     _clear("blocked", proxy_url)
 
 
+def clear_proxy_dead(proxy_url: str):
+    """Clear tunnel liveness state without touching TikTok-specific state."""
+    _clear("dead", proxy_url)
+
+
+def clear_proxy_cooldown(proxy_url: str):
+    """Clear request cooldown without changing dead/blocked verdicts."""
+    _clear("cooldown", proxy_url)
+
+
 def is_proxy_blocked(proxy_url: str) -> bool:
     if not proxy_url:
         return False
@@ -139,11 +151,80 @@ def is_proxy_blocked(proxy_url: str) -> bool:
 
 
 def mark_proxy_usable(proxy_url: str):
+    """Mark fully usable after a successful official TikTok request."""
     if not proxy_url:
         return
     _clear("dead", proxy_url)
     _clear("cooldown", proxy_url)
     _clear("blocked", proxy_url)
+
+
+def mark_proxy_tunnel_alive(proxy_url: str):
+    """A generic liveness probe proves only that the tunnel works."""
+    clear_proxy_dead(proxy_url)
+
+
+def mark_proxy_request_success(proxy_url: str, *, tiktok_served: bool):
+    """Clear request failures; clear block only when TikTok served official data."""
+    if not proxy_url:
+        return
+    clear_proxy_dead(proxy_url)
+    clear_proxy_cooldown(proxy_url)
+    if tiktok_served:
+        clear_proxy_blocked(proxy_url)
+
+
+def set_proxy_exit_ip(proxy_url: str, exit_ip: str):
+    if not proxy_url or not exit_ip:
+        return
+    name = _key(proxy_url, "exitip")
+    if _redis_client is not None:
+        try:
+            _redis_client.set(name, exit_ip, ex=EXIT_IP_TTL_SECONDS)
+            return
+        except Exception:
+            pass
+    with _lock:
+        _in_memory_exit_ips[name] = exit_ip
+
+
+def get_proxy_exit_ip(proxy_url: str) -> str:
+    if not proxy_url:
+        return ""
+    name = _key(proxy_url, "exitip")
+    if _redis_client is not None:
+        try:
+            return _redis_client.get(name) or ""
+        except Exception:
+            pass
+    with _lock:
+        return _in_memory_exit_ips.get(name, "")
+
+
+def clear_proxy_exit_ip(proxy_url: str):
+    if not proxy_url:
+        return
+    name = _key(proxy_url, "exitip")
+    if _redis_client is not None:
+        try:
+            _redis_client.delete(name)
+        except Exception:
+            pass
+    with _lock:
+        _in_memory_exit_ips.pop(name, None)
+
+
+def get_proxy_exit_ips_many(proxy_urls) -> Dict[str, str]:
+    urls = [u for u in proxy_urls if u]
+    if not urls:
+        return {}
+    if _redis_client is not None:
+        try:
+            values = _redis_client.mget([_key(u, "exitip") for u in urls])
+            return {u: (value or "") for u, value in zip(urls, values)}
+        except Exception:
+            pass
+    return {u: get_proxy_exit_ip(u) for u in urls}
 
 
 def proxy_status(proxy_url: str) -> Dict[str, object]:
@@ -160,6 +241,7 @@ def proxy_status(proxy_url: str) -> Dict[str, object]:
         "blocked": blocked_until >= now,
         "blocked_for_seconds": max(0, int(blocked_until - now)),
         "in_flight": get_in_flight(proxy_url),
+        "exit_ip": get_proxy_exit_ip(proxy_url),
     }
 
 

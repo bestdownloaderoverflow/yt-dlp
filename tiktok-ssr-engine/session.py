@@ -41,7 +41,7 @@ def _dehydrate_cookies(data: Dict[str, Any]) -> Dict[str, Any]:
     digest = hashlib.sha256(cookies.encode()).hexdigest()[:32]
     try:
         # Refresh the TTL on every reference so the jar outlives its sessions.
-        _redis_client.setex(f"cookiejar:{digest}", SESSION_TTL_SECONDS, cookies)
+        _redis_client.set(f"cookiejar:{digest}", cookies, ex=SESSION_TTL_SECONDS)
     except Exception:
         return data
     shrunk = dict(data)
@@ -67,7 +67,7 @@ def create_session(data: Dict[str, Any]) -> str:
         stored = _dehydrate_cookies(data)
         for attempt in range(2):
             try:
-                _redis_client.setex(f"session:{key}", SESSION_TTL_SECONDS, json.dumps(stored))
+                _redis_client.set(f"session:{key}", json.dumps(stored), ex=SESSION_TTL_SECONDS)
                 return key
             except Exception as e:
                 if attempt == 0:
@@ -138,7 +138,7 @@ def set_cached_extraction(url: str, data: Dict[str, Any], ttl: int = 300):
     if _redis_client:
         for attempt in range(2):
             try:
-                _redis_client.setex(f"extract:{url_hash}", ttl, json.dumps(data))
+                _redis_client.set(f"extract:{url_hash}", json.dumps(data), ex=ttl)
                 return
             except Exception as e:
                 if attempt == 0:
@@ -148,4 +148,3 @@ def set_cached_extraction(url: str, data: Dict[str, Any], ttl: int = 300):
 
     _cleanup_expired()
     _in_memory_sessions[f"extract:{url_hash}"] = (data, time.time() + ttl)
-

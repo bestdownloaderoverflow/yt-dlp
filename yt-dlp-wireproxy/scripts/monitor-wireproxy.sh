@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# monitor-wireproxy.sh - detail monitor untuk 18 wireproxy container.
+# monitor-wireproxy.sh - monitor tunnel dan state rotasi TikTok wireproxy.
 #
-# Menggabungkan 3 sumber data:
-#   1. GET http://localhost:9111/health              -> state aggregate dari gateway
+# Menggabungkan 4 sumber data:
+#   1. GET http://localhost:9111/health              -> health service
+#      GET /proxies dari dalam container             -> state rotasi TikTok
 #   2. docker exec wireproxy-XX wget /metrics         -> WireGuard handshake + transfer
-#   3. docker exec ytdlp-worker-1 curl --proxy        -> exit IP + latency per container
-#      socks5h://wireproxy-XX:1080 https://api.ipify.org
+#   3. docker exec probe-container curl --proxy       -> IPv4 TikTok-relevant,
+#      IPv6 (WARP only), dan latency per container
 #   4. docker exec ytdlp-redis-wireproxy redis-cli    -> last restart message
 #
 # Tabel dirender dengan python helper (monitor-wireproxy-render.py) berwarna,
@@ -14,6 +15,8 @@
 # Usage:
 #   ./monitor-wireproxy.sh                 # watch mode, refresh 5 detik
 #   ./monitor-wireproxy.sh --once          # snapshot 1x lalu exit
+#   ./monitor-wireproxy.sh --check         # snapshot + exit nonzero jika threshold gagal
+#   ./monitor-wireproxy.sh --check --min-usable 10
 #   ./monitor-wireproxy.sh --interval 3    # watch mode, refresh 3 detik
 #   ./monitor-wireproxy.sh --no-color      # nonaktifkan ANSI (untuk pipe ke log)
 #   ./monitor-wireproxy.sh --help
@@ -43,13 +46,16 @@ if [[ "${DETECTED_COUNT}" -gt 0 ]]; then
 else
   PROXY_COUNT="${PROXY_COUNT:-50}"
 fi
-IP_CHECK_URL="${IP_CHECK_URL:-https://api64.ipify.org}"
+IPV4_CHECK_URL="${IPV4_CHECK_URL:-https://api.ipify.org}"
+IPV6_CHECK_URL="${IPV6_CHECK_URL:-https://api64.ipify.org}"
+WARP_FIRST_INDEX="${WARP_FIRST_INDEX:-18}"
+MIN_USABLE="${MIN_USABLE:-1}"
 
 INTERVAL=5
 MODE="watch"
 
 usage() {
-  sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # --- arg parsing -------------------------------------------------------------
@@ -57,6 +63,9 @@ usage() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --once)        MODE="once"; shift ;;
+    --check)       MODE="check"; shift ;;
+    --min-usable)  MIN_USABLE="${2:-}"; shift 2 ;;
+    --min-usable=*) MIN_USABLE="${1#*=}"; shift ;;
     --interval)    INTERVAL="${2:-}"; shift 2 ;;
     --interval=*)  INTERVAL="${1#*=}"; shift ;;
     --no-color)    export MON_NO_COLOR=1; shift ;;
@@ -67,6 +76,10 @@ done
 
 if ! [[ "$INTERVAL" =~ ^[0-9]+$ ]] || [[ "$INTERVAL" -lt 1 ]]; then
   echo "ERROR: --interval harus integer positif" >&2
+  exit 1
+fi
+if ! [[ "$MIN_USABLE" =~ ^[0-9]+$ ]] || [[ "$MIN_USABLE" -lt 1 ]]; then
+  echo "ERROR: --min-usable harus integer positif" >&2
   exit 1
 fi
 
@@ -143,12 +156,12 @@ probe_one_container() {
   # SOCKS5 probe: keluar lewat ${c}:1080, dilihat dari ytdlp-worker-1.
   # Jangan pakai curl -o "${dir}/ip-${i}" di dalam docker exec: path itu
   # akan dianggap path di container worker, bukan temp dir host monitor.
-  local probe_out status_line body
+  local probe_out status_line body ipv6_out ipv6_status ipv6_body
   probe_out="$(
     docker exec "${SOCKS_PROBE_CONTAINER}" curl --proxy "socks5h://${c}:1080" \
       -m 8 -sS \
       -w $'\n%{http_code} %{time_total}\n' \
-      "${IP_CHECK_URL}" 2>/dev/null || true
+      "${IPV4_CHECK_URL}" 2>/dev/null || true
   )"
   status_line="$(printf '%s\n' "$probe_out" | tail -n 1)"
   body="$(printf '%s\n' "$probe_out" | sed '$d')"
@@ -156,6 +169,22 @@ probe_one_container() {
   if [[ -d "$dir" ]]; then
     printf '%s' "$body" > "${dir}/ip-${i}" 2>/dev/null || true
     printf '%s\n' "$status_line" > "${dir}/lat-${i}" 2>/dev/null || true
+  fi
+
+  # api64 memilih IPv6 ketika tunnel dan destination mendukungnya. Probe ini
+  # hanya informasi kapabilitas WARP; selector TikTok tetap memakai IPv4.
+  if [[ "$((10#$i))" -ge "$WARP_FIRST_INDEX" ]]; then
+    ipv6_out="$(
+      docker exec "${SOCKS_PROBE_CONTAINER}" curl --proxy "socks5h://${c}:1080" \
+        -m 8 -sS \
+        -w $'\n%{http_code}\n' \
+        "${IPV6_CHECK_URL}" 2>/dev/null || true
+    )"
+    ipv6_status="$(printf '%s\n' "$ipv6_out" | tail -n 1)"
+    ipv6_body="$(printf '%s\n' "$ipv6_out" | sed '$d')"
+    if [[ "$ipv6_status" == "200" && "$ipv6_body" == *:* && -d "$dir" ]]; then
+      printf '%s' "$ipv6_body" > "${dir}/ipv6-${i}" 2>/dev/null || true
+    fi
   fi
 
   if [[ "$REDIS_AVAILABLE" -eq 1 && -d "$dir" ]]; then
@@ -176,6 +205,15 @@ do_iteration() {
       > "${dir}/health.json"
   fi
 
+  # /proxies is authenticated. Resolve the key only inside the gateway
+  # container so it never appears in the host process list or monitor output.
+  if ! docker exec "${GATEWAY_CONTAINER}" sh -c \
+       'curl -fsS --max-time 3 -H "X-API-Key: ${TIKTOK_API_KEY:-}" http://127.0.0.1:9111/proxies' \
+       > "${dir}/proxies.json" 2>/dev/null; then
+    echo '{"monitor_error":"proxies endpoint unavailable","total":0,"usable":0,"blocked":0,"proxies":[]}' \
+      > "${dir}/proxies.json"
+  fi
+
   # 2. Fan-out paralel: 18 metrics + 18 socks5 = 36 probe paralel
   local pids=()
   for i in $(seq -w 1 "$PROXY_COUNT"); do
@@ -191,7 +229,11 @@ do_iteration() {
   if [[ "$MODE" == "watch" ]]; then
     clear
   fi
-  python3 "$RENDER_PY" "$dir" --count "$PROXY_COUNT"
+  local render_args=("$dir" --count "$PROXY_COUNT")
+  if [[ "$MODE" == "check" ]]; then
+    render_args+=(--check --min-usable "$MIN_USABLE")
+  fi
+  python3 "$RENDER_PY" "${render_args[@]}"
 
   # 4. Cleanup temp dir (avoid accumulation in watch mode)
   rm -rf "$dir"
@@ -200,7 +242,7 @@ do_iteration() {
 
 # --- main loop ---------------------------------------------------------------
 
-if [[ "$MODE" == "once" ]]; then
+if [[ "$MODE" == "once" || "$MODE" == "check" ]]; then
   do_iteration
   exit 0
 fi

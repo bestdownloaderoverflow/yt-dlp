@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import time
 from typing import Optional
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit, urlunsplit
 
 from curl_cffi.requests import AsyncSession
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
@@ -14,7 +14,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from config import CACHE_TTL, DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, MAX_ATTEMPTS, PORT, TIKTOK_API_KEY, VERBOSE_LOGS, get_next_proxy
+from config import (
+    CACHE_TTL, DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, MAX_ATTEMPTS, PORT,
+    PROXY_COUNT, TIKTOK_API_KEY, VERBOSE_LOGS, get_geo_proxies,
+    get_next_proxy, get_proxy_pool, get_warp_proxies,
+)
 from extractor import (
     TikTokExtractError,
     TikTokGeoBlockedError,
@@ -23,7 +27,14 @@ from extractor import (
     TikTokSSRExtractor,
     build_filename,
 )
-from proxy_state import dec_in_flight, inc_in_flight, mark_proxy_blocked, mark_proxy_cooldown, mark_proxy_usable
+from proxy_state import (
+    dec_in_flight,
+    get_proxy_exit_ip,
+    inc_in_flight,
+    mark_proxy_blocked,
+    mark_proxy_cooldown,
+    mark_proxy_request_success,
+)
 from session import get_cached_extraction, get_session, set_cached_extraction
 
 
@@ -47,12 +58,53 @@ app.add_middleware(
 )
 
 START_TIME = time.time()
+ALLOW_DIRECT_DOWNLOAD_FALLBACK = os.getenv(
+    "ALLOW_DIRECT_DOWNLOAD_FALLBACK", "1" if PROXY_COUNT == 0 else "0"
+).lower() in {"1", "true", "yes"}
+DOWNLOAD_PROXY_ATTEMPTS = max(1, int(os.getenv("DOWNLOAD_PROXY_ATTEMPTS", "3")))
 
 
 class TikTokRequest(BaseModel):
     url: str
     proxy: Optional[str] = None
     impersonate: Optional[str] = None
+
+
+def validate_tiktok_post_url(value: str) -> str:
+    """Accept official TikTok post/short URLs only and normalize cache noise."""
+    raw = (value or "").strip()
+    if "://" not in raw:
+        raw = "https://" + raw.lstrip("/")
+    parsed = urlsplit(raw)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme not in {"http", "https"}:
+        raise HTTPException(status_code=400, detail="TikTok URL must use http or https")
+    if host != "tiktok.com" and not host.endswith(".tiktok.com"):
+        raise HTTPException(status_code=400, detail="Only TikTok URLs are supported")
+
+    path = parsed.path or "/"
+    is_short = host in {"vm.tiktok.com", "vt.tiktok.com", "t.tiktok.com"} and path != "/"
+    is_post = any(marker in path.lower() for marker in ("/video/", "/photo/", "/embed/"))
+    if not is_short and not is_post:
+        raise HTTPException(status_code=400, detail="TikTok URL must point to a video or photo post")
+    return urlunsplit(("https", host, path.rstrip("/") or "/", parsed.query, ""))
+
+
+def extraction_cache_key(url: str) -> str:
+    """Tracking parameters must not create separate extraction cache entries."""
+    parsed = urlsplit(url)
+    if any(marker in parsed.path.lower() for marker in ("/video/", "/photo/", "/embed/")):
+        return urlunsplit((parsed.scheme, parsed.netloc.lower(), parsed.path.rstrip("/"), "", ""))
+    return url
+
+
+def validate_requested_proxy(proxy: Optional[str]) -> Optional[str]:
+    if not proxy:
+        return None
+    allowed = set(get_proxy_pool()) | set(get_geo_proxies()) | set(get_warp_proxies())
+    if proxy not in allowed:
+        raise HTTPException(status_code=400, detail="Requested proxy is not part of the configured pool")
+    return proxy
 
 
 def check_auth(x_api_key: Optional[str] = None, api_key_query: Optional[str] = None):
@@ -114,6 +166,11 @@ async def proxies_status(
         entries.append(status)
 
     blocked = [e["proxy"] for e in entries if e["blocked"]]
+    known_exit_ips = {e["exit_ip"] for e in entries if e.get("exit_ip")}
+    warp_exit_ips = {
+        e["exit_ip"] for e in entries
+        if e["lane"] == "cloudflare" and e.get("exit_ip")
+    }
     return {
         "total": len(entries),
         "usable": sum(1 for e in entries if e["usable"]),
@@ -121,6 +178,8 @@ async def proxies_status(
         "blocked_proxies": blocked,
         "cloudflare_usable": sum(1 for e in entries if e["lane"] == "cloudflare" and e["usable"]),
         "geo_usable": sum(1 for e in entries if e["lane"] == "geo" and e["usable"]),
+        "known_unique_exit_ips": len(known_exit_ips),
+        "cloudflare_unique_exit_ips": len(warp_exit_ips),
         "proxies": entries,
     }
 
@@ -156,8 +215,12 @@ async def extract_tiktok(
     if not target_url:
         raise HTTPException(status_code=400, detail="URL is required")
 
+    target_url = validate_tiktok_post_url(target_url)
+    req_proxy = validate_requested_proxy(req_proxy)
+    cache_key = extraction_cache_key(target_url)
+
     # 1. Check Redis / In-Memory Extraction Cache first (0.5ms response for viral videos)
-    cached = get_cached_extraction(target_url)
+    cached = get_cached_extraction(cache_key)
     if cached:
         if VERBOSE_LOGS:
             print(f"⚡ [CACHE HIT] Returning cached result for {target_url}", flush=True)
@@ -171,6 +234,8 @@ async def extract_tiktok(
     touches = 0
     prefer_indo = False
     last_error = None
+    tried_proxies: set[str] = set()
+    tried_exit_ips: set[str] = set()
 
     if VERBOSE_LOGS:
         print(f"📥 [REQUEST] Extracting: {target_url}", flush=True)
@@ -182,20 +247,37 @@ async def extract_tiktok(
         if prefer_indo:
             # Region-locked content still overrides everything: only Indonesia exits
             # can see it, so Cloudflare-first does not apply once we know that.
-            proxy = req_proxy or get_next_proxy(indo_only=True) or get_next_proxy(prefer_geo=True)
+            proxy = req_proxy or get_next_proxy(
+                indo_only=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
+            ) or get_next_proxy(
+                prefer_geo=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
+            )
             lane = "indo"
         elif real_attempts == 1:
             # First attempt goes through Cloudflare WARP, falling back to the geo
             # pool only when every WARP node is dead, cooling down or blocked.
-            proxy = req_proxy or get_next_proxy(warp_only=True)
+            proxy = req_proxy or get_next_proxy(
+                warp_only=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
+            )
             lane = "cloudflare"
             if not proxy:
-                proxy = get_next_proxy(prefer_geo=True)
+                proxy = get_next_proxy(
+                    prefer_geo=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
+                )
                 lane = "geo (no WARP available)"
         else:
-            proxy = req_proxy or get_next_proxy(prefer_geo=True)
+            proxy = req_proxy or get_next_proxy(
+                prefer_geo=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
+            )
             lane = "geo"
         proxy = proxy or DEFAULT_PROXY or None
+        if PROXY_COUNT > 0 and not proxy:
+            last_error = TikTokInfraError("No usable proxy exits available")
+            break
+        if proxy:
+            tried_proxies.add(proxy)
+            if exit_ip := get_proxy_exit_ip(proxy):
+                tried_exit_ips.add(exit_ip)
 
         if VERBOSE_LOGS:
             print(f"  🔄 [Attempt {real_attempts}/{max_attempts}] lane={lane} proxy={proxy}", flush=True)
@@ -203,12 +285,13 @@ async def extract_tiktok(
         try:
             extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
             result = await extractor.extract(target_url)
-            mark_proxy_usable(proxy)
+            source = result.get("extract_source") or ""
+            mark_proxy_request_success(proxy, tiktok_served=source != "web_fallback")
             if VERBOSE_LOGS:
                 print(f"  ✅ [Attempt {real_attempts}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
 
             # Save successful extraction to cache
-            set_cached_extraction(target_url, result, ttl=CACHE_TTL or 300)
+            set_cached_extraction(cache_key, result, ttl=CACHE_TTL or 300)
             return JSONResponse(content=result)
         except TikTokInfraError as e:
             # Proxy infrastructure failure: switch proxy WITHOUT consuming an attempt
@@ -381,13 +464,10 @@ async def download_tiktok_media(
     if not direct_url:
         raise HTTPException(status_code=400, detail="Session does not contain direct_url")
 
-    ext = "mp4"
     content_type = "video/mp4"
     if media_type == "mp3":
-        ext = "mp3"
         content_type = "audio/mpeg"
     elif media_type == "photo":
-        ext = "jpeg"
         content_type = "image/jpeg"
 
     filename = build_filename(session_data)
@@ -406,28 +486,35 @@ async def download_tiktok_media(
         upstream_headers["Cookie"] = session_cookies
 
     range_header = request.headers.get("Range")
-    if range_header:
+    if range_header and media_type != "mp3":
         upstream_headers["Range"] = range_header
-    elif media_type in ("video", "mp3"):
+    elif media_type == "video":
         upstream_headers["Range"] = "bytes=0-"
 
     resp = None
     client = None
-    # Proxy actually carrying the stream, or None when we fell back to going out
-    # direct. Only a real proxy gets booked against the pool's load.
     streaming_proxy = None
-    proxy_dict = {"http": proxy, "https": proxy} if proxy else None
-    stream_proxy_candidates = [proxy_dict, None] if proxy_dict else [None]
+    tried_proxies: set[str] = set()
+    tried_exit_ips: set[str] = set()
+    candidate_proxy = proxy
+    direct_attempted = False
 
-    for p in stream_proxy_candidates:
+    for _attempt in range(DOWNLOAD_PROXY_ATTEMPTS):
+        if not candidate_proxy:
+            if not ALLOW_DIRECT_DOWNLOAD_FALLBACK or direct_attempted:
+                break
+            direct_attempted = True
+        if candidate_proxy:
+            tried_proxies.add(candidate_proxy)
+            if exit_ip := get_proxy_exit_ip(candidate_proxy):
+                tried_exit_ips.add(exit_ip)
+            inc_in_flight(candidate_proxy)
+        proxy_dict = {"http": candidate_proxy, "https": candidate_proxy} if candidate_proxy else None
         try:
-            client = AsyncSession(impersonate=impersonate, proxies=p)
+            client = AsyncSession(impersonate=impersonate, proxies=proxy_dict)
             resp = await client.get(direct_url, headers=upstream_headers, stream=True, allow_redirects=True, timeout=30)
             if resp.status_code in (200, 206):
-                streaming_proxy = proxy if p is not None else None
-                if p is None and proxy_dict is not None:
-                    print(f"[Download] proxy {proxy} failed; streaming direct from the host IP "
-                          f"instead, which bypasses the VPN pool", flush=True)
+                streaming_proxy = candidate_proxy
                 break
             await client.close()
             client = None
@@ -435,6 +522,18 @@ async def download_tiktok_media(
             if client:
                 await client.close()
                 client = None
+        if candidate_proxy:
+            dec_in_flight(candidate_proxy)
+            mark_proxy_cooldown(candidate_proxy, 30)
+        candidate_proxy = get_next_proxy(
+            exclude=tried_proxies,
+            exclude_exit_ips=tried_exit_ips,
+        )
+        if not candidate_proxy:
+            if ALLOW_DIRECT_DOWNLOAD_FALLBACK and not direct_attempted:
+                candidate_proxy = None
+            else:
+                break
 
     if not resp or resp.status_code not in (200, 206):
         if client:
@@ -443,22 +542,56 @@ async def download_tiktok_media(
         raise HTTPException(status_code=502, detail=f"CDN streaming error: HTTP {status_err}")
 
     response_headers = {
-        # For mp3 keep our explicit type: upstream CDN sometimes reports video/mp4
         "Content-Type": content_type if media_type == "mp3" else resp.headers.get("Content-Type", content_type),
         "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=UTF-8''{safe_filename}",
-        "Accept-Ranges": "bytes",
     }
-    if "Content-Length" in resp.headers:
+    if media_type != "mp3":
+        response_headers["Accept-Ranges"] = "bytes"
+    if media_type != "mp3" and "Content-Length" in resp.headers:
         response_headers["Content-Length"] = resp.headers["Content-Length"]
-    if "Content-Range" in resp.headers:
+    if media_type != "mp3" and "Content-Range" in resp.headers:
         response_headers["Content-Range"] = resp.headers["Content-Range"]
 
-    # Book the proxy for the whole life of the stream. Downloads are the heaviest
-    # thing the pool carries -- minutes long and MBs wide -- so leaving them
-    # unaccounted made least-loaded selection send fetches to a node already
-    # saturated with video traffic.
-    if streaming_proxy:
-        inc_in_flight(streaming_proxy)
+    if request.method == "HEAD":
+        if streaming_proxy:
+            dec_in_flight(streaming_proxy)
+        await client.close()
+        return Response(status_code=200 if media_type == "mp3" else resp.status_code, headers=response_headers)
+
+    async def stream_transcoded_mp3():
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0", "-vn", "-c:a", "libmp3lame", "-b:a", "192k",
+            "-f", "mp3", "pipe:1",
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+
+        async def feed_input():
+            try:
+                async for chunk in resp.aiter_content(chunk_size=64 * 1024):
+                    proc.stdin.write(chunk)
+                    await proc.stdin.drain()
+            finally:
+                if proc.stdin and not proc.stdin.is_closing():
+                    proc.stdin.close()
+
+        feeder = asyncio.create_task(feed_input())
+        try:
+            while chunk := await proc.stdout.read(64 * 1024):
+                yield chunk
+            await feeder
+            await proc.wait()
+        finally:
+            if not feeder.done():
+                feeder.cancel()
+            if proc.returncode is None:
+                proc.kill()
+                await proc.wait()
+            if streaming_proxy:
+                dec_in_flight(streaming_proxy)
+            await client.close()
 
     async def stream_generator():
         try:
@@ -471,8 +604,8 @@ async def download_tiktok_media(
                 await client.close()
 
     return StreamingResponse(
-        stream_generator(),
-        status_code=resp.status_code,
+        stream_transcoded_mp3() if media_type == "mp3" else stream_generator(),
+        status_code=200 if media_type == "mp3" else resp.status_code,
         headers=response_headers,
     )
 

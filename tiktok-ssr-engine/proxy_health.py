@@ -22,7 +22,8 @@ from proxy_state import (
     clear_proxy_blocked,
     mark_proxy_blocked,
     mark_proxy_dead,
-    mark_proxy_usable,
+    mark_proxy_tunnel_alive,
+    set_proxy_exit_ip,
 )
 
 PROBE_INTERVAL_SECONDS = float(os.getenv("PROBE_INTERVAL", "45"))
@@ -80,12 +81,21 @@ async def probe_proxy(proxy_url: str) -> bool:
                 headers={"User-Agent": "curl/8"},
             )
             ok = resp.status_code == 200
+            exit_ip = ""
+            if ok:
+                for line in (resp.text or "").splitlines():
+                    if line.startswith("ip="):
+                        exit_ip = line.split("=", 1)[1].strip()
+                        break
     except Exception:
         ok = False
+        exit_ip = ""
 
     if ok:
         _consecutive_failures.pop(proxy_url, None)
-        mark_proxy_usable(proxy_url)
+        mark_proxy_tunnel_alive(proxy_url)
+        if exit_ip:
+            set_proxy_exit_ip(proxy_url, exit_ip)
     else:
         n = _consecutive_failures.get(proxy_url, 0) + 1
         _consecutive_failures[proxy_url] = n
@@ -158,10 +168,9 @@ def apply_block_verdicts(verdicts: dict) -> bool:
     blocked_count = sum(1 for v in verdicts.values() if v)
     if blocked_count / len(verdicts) > BLOCK_SANITY_RATIO:
         print(f"[BlockProbe] IGNORED: {blocked_count}/{len(verdicts)} exits looked blocked, "
-              f"which means the probe is broken, not the pool. Failing open.", flush=True)
-        for url in verdicts:
-            clear_proxy_blocked(url)
-            _block_state[url] = False
+              f"which means the probe is broken, not the pool. Preserving previous state.", flush=True)
+        # Preserve the last known state. A broken probe is not evidence that
+        # previously blocked exits have recovered.
         return False
 
     for url, blocked in verdicts.items():
@@ -189,6 +198,18 @@ def _acquire_block_lease(ttl: int) -> bool:
         return True
     try:
         return bool(_redis_client.set("proxy:blockprobe:lease", str(time.time()), nx=True, ex=ttl))
+    except Exception:
+        return True
+
+
+def _acquire_liveness_lease(ttl: int) -> bool:
+    """Only one Granian worker should probe the complete tunnel pool."""
+    from proxy_state import _redis_client  # noqa: PLC0415
+
+    if _redis_client is None:
+        return True
+    try:
+        return bool(_redis_client.set("proxy:liveness:lease", str(time.time()), nx=True, ex=ttl))
     except Exception:
         return True
 
@@ -231,9 +252,11 @@ async def _prober_loop():
 
     while True:
         try:
-            urls = _all_proxy_urls()
-            if urls:
-                await asyncio.gather(*(limited(u) for u in urls), return_exceptions=True)
+            lease_ttl = max(int(PROBE_INTERVAL_SECONDS) - 5, 15)
+            if _acquire_liveness_lease(lease_ttl):
+                urls = _all_proxy_urls()
+                if urls:
+                    await asyncio.gather(*(limited(u) for u in urls), return_exceptions=True)
         except Exception as e:
             print(f"[Prober] probe cycle failed: {e}", flush=True)
         await asyncio.sleep(PROBE_INTERVAL_SECONDS)

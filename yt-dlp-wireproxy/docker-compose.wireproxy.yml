@@ -344,6 +344,11 @@ services:
     # which surfaces to users as download links that expire on arrival.
     command: redis-server --maxmemory 1gb --maxmemory-policy allkeys-lru
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     networks:
       - ytdlp-wireproxy-network
 
@@ -363,6 +368,8 @@ services:
       - INDONESIA_PROXIES=1,13,14
       - TIKTOK_API_KEY=${TIKTOK_API_KEY}
       - REDIS_URL=redis://redis:6379/1
+      - ALLOW_DIRECT_DOWNLOAD_FALLBACK=false
+      - DOWNLOAD_PROXY_ATTEMPTS=3
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     depends_on:
@@ -389,6 +396,12 @@ services:
       - wireproxy-20
       - wireproxy-21
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9111/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     logging:
       driver: "json-file"
       options:

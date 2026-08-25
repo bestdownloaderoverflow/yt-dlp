@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""monitor-wireproxy-render.py - render detail table for 18 wireproxy containers.
+"""Render tunnel health plus TikTok-specific proxy rotation state.
 
 Reads from a per-cycle temp directory:
-  health.json   - output of GET http://localhost:9111/health
+  health.json   - output of GET /health
+  proxies.json  - authenticated output of GET /proxies
   m-XX          - text/wg-show output from wireproxy-XX /metrics
-  ip-XX         - exit IP captured from SOCKS5 probe
+  ip-XX         - IPv4 exit captured from SOCKS5 probe
+  ipv6-XX       - optional IPv6 exit for WARP nodes
   lat-XX        - "<http_code> <time_total>" captured from SOCKS5 probe
   restart-XX    - latest restart_log:pN Redis entry
 
@@ -59,9 +61,9 @@ UNIT_FACTOR = {
 }
 
 COUNTRY_ORDER = {
-    "Cloudflare WARP (IPv6)": 0,
-    "Mullvad VPN (IPv4)": 1,
-    "Surfshark VPN (IPv4)": 2,
+    "Cloudflare WARP": 0,
+    "Mullvad VPN": 1,
+    "Surfshark VPN": 2,
     "Indonesia": 3,
     "Singapore": 4,
 }
@@ -212,18 +214,18 @@ def handshake_color(handshake: str) -> str:
 
 def status_palette(row: dict) -> str:
     """Color the row's overall indicator (used in STATUS cell)."""
-    if row["restarting"]:
+    if row["dead"] or not row["tunnel_healthy"]:
         return _RED
-    if not row["healthy"]:
+    if not row["state_known"]:
+        return _RED
+    if row["blocked"]:
         return _RED
     if row["cooldown"]:
         return _YEL
     if row["active_requests"] > 0:
         return _YEL
-    if not row["exit_ip"] or row["http_code"] != 200:
+    if not row["exit_ipv4"] or row["http_code"] != 200:
         return _RED
-    if row["failures"] > 0:
-        return _YEL
     if row["latency_ms"] > 3000:
         return _YEL
     if row["latency_ms"] > 1500:
@@ -233,13 +235,17 @@ def status_palette(row: dict) -> str:
 
 def status_text(row: dict) -> tuple[str, str]:
     """Return (text, color) for STATUS column."""
-    if row["restarting"]:
-        return "RESTART", _RED
-    if not row["healthy"]:
+    if row["dead"] or not row["tunnel_healthy"]:
         return "DOWN", _RED
+    if not row["state_known"]:
+        return "NOSTATE", _RED
+    if row["blocked"]:
+        return "BLOCK", _RED
     if row["cooldown"]:
         return "COOL", _YEL
-    if not row["exit_ip"] or row["http_code"] != 200:
+    if not row["usable"]:
+        return "UNUSE", _RED
+    if not row["exit_ipv4"] or row["http_code"] != 200:
         return "NOIP", _YEL
     if row["active_requests"] > 0:
         return "BUSY", _YEL
@@ -253,14 +259,14 @@ def status_text(row: dict) -> tuple[str, str]:
 # (header, width)
 COLS = [
     ("IDX", 3),
-    ("CN", 10),
+    ("PROVIDER", 10),
     ("STATUS", 7),
-    ("EXIT IP", 32),
+    ("TIKTOK IPv4", 15),
+    ("IPv6", 32),
     ("LAT(ms)", 8),
     ("ACT", 3),
-    ("FAIL", 4),
+    ("BLOCK", 6),
     ("COOL", 4),
-    ("RST", 3),
     ("LAST RESTART MESSAGE", 40),
     ("RX/TX", 13),
 ]
@@ -293,16 +299,37 @@ def trunc(s: str, width: int) -> str:
 
 def main() -> int:
     # usage: monitor-wireproxy-render.py <cycle-dir> [--count N]
+    #        [--check --min-usable N]
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
         print("usage: monitor-wireproxy-render.py <cycle-dir> [--count N]", file=sys.stderr)
         return 2
     cycle_dir = sys.argv[1]
     proxy_count = 18
-    if len(sys.argv) >= 4 and sys.argv[2] == "--count":
-        try:
-            proxy_count = int(sys.argv[3])
-        except ValueError:
-            print(f"ERROR: --count must be integer, got {sys.argv[3]!r}", file=sys.stderr)
+    check_mode = False
+    min_usable = 1
+    args = sys.argv[2:]
+    pos = 0
+    while pos < len(args):
+        arg = args[pos]
+        if arg == "--count" and pos + 1 < len(args):
+            try:
+                proxy_count = int(args[pos + 1])
+            except ValueError:
+                print(f"ERROR: --count must be integer, got {args[pos + 1]!r}", file=sys.stderr)
+                return 1
+            pos += 2
+        elif arg == "--min-usable" and pos + 1 < len(args):
+            try:
+                min_usable = int(args[pos + 1])
+            except ValueError:
+                print(f"ERROR: --min-usable must be integer, got {args[pos + 1]!r}", file=sys.stderr)
+                return 1
+            pos += 2
+        elif arg == "--check":
+            check_mode = True
+            pos += 1
+        else:
+            print(f"ERROR: unknown or incomplete argument: {arg}", file=sys.stderr)
             return 1
     if not os.path.isdir(cycle_dir):
         print(f"ERROR: not a directory: {cycle_dir}", file=sys.stderr)
@@ -316,51 +343,76 @@ def main() -> int:
     except (FileNotFoundError, json.JSONDecodeError):
         health = {"status": "down", "proxies": [], "workers": []}
 
-    proxies_health = {p.get("id", ""): p for p in health.get("proxies", [])}
-    workers = health.get("workers", [])
+    proxies_path = os.path.join(cycle_dir, "proxies.json")
+    try:
+        with open(proxies_path) as f:
+            proxy_state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        proxy_state = {"total": 0, "usable": 0, "blocked": 0, "proxies": []}
+
+    def proxy_container(entry: dict) -> str:
+        match = re.search(r"wireproxy-(\d+)", str(entry.get("proxy", "")))
+        return f"wireproxy-{int(match.group(1)):02d}" if match else ""
+
+    state_entries = proxy_state.get("proxies", [])
+    state_available = not proxy_state.get("monitor_error") and bool(state_entries)
+    proxies_health = {
+        proxy_container(p): p for p in state_entries if proxy_container(p)
+    }
 
     # 2. Build rows
     rows: list[dict] = []
     for i in range(1, proxy_count + 1):
         idx = f"{i:02d}"
         cid = f"wireproxy-{idx}"
-        pid = f"p{i}"
-        ph = proxies_health.get(pid, {})
+        ph = proxies_health.get(cid, {})
 
         m = parse_metrics(safe_read(os.path.join(cycle_dir, f"m-{idx}")))
         restart = parse_restart_message(safe_read(os.path.join(cycle_dir, f"restart-{idx}")))
         http_code, latency_s = parse_latency_file(
             safe_read(os.path.join(cycle_dir, f"lat-{idx}"))
         )
-        exit_ip = safe_read(os.path.join(cycle_dir, f"ip-{idx}")).strip()
+        probe_ipv4 = safe_read(os.path.join(cycle_dir, f"ip-{idx}")).strip()
+        state_ipv4 = str(ph.get("exit_ip", "") or "").strip()
+        exit_ipv4 = state_ipv4 if ":" not in state_ipv4 else probe_ipv4
+        if not exit_ipv4 or ":" in exit_ipv4:
+            exit_ipv4 = probe_ipv4 if ":" not in probe_ipv4 else ""
+        exit_ipv6 = safe_read(os.path.join(cycle_dir, f"ipv6-{idx}")).strip()
 
         # Determine provider & country
-        if 12 <= i:
-            country = "Cloudflare WARP (IPv6)"
-        elif 7 <= i <= 11:
-            country = "Mullvad VPN (IPv4)"
-        elif 1 <= i <= 6:
-            country = "Surfshark VPN (IPv4)"
+        if 18 <= i:
+            country = "Cloudflare WARP"
+        elif 13 <= i <= 17:
+            country = "Mullvad VPN"
+        elif 1 <= i <= 12:
+            country = "Surfshark VPN"
         else:
             country = "Wireproxy"
 
-        is_probe_ok = (http_code == 200 and bool(exit_ip))
-        is_healthy = bool(ph.get("healthy")) if "healthy" in ph else is_probe_ok
+        is_probe_ok = (http_code == 200 and bool(exit_ipv4))
+        has_state = bool(ph)
+        dead = bool(ph.get("dead", False))
+        blocked = bool(ph.get("blocked", False))
+        cooldown = bool(ph.get("cooldown", False))
+        usable = bool(ph.get("usable", False)) if has_state else False
 
         row = {
             "index": i,
             "container": cid,
-            "proxy_id": pid,
+            "proxy_id": f"p{i}",
             "country": country,
-            "healthy": is_healthy,
-            "exit_ip": exit_ip,
+            "tunnel_healthy": is_probe_ok and not dead,
+            "state_known": has_state,
+            "usable": usable,
+            "dead": dead,
+            "blocked": blocked,
+            "blocked_remaining": int(ph.get("blocked_for_seconds", 0) or 0),
+            "exit_ipv4": exit_ipv4,
+            "exit_ipv6": exit_ipv6,
             "latency_ms": round(latency_s * 1000, 1) if latency_s else 0.0,
             "http_code": http_code,
-            "active_requests": int(ph.get("active_requests", 0) or 0),
-            "failures": int(ph.get("failures", 0) or 0),
-            "cooldown": bool(ph.get("cooldown", False)),
-            "restarting": bool(ph.get("restarting", False)),
-            "cooldown_remaining": int(ph.get("cooldown_remaining", 0) or 0),
+            "active_requests": int(ph.get("in_flight", 0) or 0),
+            "cooldown": cooldown,
             "endpoint": m["endpoint"],
             "handshake": m["handshake"],
             "restart_message": restart["message"],
@@ -370,15 +422,27 @@ def main() -> int:
         }
         rows.append(row)
 
-    render(health, rows, workers, proxy_count=proxy_count)
+    render(health, rows, proxy_count=proxy_count, state_available=state_available)
+    if check_mode:
+        usable_count = sum(1 for row in rows if row["usable"] and row["tunnel_healthy"])
+        gateway_ok = str(health.get("status", "")).lower() == "healthy"
+        if not gateway_ok or not state_available or usable_count < min_usable:
+            print(
+                f"CHECK FAILED: gateway_ok={str(gateway_ok).lower()} "
+                f"state_available={str(state_available).lower()} "
+                f"usable={usable_count} required={min_usable}",
+                file=sys.stderr,
+            )
+            return 1
     return 0
 
 
-def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> None:
+def render(health: dict, rows: list, proxy_count: int = 18,
+           state_available: bool = True) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     gstatus = str(health.get("status", "unknown"))
 
-    bar = c(_BOLD + _CYN, "═" * 130)
+    bar = c(_BOLD + _CYN, "═" * 145)
     print(bar)
     print(
         c(_BOLD, "  WIREPROXY MONITOR")
@@ -386,14 +450,6 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
     )
     gcol = _GRN if gstatus == "healthy" else (_YEL if gstatus == "degraded" else _RED)
     print(c(_DIM, "  Gateway: ") + c(_BOLD + gcol, gstatus))
-    if workers:
-        ws = sum(1 for w in workers if w.get("healthy"))
-        wt = len(workers)
-        wcol = _GRN if ws == wt else _YEL
-        print(
-            c(_DIM, "  Workers: ")
-            + c(_BOLD + wcol, f"{ws}/{wt} healthy")
-        )
     print(bar)
 
     # Header
@@ -407,9 +463,10 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
     for r in rows:
         by_country.setdefault(r["country"], []).append(r)
 
-    healthy_count = 0
+    tunnel_healthy_count = 0
+    usable_count = 0
+    blocked_count = 0
     cooldown_count = 0
-    restarting_count = 0
     no_ip_count = 0
     slow_count = 0
 
@@ -423,13 +480,15 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
         print()
         print("  " + c(_BOLD + _MAG, f"[{country}]"))
         for r in crows:
-            if r["healthy"]:
-                healthy_count += 1
+            if r["tunnel_healthy"]:
+                tunnel_healthy_count += 1
+            if r["usable"] and r["tunnel_healthy"]:
+                usable_count += 1
+            if r["blocked"]:
+                blocked_count += 1
             if r["cooldown"]:
                 cooldown_count += 1
-            if r["restarting"]:
-                restarting_count += 1
-            if not r["exit_ip"] or r["http_code"] != 200:
+            if not r["exit_ipv4"] or r["http_code"] != 200:
                 no_ip_count += 1
             if r["latency_ms"] > 3000:
                 slow_count += 1
@@ -437,11 +496,13 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
             stxt, scol = status_text(r)
             status_cell = c(_BOLD + scol, stxt.ljust(COLS[2][1]))
 
-            # Exit IP
-            if r["exit_ip"]:
-                ip_cell = c(status_palette(r), r["exit_ip"])
+            # TikTok currently resolves to IPv4; this is the exit used for
+            # grouping and retry diversity. IPv6 is diagnostic only.
+            if r["exit_ipv4"]:
+                ipv4_cell = c(status_palette(r), r["exit_ipv4"])
             else:
-                ip_cell = c(_DIM + _RED, "(no ip)")
+                ipv4_cell = c(_DIM + _RED, "(no ip)")
+            ipv6_cell = c(_DIM, r["exit_ipv6"] or "-")
 
             # Latency
             if r["latency_ms"] > 0:
@@ -454,17 +515,12 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
             else:
                 lat_cell = c(_DIM, "-")
 
-            # Cooldown remaining
-            if r["cooldown"] and r["cooldown_remaining"] > 0:
-                cool_cell = c(_YEL, f"{r['cooldown_remaining']}s")
+            cool_cell = c(_YEL, "Y") if r["cooldown"] else "-"
+            if r["blocked"]:
+                remaining = r["blocked_remaining"]
+                block_cell = c(_RED, f"{remaining}s" if remaining > 0 else "Y")
             else:
-                cool_cell = "-"
-
-            # Restart flag
-            if r["restarting"]:
-                rst_cell = c(_RED, "Y")
-            else:
-                rst_cell = c(_DIM, "-")
+                block_cell = "-"
 
             # Last restart message
             restart_msg = trunc(r["restart_message"] or "-", COLS[9][1])
@@ -479,22 +535,16 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
             rx_tx = f"{human_bytes(r['rx_b'])}/{human_bytes(r['tx_b'])}"
             rx_tx_cell = c(_DIM, rx_tx)
 
-            # Failures (red if > 0)
-            if r["failures"] > 0:
-                fail_cell = c(_RED, str(r["failures"]))
-            else:
-                fail_cell = c(_DIM, "0")
-
             cells = [
                 str(r["index"]).ljust(COLS[0][1]),
                 r["country"][: COLS[1][1]].ljust(COLS[1][1]),
                 status_cell,
-                pad(ip_cell, COLS[3][1]),
-                pad(lat_cell, COLS[4][1]),
-                str(r["active_requests"]).ljust(COLS[5][1]),
-                pad(fail_cell, COLS[6][1]),
-                pad(cool_cell, COLS[7][1]),
-                rst_cell.ljust(COLS[8][1]),
+                pad(ipv4_cell, COLS[3][1]),
+                pad(ipv6_cell, COLS[4][1]),
+                pad(lat_cell, COLS[5][1]),
+                str(r["active_requests"]).ljust(COLS[6][1]),
+                pad(block_cell, COLS[7][1]),
+                pad(cool_cell, COLS[8][1]),
                 pad(restart_cell, COLS[9][1]),
                 pad(rx_tx_cell, COLS[10][1]),
             ]
@@ -503,13 +553,23 @@ def render(health: dict, rows: list, workers: list, proxy_count: int = 18) -> No
     # Footer
     print()
     print(bar)
+    unique_ipv4 = len({r["exit_ipv4"] for r in rows if r["exit_ipv4"]})
+    unique_ipv6 = len({r["exit_ipv6"] for r in rows if r["exit_ipv6"]})
     parts = [
-        c(_GRN, f"{healthy_count}/{proxy_count} healthy"),
+        c(_GRN, f"{tunnel_healthy_count}/{proxy_count} tunnels healthy"),
+        c(_CYN, f"{unique_ipv4} unique TikTok IPv4"),
     ]
+    if state_available:
+        parts.insert(1, c(_GRN if usable_count else _RED,
+                          f"{usable_count}/{proxy_count} TikTok usable"))
+    else:
+        parts.insert(1, c(_RED, "TikTok state unavailable"))
+    if unique_ipv6:
+        parts.append(c(_DIM, f"{unique_ipv6} IPv6 capable"))
+    if blocked_count:
+        parts.append(c(_RED, f"{blocked_count} TikTok blocked"))
     if cooldown_count:
         parts.append(c(_YEL, f"{cooldown_count} in cooldown"))
-    if restarting_count:
-        parts.append(c(_RED, f"{restarting_count} restarting"))
     if no_ip_count:
         parts.append(c(_RED, f"{no_ip_count} no-ip/http-err"))
     if slow_count:

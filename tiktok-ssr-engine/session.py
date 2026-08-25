@@ -26,12 +26,48 @@ def _cleanup_expired():
         _in_memory_sessions.pop(k, None)
 
 
+def _dehydrate_cookies(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Store the cookie string once and let sessions point at it.
+
+    One extraction creates four to six sessions (hd, sd, watermark, mp3, photos)
+    that all carry the same ~800 byte cookie blob. Measured, that duplication is
+    the single largest contributor to the ~12KB each extraction costs in Redis,
+    and Redis capacity -- not TikTok -- is what caps sustained throughput.
+    """
+    cookies = data.get("cookies")
+    if not cookies or _redis_client is None:
+        return data
+    digest = hashlib.sha256(cookies.encode()).hexdigest()[:32]
+    try:
+        # Refresh the TTL on every reference so the jar outlives its sessions.
+        _redis_client.setex(f"cookiejar:{digest}", SESSION_TTL_SECONDS, cookies)
+    except Exception:
+        return data
+    shrunk = dict(data)
+    shrunk.pop("cookies", None)
+    shrunk["cookies_ref"] = digest
+    return shrunk
+
+
+def _rehydrate_cookies(data: Dict[str, Any]) -> Dict[str, Any]:
+    ref = data.get("cookies_ref")
+    if not ref or _redis_client is None:
+        return data
+    try:
+        data["cookies"] = _redis_client.get(f"cookiejar:{ref}") or ""
+    except Exception:
+        data["cookies"] = ""
+    return data
+
+
 def create_session(data: Dict[str, Any]) -> str:
     key = secrets.token_urlsafe(24)
     if _redis_client:
+        stored = _dehydrate_cookies(data)
         for attempt in range(2):
             try:
-                _redis_client.setex(f"session:{key}", SESSION_TTL_SECONDS, json.dumps(data))
+                _redis_client.setex(f"session:{key}", SESSION_TTL_SECONDS, json.dumps(stored))
                 return key
             except Exception as e:
                 if attempt == 0:
@@ -53,7 +89,7 @@ def get_session(key: str) -> Optional[Dict[str, Any]]:
             try:
                 raw = _redis_client.get(f"session:{key}")
                 if raw:
-                    return json.loads(raw)
+                    return _rehydrate_cookies(json.loads(raw))
                 break
             except Exception as e:
                 if attempt == 0:

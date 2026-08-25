@@ -3,7 +3,7 @@ import random
 from pathlib import Path
 from typing import List, Optional
 
-from proxy_state import get_in_flight, is_proxy_usable
+from proxy_state import get_in_flight_many, is_proxy_usable
 
 PORT = int(os.getenv("PORT", "9111"))
 HOST = os.getenv("HOST", "0.0.0.0")
@@ -21,24 +21,41 @@ PROXY_HOST_PREFIX = os.getenv("PROXY_HOST_PREFIX", "wireproxy")
 PROXY_PORT = int(os.getenv("PROXY_PORT", "1080"))
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
 INDONESIA_PROXY_INDEXES = [
-    int(i) for i in os.getenv("INDONESIA_PROXIES", "1,2,6,7").split(",") if i.strip().isdigit()
+    int(i) for i in os.getenv("INDONESIA_PROXIES", "1,13,14").split(",") if i.strip().isdigit()
 ]
+
+# Provider layout of the wireproxy pool, matching the index ranges written by
+# yt-dlp-wireproxy/scripts/generate-wireproxy-configs.py. Both bounds inclusive;
+# WARP_FIRST_INDEX runs to PROXY_COUNT.
+SURFSHARK_FIRST_INDEX = 1
+SURFSHARK_LAST_INDEX = 12
+MULLVAD_FIRST_INDEX = 13
+MULLVAD_LAST_INDEX = 17
+WARP_FIRST_INDEX = 18
+
+def _proxies(first: int, last: int) -> List[str]:
+    """SOCKS5 URLs for wireproxy nodes in the inclusive index range [first, last]."""
+    return [
+        f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}"
+        for i in range(first, last + 1)
+    ]
+
 
 def get_proxy_pool() -> List[str]:
     """
-    Returns list of SOCKS5 proxies from PROXY_LIST or auto-generated wireproxy-01..wireproxy-18.
+    Returns list of SOCKS5 proxies from PROXY_LIST or auto-generated wireproxy-01..wireproxy-NN.
     Interleaves regions (ID -> SG -> VN -> ID -> SG -> VN...) so every 3 consecutive attempts
     are guaranteed to touch different geographic regions!
     """
     if RAW_PROXY_LIST:
         return [p.strip() for p in RAW_PROXY_LIST.split(",") if p.strip()]
-    if PROXY_COUNT >= 12:
-        # Group 1: 12..PROXY_COUNT (Cloudflare WARP IPv6 Anycast - 39 nodes)
-        # Group 2: 07..11 (Mullvad IPv4 ID/SG - 5 nodes)
-        # Group 3: 01..06 (Surfshark IPv4 ID/SG - 6 nodes)
-        warp_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(12, PROXY_COUNT + 1)]
-        mullvad_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(7, 12)]
-        surfshark_list = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(1, 7)]
+    if PROXY_COUNT >= WARP_FIRST_INDEX:
+        # Group 1: 18..PROXY_COUNT (Cloudflare WARP - 4 nodes)
+        # Group 2: 13..17 (Mullvad IPv4 SEA - 5 nodes)
+        # Group 3: 01..12 (Surfshark IPv4 SEA - 12 nodes)
+        warp_list = _proxies(WARP_FIRST_INDEX, PROXY_COUNT)
+        mullvad_list = _proxies(MULLVAD_FIRST_INDEX, MULLVAD_LAST_INDEX)
+        surfshark_list = _proxies(SURFSHARK_FIRST_INDEX, SURFSHARK_LAST_INDEX)
 
         # Interleave Geo nodes (Surfshark + Mullvad alternating)
         geo_list = []
@@ -67,25 +84,22 @@ def get_proxy_pool() -> List[str]:
 
         return final_pool
     if PROXY_COUNT > 0:
-        return [
-            f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}"
-            for i in range(1, PROXY_COUNT + 1)
-        ]
+        return _proxies(1, PROXY_COUNT)
     if DEFAULT_PROXY:
         return [DEFAULT_PROXY]
     return []
 
 def get_warp_proxies() -> List[str]:
-    if PROXY_COUNT >= 12:
-        return [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(12, PROXY_COUNT + 1)]
+    if PROXY_COUNT >= WARP_FIRST_INDEX:
+        return _proxies(WARP_FIRST_INDEX, PROXY_COUNT)
     return []
 
 
 def get_geo_proxies() -> List[str]:
-    """Returns Indonesia & Singapore proxies (Surfshark 01..06 + Mullvad 07..11) for geo-locked content."""
-    if PROXY_COUNT >= 11:
-        surfshark = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(1, 7)]
-        mullvad = [f"socks5h://{PROXY_HOST_PREFIX}-{i:02d}:{PROXY_PORT}" for i in range(7, 12)]
+    """Returns Surfshark 01..12 + Mullvad 13..17 (SEA IPv4 exits) for geo-locked content."""
+    if PROXY_COUNT >= MULLVAD_LAST_INDEX:
+        surfshark = _proxies(SURFSHARK_FIRST_INDEX, SURFSHARK_LAST_INDEX)
+        mullvad = _proxies(MULLVAD_FIRST_INDEX, MULLVAD_LAST_INDEX)
         res = []
         for i in range(max(len(surfshark), len(mullvad))):
             if i < len(surfshark):
@@ -106,15 +120,24 @@ def get_indo_proxies() -> List[str]:
 
 
 def _pick_from(candidates: List[str]) -> Optional[str]:
-    """Pick the best candidate: skip dead/cooldown proxies, prefer least-loaded."""
+    """Pick the best candidate: skip dead/cooldown/blocked proxies, prefer least-loaded."""
     usable = [p for p in candidates if p and is_proxy_usable(p)]
     if not usable:
         return None
-    usable.sort(key=lambda p: (get_in_flight(p), random.random()))
+    # One batched read for the whole candidate list; the load figure is shared
+    # across workers, so this reflects the service's real load, not this worker's.
+    loads = get_in_flight_many(usable)
+    usable.sort(key=lambda p: (loads.get(p, 0), random.random()))
     return usable[0]
 
 
-def get_next_proxy(prefer_geo: bool = False, indo_only: bool = False) -> Optional[str]:
+def get_next_proxy(prefer_geo: bool = False, indo_only: bool = False,
+                   warp_only: bool = False) -> Optional[str]:
+    if warp_only:
+        # Strict on purpose: the first attempt asks for Cloudflare or nothing, so
+        # the caller decides the fallback instead of silently landing on a geo
+        # node it was trying to save.
+        return _pick_from(get_warp_proxies())
     if indo_only:
         p = _pick_from(get_indo_proxies())
         if p:

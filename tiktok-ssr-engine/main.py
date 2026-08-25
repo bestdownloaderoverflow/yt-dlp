@@ -23,7 +23,7 @@ from extractor import (
     TikTokSSRExtractor,
     build_filename,
 )
-from proxy_state import dec_in_flight, inc_in_flight, mark_proxy_cooldown, mark_proxy_usable
+from proxy_state import dec_in_flight, inc_in_flight, mark_proxy_blocked, mark_proxy_cooldown, mark_proxy_usable
 from session import get_cached_extraction, get_session, set_cached_extraction
 
 
@@ -92,6 +92,39 @@ async def metrics():
     )
 
 
+@app.get("/proxies")
+async def proxies_status(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    api_key: Optional[str] = Query(None, alias="api_key"),
+):
+    """Per-proxy view of the pool: which exits TikTok is currently refusing."""
+    check_auth(x_api_key, api_key)
+
+    from config import get_geo_proxies, get_indo_proxies, get_warp_proxies
+    from proxy_state import proxy_status
+
+    warp = get_warp_proxies()
+    indo = set(get_indo_proxies())
+
+    entries = []
+    for url in warp + get_geo_proxies():
+        status = proxy_status(url)
+        status["lane"] = "cloudflare" if url in warp else "geo"
+        status["indonesia"] = url in indo
+        entries.append(status)
+
+    blocked = [e["proxy"] for e in entries if e["blocked"]]
+    return {
+        "total": len(entries),
+        "usable": sum(1 for e in entries if e["usable"]),
+        "blocked": len(blocked),
+        "blocked_proxies": blocked,
+        "cloudflare_usable": sum(1 for e in entries if e["lane"] == "cloudflare" and e["usable"]),
+        "geo_usable": sum(1 for e in entries if e["lane"] == "geo" and e["usable"]),
+        "proxies": entries,
+    }
+
+
 @app.post("/tiktok")
 @app.get("/tiktok")
 @app.post("/fetch")
@@ -147,13 +180,25 @@ async def extract_tiktok(
         real_attempts += 1
 
         if prefer_indo:
+            # Region-locked content still overrides everything: only Indonesia exits
+            # can see it, so Cloudflare-first does not apply once we know that.
             proxy = req_proxy or get_next_proxy(indo_only=True) or get_next_proxy(prefer_geo=True)
+            lane = "indo"
+        elif real_attempts == 1:
+            # First attempt goes through Cloudflare WARP, falling back to the geo
+            # pool only when every WARP node is dead, cooling down or blocked.
+            proxy = req_proxy or get_next_proxy(warp_only=True)
+            lane = "cloudflare"
+            if not proxy:
+                proxy = get_next_proxy(prefer_geo=True)
+                lane = "geo (no WARP available)"
         else:
-            proxy = req_proxy or get_next_proxy(prefer_geo=(real_attempts >= 2))
+            proxy = req_proxy or get_next_proxy(prefer_geo=True)
+            lane = "geo"
         proxy = proxy or DEFAULT_PROXY or None
 
         if VERBOSE_LOGS:
-            print(f"  🔄 [Attempt {real_attempts}/{max_attempts}] Trying proxy: {proxy} (Indo-Priority: {prefer_indo})", flush=True)
+            print(f"  🔄 [Attempt {real_attempts}/{max_attempts}] lane={lane} proxy={proxy}", flush=True)
         inc_in_flight(proxy)
         try:
             extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
@@ -184,11 +229,12 @@ async def extract_tiktok(
                 break
             prefer_indo = True
         except TikTokGeoBlockedError as e:
-            # IP blocked / WAF: go straight to Indonesia nodes
+            # WAF verdict on the exit IP itself: park it as blocked so the whole
+            # pool stops picking it, not just this request.
             last_error = e
-            mark_proxy_cooldown(proxy, 30)
+            mark_proxy_blocked(proxy)
             if VERBOSE_LOGS:
-                print(f"  ⚠️ [Attempt {real_attempts}] GEO-BLOCKED on {proxy} (cooldown 30s) -> switching to Indonesia nodes", flush=True)
+                print(f"  🚫 [Attempt {real_attempts}] IP BLOCKED on {proxy} -> marked blocked, switching to Indonesia nodes", flush=True)
             if req_proxy:
                 break
             prefer_indo = True
@@ -221,6 +267,10 @@ async def stream_rendered_slideshow(
     duration_per_image: int = 3,
     cookies: Optional[str] = None,
 ):
+    # Slideshows pull every photo plus the audio track through the proxy before
+    # ffmpeg runs, so they load a node just like a video download does.
+    if proxy:
+        inc_in_flight(proxy)
     temp_dir = tempfile.mkdtemp(prefix="tiktok_slideshow_")
     work_dir = Path(temp_dir)
     proxies = {"http": proxy, "https": proxy} if proxy else None
@@ -286,6 +336,8 @@ async def stream_rendered_slideshow(
                 while chunk := vf.read(64 * 1024):
                     yield chunk
     finally:
+        if proxy:
+            dec_in_flight(proxy)
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -343,7 +395,10 @@ async def download_tiktok_media(
 
     upstream_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer": "https://www.tiktok.com/",
+        # yt-dlp sends the video's own page as Referer (http_headers={'Referer': webpage_url}),
+        # not a generic homepage. Match that: the CDN accepts both today, but the
+        # per-video Referer is what a real player sends.
+        "Referer": session_data.get("url") or "https://www.tiktok.com/",
         "Accept": "*/*",
         "Accept-Encoding": "identity",
     }
@@ -358,6 +413,9 @@ async def download_tiktok_media(
 
     resp = None
     client = None
+    # Proxy actually carrying the stream, or None when we fell back to going out
+    # direct. Only a real proxy gets booked against the pool's load.
+    streaming_proxy = None
     proxy_dict = {"http": proxy, "https": proxy} if proxy else None
     stream_proxy_candidates = [proxy_dict, None] if proxy_dict else [None]
 
@@ -366,6 +424,10 @@ async def download_tiktok_media(
             client = AsyncSession(impersonate=impersonate, proxies=p)
             resp = await client.get(direct_url, headers=upstream_headers, stream=True, allow_redirects=True, timeout=30)
             if resp.status_code in (200, 206):
+                streaming_proxy = proxy if p is not None else None
+                if p is None and proxy_dict is not None:
+                    print(f"[Download] proxy {proxy} failed; streaming direct from the host IP "
+                          f"instead, which bypasses the VPN pool", flush=True)
                 break
             await client.close()
             client = None
@@ -391,11 +453,20 @@ async def download_tiktok_media(
     if "Content-Range" in resp.headers:
         response_headers["Content-Range"] = resp.headers["Content-Range"]
 
+    # Book the proxy for the whole life of the stream. Downloads are the heaviest
+    # thing the pool carries -- minutes long and MBs wide -- so leaving them
+    # unaccounted made least-loaded selection send fetches to a node already
+    # saturated with video traffic.
+    if streaming_proxy:
+        inc_in_flight(streaming_proxy)
+
     async def stream_generator():
         try:
             async for chunk in resp.aiter_content(chunk_size=64 * 1024):
                 yield chunk
         finally:
+            if streaming_proxy:
+                dec_in_flight(streaming_proxy)
             if client:
                 await client.close()
 

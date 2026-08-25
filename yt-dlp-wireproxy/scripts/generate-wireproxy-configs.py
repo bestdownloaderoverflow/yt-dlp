@@ -213,6 +213,10 @@ def render(account: dict, server: Server) -> str:
         "[Peer]",
         f"PublicKey = {server.pubkey}",
         "AllowedIPs = 0.0.0.0/0",
+        # Without this the tunnel goes idle and the next packet pays a ~15s
+        # re-handshake, which times out the health prober and marks healthy
+        # exits dead. Keep the tunnel warm instead.
+        "PersistentKeepalive = 25",
         f"Endpoint = {server.endpoint}",
     ]
     return "\n".join(lines) + "\n" + SOCKS_SECTION

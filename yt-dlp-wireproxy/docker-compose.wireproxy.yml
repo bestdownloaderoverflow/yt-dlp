@@ -370,6 +370,8 @@ services:
       - REDIS_URL=redis://redis:6379/1
       - ALLOW_DIRECT_DOWNLOAD_FALLBACK=false
       - DOWNLOAD_PROXY_ATTEMPTS=3
+      - PROBE_TIMEOUT=12
+      - PROBE_DEAD_AFTER=3
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     depends_on:

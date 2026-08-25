@@ -102,6 +102,7 @@ DNS = 1.1.1.1, 2606:4700:4700::1111
 [Peer]
 PublicKey = {warp['peer_pub']}
 AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
 Endpoint = {warp['endpoint']}
 
 [Socks5]

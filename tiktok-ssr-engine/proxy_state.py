@@ -30,6 +30,7 @@ if REDIS_URL:
 
 _in_memory_until: Dict[str, float] = {}
 _in_memory_exit_ips: Dict[str, str] = {}
+_in_memory_counters: Dict[str, int] = {}
 _in_flight: Dict[str, int] = {}
 _lock = threading.Lock()
 
@@ -225,6 +226,32 @@ def get_proxy_exit_ips_many(proxy_urls) -> Dict[str, str]:
         except Exception:
             pass
     return {u: get_proxy_exit_ip(u) for u in urls}
+
+
+def record_exit_block_strike(exit_ip: str, blocked: bool, ttl_seconds: int = 900) -> int:
+    """Persist hard-block confirmation count per public exit IPv4."""
+    if not exit_ip:
+        return 0
+    name = _key(f"exit:{exit_ip}", "blockstrike")
+    if _redis_client is not None:
+        try:
+            if not blocked:
+                _redis_client.delete(name)
+                return 0
+            pipe = _redis_client.pipeline()
+            pipe.incr(name)
+            pipe.expire(name, max(1, ttl_seconds))
+            values = pipe.execute()
+            return int(values[0] or 0)
+        except Exception:
+            pass
+    with _lock:
+        if not blocked:
+            _in_memory_counters.pop(name, None)
+            return 0
+        value = _in_memory_counters.get(name, 0) + 1
+        _in_memory_counters[name] = value
+        return value
 
 
 def proxy_status(proxy_url: str) -> Dict[str, object]:

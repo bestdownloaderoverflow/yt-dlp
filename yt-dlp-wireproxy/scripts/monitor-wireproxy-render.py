@@ -554,10 +554,18 @@ def render(health: dict, rows: list, proxy_count: int = 18,
     print()
     print(bar)
     unique_ipv4 = len({r["exit_ipv4"] for r in rows if r["exit_ipv4"]})
+    usable_unique_ipv4 = len({
+        r["exit_ipv4"] for r in rows
+        if r["exit_ipv4"] and r["usable"] and r["tunnel_healthy"]
+    })
+    blocked_unique_ipv4 = len({
+        r["exit_ipv4"] for r in rows if r["exit_ipv4"] and r["blocked"]
+    })
     unique_ipv6 = len({r["exit_ipv6"] for r in rows if r["exit_ipv6"]})
     parts = [
         c(_GRN, f"{tunnel_healthy_count}/{proxy_count} tunnels healthy"),
         c(_CYN, f"{unique_ipv4} unique TikTok IPv4"),
+        c(_CYN, f"{usable_unique_ipv4}/{unique_ipv4} usable IPv4"),
     ]
     if state_available:
         parts.insert(1, c(_GRN if usable_count else _RED,
@@ -567,7 +575,7 @@ def render(health: dict, rows: list, proxy_count: int = 18,
     if unique_ipv6:
         parts.append(c(_DIM, f"{unique_ipv6} IPv6 capable"))
     if blocked_count:
-        parts.append(c(_RED, f"{blocked_count} TikTok blocked"))
+        parts.append(c(_RED, f"{blocked_unique_ipv4} blocked IPv4 ({blocked_count} containers)"))
     if cooldown_count:
         parts.append(c(_YEL, f"{cooldown_count} in cooldown"))
     if no_ip_count:

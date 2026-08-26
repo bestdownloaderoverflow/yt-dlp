@@ -45,6 +45,7 @@ from proxy_state import (
     mark_proxy_dead,
     mark_proxy_tunnel_alive,
     mark_proxy_usable,
+    record_exit_block_strike,
     set_proxy_exit_ip,
 )
 from session import (
@@ -345,11 +346,12 @@ class TestTikTokSSROffline(unittest.TestCase):
 
     def test_block_classification(self):
         # Marker present means TikTok served real data: never a block.
-        self.assertFalse(classify_block_response(200, "", 313000, "x", marker_present=True))
-        # The ~44KB JS shell is a degraded page, not a block: embed SSR still works.
-        self.assertFalse(classify_block_response(200, "", 44061, "<html>shell</html>"))
-        # Tiny stub, WAF codes, and region interstitials are blocks.
-        self.assertTrue(classify_block_response(200, "", 1462, "<html/>"))
+        self.assertIs(classify_block_response(200, "", 313000, "x", marker_present=True), False)
+        # Shells, tiny stubs and 5xx responses are inconclusive, not IP blocks.
+        self.assertIsNone(classify_block_response(200, "", 44061, "<html>shell</html>"))
+        self.assertIsNone(classify_block_response(200, "", 1462, "<html/>"))
+        self.assertIsNone(classify_block_response(503, "", 26, "Service Unavailable"))
+        # Only hard WAF/rate-limit signals and region interstitials block.
         self.assertTrue(classify_block_response(403, "", 900, ""))
         self.assertTrue(classify_block_response(429, "", 900, ""))
         self.assertTrue(classify_block_response(302, "https://www.tiktok.com/hk/about", 136, ""))
@@ -359,30 +361,63 @@ class TestTikTokSSROffline(unittest.TestCase):
 
     def test_block_sanity_ratio_fails_open(self):
         pool = {f"socks5h://wireproxy-{i:02d}:1080": True for i in range(1, 21)}
-        # A probe condemning the whole pool is broken, not evidence: commit nothing.
-        self.assertFalse(apply_block_verdicts(pool))
-        for url in pool:
-            self.assertFalse(is_proxy_blocked(url))
-
-        # A believable minority of blocks is committed normally.
-        mixed = {f"socks5h://wireproxy-{i:02d}:1080": (i <= 3) for i in range(1, 21)}
         try:
+            for i, url in enumerate(pool, start=1):
+                set_proxy_exit_ip(url, f"203.0.113.{i}")
+            # A probe condemning the whole unique-IP pool is broken: commit nothing.
+            self.assertFalse(apply_block_verdicts(pool))
+            for url in pool:
+                self.assertFalse(is_proxy_blocked(url))
+
+            # A believable minority needs two hard-block cycles before commit.
+            mixed = {url: (i <= 3) for i, url in enumerate(pool, start=1)}
+            self.assertTrue(apply_block_verdicts(mixed))
+            self.assertFalse(is_proxy_blocked("socks5h://wireproxy-01:1080"))
             self.assertTrue(apply_block_verdicts(mixed))
             self.assertTrue(is_proxy_blocked("socks5h://wireproxy-01:1080"))
             self.assertFalse(is_proxy_blocked("socks5h://wireproxy-19:1080"))
         finally:
-            for url in mixed:
+            for url in pool:
                 clear_proxy_blocked(url)
+                clear_proxy_exit_ip(url)
 
     def test_broken_block_probe_preserves_previous_verdict(self):
         urls = [f"socks5h://wireproxy-{i:02d}:1080" for i in range(1, 6)]
         mark_proxy_blocked(urls[0], 60)
         try:
+            for i, url in enumerate(urls, start=1):
+                set_proxy_exit_ip(url, f"198.51.100.{i}")
             self.assertFalse(apply_block_verdicts({url: True for url in urls}))
             self.assertTrue(is_proxy_blocked(urls[0]))
         finally:
             for url in urls:
                 clear_proxy_blocked(url)
+                clear_proxy_exit_ip(url)
+
+    def test_block_probe_groups_shared_ipv4_and_requires_confirmation(self):
+        p18 = "socks5h://wireproxy-18:1080"
+        p19 = "socks5h://wireproxy-19:1080"
+        p20 = "socks5h://wireproxy-20:1080"
+        shared_ip = "192.0.2.18"
+        served_ip = "192.0.2.19"
+        try:
+            set_proxy_exit_ip(p18, shared_ip)
+            set_proxy_exit_ip(p20, shared_ip)
+            set_proxy_exit_ip(p19, served_ip)
+            verdicts = {p18: True, p20: True, p19: False}
+            self.assertTrue(apply_block_verdicts(verdicts))
+            self.assertFalse(is_proxy_blocked(p18))
+            self.assertFalse(is_proxy_blocked(p20))
+            self.assertTrue(apply_block_verdicts(verdicts))
+            self.assertTrue(is_proxy_blocked(p18))
+            self.assertTrue(is_proxy_blocked(p20))
+            self.assertFalse(is_proxy_blocked(p19))
+        finally:
+            record_exit_block_strike(shared_ip, False)
+            record_exit_block_strike(served_ip, False)
+            for url in (p18, p19, p20):
+                clear_proxy_blocked(url)
+                clear_proxy_exit_ip(url)
 
     def test_error_classification(self):
         class DummyErr(Exception):

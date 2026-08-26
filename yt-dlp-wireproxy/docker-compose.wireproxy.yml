@@ -372,6 +372,8 @@ services:
       - DOWNLOAD_PROXY_ATTEMPTS=3
       - PROBE_TIMEOUT=12
       - PROBE_DEAD_AFTER=3
+      - BLOCK_CONFIRMATIONS=2
+      - BLOCK_PROBE_STARTUP_DELAY=30
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
     depends_on:

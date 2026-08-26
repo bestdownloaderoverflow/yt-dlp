@@ -16,13 +16,16 @@ one Granian worker runs it instead of every worker probing the same pool.
 import asyncio
 import os
 import time
+from typing import Optional
 
 from config import get_geo_proxies, get_indo_proxies, get_proxy_pool
 from proxy_state import (
     clear_proxy_blocked,
+    get_proxy_exit_ips_many,
     mark_proxy_blocked,
     mark_proxy_dead,
     mark_proxy_tunnel_alive,
+    record_exit_block_strike,
     set_proxy_exit_ip,
 )
 
@@ -41,15 +44,14 @@ BLOCK_PROBE_CONCURRENCY = int(os.getenv("BLOCK_PROBE_CONCURRENCY", "6"))
 BLOCK_PROBE_URL = os.getenv(
     "BLOCK_PROBE_URL", "https://www.tiktok.com/embed/v2/7674742042081152269")
 BLOCK_PROBE_MARKER = os.getenv("BLOCK_PROBE_MARKER", "__FRONTITY_CONNECT_STATE__")
-# Anything smaller than this is a stub/interstitial, not a real TikTok page. The
-# ~44KB JS shell TikTok often serves is NOT a block: the extractor still gets the
-# data from the embed endpoint, so only genuinely tiny bodies count.
-BLOCK_MIN_BODY_BYTES = int(os.getenv("BLOCK_MIN_BODY_BYTES", "5000"))
 # If this share of the pool looks blocked at once, distrust the probe rather than
 # the pool: exits spread over three providers and six countries do not all get
 # blocked in the same instant, but a stale probe URL breaks for all of them at
 # once. Fail open, because marking everything blocked empties the pool.
 BLOCK_SANITY_RATIO = float(os.getenv("BLOCK_SANITY_RATIO", "0.8"))
+BLOCK_CONFIRMATIONS = max(1, int(os.getenv("BLOCK_CONFIRMATIONS", "2")))
+BLOCK_PROBE_STARTUP_DELAY_SECONDS = float(os.getenv("BLOCK_PROBE_STARTUP_DELAY", "30"))
+BLOCK_STRIKE_TTL_SECONDS = max(int(BLOCK_PROBE_INTERVAL_SECONDS * 3), 60)
 
 _probe_task = None
 _block_task = None
@@ -105,22 +107,26 @@ async def probe_proxy(proxy_url: str) -> bool:
 
 
 def classify_block_response(status_code: int, location: str, body_len: int, body_head: str,
-                            marker_present: bool = False) -> bool:
-    """True when TikTok is refusing this exit IP rather than serving the page."""
+                            marker_present: bool = False) -> Optional[bool]:
+    """Return True for a hard block, False for proven service, else None."""
     if status_code in (403, 429):
         return True
     # Region interstitials: TikTok 302s exits it will not serve (e.g. HK -> /hk/about).
     if 300 <= status_code < 400 and "/about" in (location or ""):
         return True
-    if status_code != 200:
-        return True
     # WAF verdict embedded in the payload outranks a healthy-looking body.
     if '"statusCode":10204' in body_head or '"statusCode": 10204' in body_head:
         return True
+    # A 5xx, timeout-like response, stale probe post, or unexpected page is not
+    # evidence that the public IP is blocked. Preserve the previous verdict.
+    if status_code != 200:
+        return None
     # Real data came back, so the exit is definitely being served.
     if marker_present:
         return False
-    return body_len < BLOCK_MIN_BODY_BYTES
+    # Tiny stubs and large shells without the data marker are both inconclusive:
+    # TikTok serves them for geo/content reasons as well as during degradation.
+    return None
 
 
 async def probe_block(proxy_url: str):
@@ -165,24 +171,57 @@ def apply_block_verdicts(verdicts: dict) -> bool:
     if not verdicts:
         return False
 
-    blocked_count = sum(1 for v in verdicts.values() if v)
-    if blocked_count / len(verdicts) > BLOCK_SANITY_RATIO:
-        print(f"[BlockProbe] IGNORED: {blocked_count}/{len(verdicts)} exits looked blocked, "
+    all_urls = list(dict.fromkeys(_all_proxy_urls() + list(verdicts)))
+    exit_ips = get_proxy_exit_ips_many(all_urls)
+    members_by_ip = {}
+    verdicts_by_ip = {}
+    for url in all_urls:
+        if exit_ip := exit_ips.get(url, ""):
+            members_by_ip.setdefault(exit_ip, []).append(url)
+    for url, verdict in verdicts.items():
+        if (exit_ip := exit_ips.get(url, "")) and isinstance(verdict, bool):
+            verdicts_by_ip.setdefault(exit_ip, []).append(verdict)
+
+    # Unknown exit IPs are deliberately inconclusive. Containers sharing one
+    # IPv4 form one verdict group; a proven-serving result wins over a block.
+    grouped_verdicts = {
+        exit_ip: (False if False in values else True)
+        for exit_ip, values in verdicts_by_ip.items()
+        if values
+    }
+    if not grouped_verdicts:
+        return False
+
+    blocked_count = sum(1 for value in grouped_verdicts.values() if value)
+    if blocked_count / len(grouped_verdicts) > BLOCK_SANITY_RATIO:
+        print(f"[BlockProbe] IGNORED: {blocked_count}/{len(grouped_verdicts)} unique IPv4 exits looked blocked, "
               f"which means the probe is broken, not the pool. Preserving previous state.", flush=True)
         # Preserve the last known state. A broken probe is not evidence that
         # previously blocked exits have recovered.
         return False
 
-    for url, blocked in verdicts.items():
+    for exit_ip, blocked in grouped_verdicts.items():
+        members = members_by_ip.get(exit_ip, [])
         if blocked:
-            mark_proxy_blocked(url)
-            if not _block_state.get(url):
-                print(f"[BlockProbe] {url} is now BLOCKED by TikTok", flush=True)
+            strikes = record_exit_block_strike(
+                exit_ip, True, ttl_seconds=BLOCK_STRIKE_TTL_SECONDS)
+            if strikes < BLOCK_CONFIRMATIONS:
+                print(f"[BlockProbe] hard-block strike {strikes}/{BLOCK_CONFIRMATIONS} "
+                      f"for IPv4 {exit_ip}; awaiting confirmation", flush=True)
+                continue
+            record_exit_block_strike(exit_ip, False)
+            for url in members:
+                mark_proxy_blocked(url)
+                if not _block_state.get(url):
+                    print(f"[BlockProbe] {url} is now BLOCKED by TikTok (IPv4 {exit_ip})", flush=True)
         else:
-            clear_proxy_blocked(url)
-            if _block_state.get(url):
-                print(f"[BlockProbe] {url} is serving again", flush=True)
-        _block_state[url] = blocked
+            record_exit_block_strike(exit_ip, False)
+            for url in members:
+                clear_proxy_blocked(url)
+                if _block_state.get(url):
+                    print(f"[BlockProbe] {url} is serving again (IPv4 {exit_ip})", flush=True)
+        for url in members:
+            _block_state[url] = blocked
     return True
 
 
@@ -221,6 +260,9 @@ async def _block_prober_loop():
         async with sem:
             return await probe_block(url)
 
+    if BLOCK_PROBE_STARTUP_DELAY_SECONDS > 0:
+        await asyncio.sleep(BLOCK_PROBE_STARTUP_DELAY_SECONDS)
+
     while True:
         try:
             lease_ttl = max(int(BLOCK_PROBE_INTERVAL_SECONDS) - 5, 30)
@@ -235,8 +277,8 @@ async def _block_prober_loop():
                         if isinstance(res, bool)
                     }
                     if apply_block_verdicts(verdicts):
-                        blocked = sum(1 for v in verdicts.values() if v)
-                        print(f"[BlockProbe] cycle done: {blocked}/{len(verdicts)} exits blocked "
+                        hard_signals = sum(1 for v in verdicts.values() if v)
+                        print(f"[BlockProbe] cycle done: {hard_signals}/{len(verdicts)} hard-block signals "
                               f"({len(urls) - len(verdicts)} inconclusive)", flush=True)
         except Exception as e:
             print(f"[BlockProbe] cycle failed: {e}", flush=True)

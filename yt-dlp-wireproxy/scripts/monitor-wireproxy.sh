@@ -46,6 +46,7 @@ if [[ "${DETECTED_COUNT}" -gt 0 ]]; then
 else
   PROXY_COUNT="${PROXY_COUNT:-50}"
 fi
+IPV4_TRACE_URL="${IPV4_TRACE_URL:-https://1.1.1.1/cdn-cgi/trace}"
 IPV4_CHECK_URL="${IPV4_CHECK_URL:-https://api.ipify.org}"
 IPV6_CHECK_URL="${IPV6_CHECK_URL:-https://api64.ipify.org}"
 WARP_FIRST_INDEX="${WARP_FIRST_INDEX:-18}"
@@ -156,15 +157,32 @@ probe_one_container() {
   # SOCKS5 probe: keluar lewat ${c}:1080, dilihat dari ytdlp-worker-1.
   # Jangan pakai curl -o "${dir}/ip-${i}" di dalam docker exec: path itu
   # akan dianggap path di container worker, bukan temp dir host monitor.
-  local probe_out status_line body ipv6_out ipv6_status ipv6_body
+  local probe_out status_line body trace_ip ipv6_out ipv6_status ipv6_body
+  # Primary: Cloudflare trace is fast and returns the effective IPv4 as `ip=`.
+  # Keep ipify as an independent fallback so one provider cannot create NOIP
+  # noise for an otherwise healthy tunnel.
   probe_out="$(
     docker exec "${SOCKS_PROBE_CONTAINER}" curl --proxy "socks5h://${c}:1080" \
-      -m 8 -sS \
+      -m 5 -sS \
       -w $'\n%{http_code} %{time_total}\n' \
-      "${IPV4_CHECK_URL}" 2>/dev/null || true
+      "${IPV4_TRACE_URL}" 2>/dev/null || true
   )"
   status_line="$(printf '%s\n' "$probe_out" | tail -n 1)"
   body="$(printf '%s\n' "$probe_out" | sed '$d')"
+  trace_ip="$(printf '%s\n' "$body" | sed -n 's/^ip=//p' | head -n 1 | tr -d '\r')"
+
+  if [[ "$status_line" == 200\ * && "$trace_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+    body="$trace_ip"
+  else
+    probe_out="$(
+      docker exec "${SOCKS_PROBE_CONTAINER}" curl --proxy "socks5h://${c}:1080" \
+        -m 8 -sS \
+        -w $'\n%{http_code} %{time_total}\n' \
+        "${IPV4_CHECK_URL}" 2>/dev/null || true
+    )"
+    status_line="$(printf '%s\n' "$probe_out" | tail -n 1)"
+    body="$(printf '%s\n' "$probe_out" | sed '$d')"
+  fi
 
   if [[ -d "$dir" ]]; then
     printf '%s' "$body" > "${dir}/ip-${i}" 2>/dev/null || true
@@ -214,13 +232,12 @@ do_iteration() {
       > "${dir}/proxies.json"
   fi
 
-  # 2. Fan-out paralel: 18 metrics + 18 socks5 = 36 probe paralel
+  # 2. Fan out all per-container probes in parallel.
   local pids=()
   for i in $(seq -w 1 "$PROXY_COUNT"); do
     probe_one_container "$i" "$dir" &
     pids+=("$!")
   done
-  # Tunggu semua dengan toleransi individual (1 sudah max-time 8, no need for wait timeout)
   for p in "${pids[@]}"; do
     wait "$p" 2>/dev/null || true
   done

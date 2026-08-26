@@ -11,10 +11,10 @@ from fastapi import HTTPException
 
 from config import get_indo_proxies, get_next_proxy, get_proxy_pool, get_warp_proxies
 from extractor import (
+    TikTokAccessRestrictedError,
     TikTokExtractError,
-    TikTokGeoBlockedError,
+    TikTokIPBlockedError,
     TikTokInfraError,
-    TikTokRegionRestrictedError,
     TikTokSSRExtractor,
     _classify_error,
     _decode_ssstik_url,
@@ -24,7 +24,12 @@ from extractor import (
     solve_slardar_challenge,
 )
 from proxy_health import apply_block_verdicts, classify_block_response
-from main import extraction_cache_key, validate_tiktok_post_url
+from main import (
+    extraction_cache_key,
+    mark_proxy_and_shared_exit_blocked,
+    should_retry_via_indonesia,
+    validate_tiktok_post_url,
+)
 from proxy_state import (
     clear_proxy_blocked,
     clear_proxy_exit_ip,
@@ -393,15 +398,41 @@ class TestTikTokSSROffline(unittest.TestCase):
         e3 = DummyErr("could not resolve proxy")
         self.assertIsInstance(_classify_error(e3), TikTokInfraError)
 
-        geo = TikTokGeoBlockedError()
-        self.assertIsInstance(_classify_error(geo), TikTokGeoBlockedError)
+        e4 = DummyErr("cannot complete SOCKS5 connection to www.tiktok.com")
+        e4.code = 97
+        self.assertIsInstance(_classify_error(e4), TikTokInfraError)
 
-        region = TikTokRegionRestrictedError()
-        self.assertIsInstance(_classify_error(region), TikTokRegionRestrictedError)
+        ip_blocked = TikTokIPBlockedError()
+        self.assertIsInstance(_classify_error(ip_blocked), TikTokIPBlockedError)
+
+        restricted = TikTokAccessRestrictedError()
+        self.assertIsInstance(_classify_error(restricted), TikTokAccessRestrictedError)
+        self.assertFalse(restricted.retryable)
 
         generic = _classify_error(DummyErr("some parse error"))
         self.assertIsInstance(generic, TikTokExtractError)
         self.assertNotIsInstance(generic, TikTokInfraError)
+
+    def test_generic_warp_failure_retries_via_indonesia(self):
+        empty_shell = TikTokExtractError("empty shell")
+        # Counts represent distinct known public IPv4 exits, not containers/IPv6.
+        self.assertFalse(should_retry_via_indonesia("cloudflare", empty_shell, 0))
+        self.assertFalse(should_retry_via_indonesia("cloudflare", empty_shell, 1))
+        self.assertTrue(should_retry_via_indonesia("cloudflare", empty_shell, 2))
+        self.assertFalse(should_retry_via_indonesia("geo", TikTokExtractError("parse error"), 2))
+        self.assertFalse(should_retry_via_indonesia("cloudflare", TikTokInfraError("timeout"), 2))
+
+    def test_ip_block_marks_every_proxy_sharing_public_ipv4(self):
+        p18 = "socks5h://wireproxy-18:1080"
+        p19 = "socks5h://wireproxy-19:1080"
+        p20 = "socks5h://wireproxy-20:1080"
+        exits = {p18: "104.28.1.1", p19: "104.28.2.2", p20: "104.28.1.1"}
+        with patch("main.get_proxy_pool", return_value=[p18, p19, p20]), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: exits[p]), \
+                patch("main.mark_proxy_blocked") as mark_blocked:
+            blocked = mark_proxy_and_shared_exit_blocked(p18)
+        self.assertEqual(blocked, {p18, p20})
+        self.assertEqual({call.args[0] for call in mark_blocked.call_args_list}, {p18, p20})
 
     def test_build_filename_photo(self):
         s = {"type": "photo", "photo_index": 3, "author": "M_Yusuf"}
@@ -482,6 +513,14 @@ class TestTikTokSSROffline(unittest.TestCase):
         finally:
             for _ in range(4):
                 dec_in_flight(pool[0])
+
+    def test_warp_selection_deduplicates_shared_public_ipv4(self):
+        import config
+        pool = [f"socks5h://wireproxy-{i:02d}:1080" for i in (18, 19, 20)]
+        exits = {pool[0]: "104.28.1.1", pool[1]: "104.28.1.1", pool[2]: "104.28.2.2"}
+        with patch("config.get_proxy_exit_ips_many", return_value=exits):
+            self.assertEqual(config._pick_from(pool, exclude_exit_ips={"104.28.1.1"}), pool[2])
+            self.assertIsNone(config._pick_from(pool[:2], exclude_exit_ips={"104.28.1.1"}))
 
     def test_get_next_proxy_skips_dead(self):
         with patch("config.is_proxy_usable", side_effect=lambda p: "-01:" not in p):

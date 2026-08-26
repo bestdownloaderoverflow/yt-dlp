@@ -20,10 +20,10 @@ from config import (
     get_next_proxy, get_proxy_pool, get_warp_proxies,
 )
 from extractor import (
+    TikTokAccessRestrictedError,
     TikTokExtractError,
-    TikTokGeoBlockedError,
+    TikTokIPBlockedError,
     TikTokInfraError,
-    TikTokRegionRestrictedError,
     TikTokSSRExtractor,
     build_filename,
 )
@@ -68,6 +68,34 @@ class TikTokRequest(BaseModel):
     url: str
     proxy: Optional[str] = None
     impersonate: Optional[str] = None
+
+
+def should_retry_via_indonesia(
+    lane: str, error: Exception, distinct_warp_exit_failures: int,
+) -> bool:
+    """Require the same content failure on two WARP exits before using Indonesia."""
+    return (
+        lane == "cloudflare"
+        and isinstance(error, TikTokExtractError)
+        and not isinstance(error, TikTokInfraError)
+        and distinct_warp_exit_failures >= 2
+    )
+
+
+def mark_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
+    """Block every configured proxy currently sharing the refused public IPv4."""
+    if not proxy:
+        return set()
+    exit_ip = get_proxy_exit_ip(proxy)
+    blocked = {proxy}
+    if exit_ip:
+        blocked.update(
+            candidate for candidate in get_proxy_pool()
+            if get_proxy_exit_ip(candidate) == exit_ip
+        )
+    for candidate in blocked:
+        mark_proxy_blocked(candidate)
+    return blocked
 
 
 def validate_tiktok_post_url(value: str) -> str:
@@ -233,6 +261,8 @@ async def extract_tiktok(
     real_attempts = 0
     touches = 0
     prefer_indo = False
+    retry_warp = False
+    failed_warp_exit_ips: set[str] = set()
     last_error = None
     tried_proxies: set[str] = set()
     tried_exit_ips: set[str] = set()
@@ -253,9 +283,12 @@ async def extract_tiktok(
                 prefer_geo=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
             )
             lane = "indo"
-        elif real_attempts == 1:
+        elif real_attempts == 1 or retry_warp:
             # First attempt goes through Cloudflare WARP, falling back to the geo
             # pool only when every WARP node is dead, cooling down or blocked.
+            # A generic content failure gets one confirmation attempt on a
+            # different WARP exit before it is treated as a possible geo lock.
+            retry_warp = False
             proxy = req_proxy or get_next_proxy(
                 warp_only=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
             )
@@ -274,10 +307,11 @@ async def extract_tiktok(
         if PROXY_COUNT > 0 and not proxy:
             last_error = TikTokInfraError("No usable proxy exits available")
             break
+        proxy_exit_ip = ""
         if proxy:
             tried_proxies.add(proxy)
-            if exit_ip := get_proxy_exit_ip(proxy):
-                tried_exit_ips.add(exit_ip)
+            if proxy_exit_ip := get_proxy_exit_ip(proxy):
+                tried_exit_ips.add(proxy_exit_ip)
 
         if VERBOSE_LOGS:
             print(f"  🔄 [Attempt {real_attempts}/{max_attempts}] lane={lane} proxy={proxy}", flush=True)
@@ -302,30 +336,54 @@ async def extract_tiktok(
                 print(f"  ⚠️ [Touch {touches}] INFRA FAIL on {proxy} (attempt not consumed, cooldown 60s): {e}", flush=True)
             if req_proxy:
                 break
-        except TikTokRegionRestrictedError as e:
-            # Region-restricted content: go straight to Indonesia nodes
-            last_error = e
-            mark_proxy_cooldown(proxy, 30)
+            if lane == "cloudflare" and failed_warp_exit_ips:
+                retry_warp = True
+        except TikTokAccessRestrictedError as e:
+            # 10216/10222 are private post/account permissions, not geo codes.
+            # Rotating exits cannot grant account access.
             if VERBOSE_LOGS:
-                print(f"  ⚠️ [Attempt {real_attempts}] REGION-RESTRICTED on {proxy} (cooldown 30s) -> switching to Indonesia nodes", flush=True)
-            if req_proxy:
-                break
-            prefer_indo = True
-        except TikTokGeoBlockedError as e:
+                print(f"  🔒 [Attempt {real_attempts}] ACCESS RESTRICTED on {proxy}: {e}", flush=True)
+            raise HTTPException(status_code=403, detail=str(e))
+        except TikTokIPBlockedError as e:
             # WAF verdict on the exit IP itself: park it as blocked so the whole
-            # pool stops picking it, not just this request.
+            # pool stops picking it, not just this request. This is not evidence
+            # of a region lock, so rotate within the current lane first.
             last_error = e
-            mark_proxy_blocked(proxy)
+            blocked_proxies = mark_proxy_and_shared_exit_blocked(proxy)
             if VERBOSE_LOGS:
-                print(f"  🚫 [Attempt {real_attempts}] IP BLOCKED on {proxy} -> marked blocked, switching to Indonesia nodes", flush=True)
+                print(f"  🚫 [Attempt {real_attempts}] IP BLOCKED on {proxy} -> marked {len(blocked_proxies)} shared-exit proxies blocked", flush=True)
             if req_proxy:
                 break
-            prefer_indo = True
+            if lane == "cloudflare":
+                # A refused IP is a routing/infrastructure failure, not a content
+                # attempt. Preserve the budget and try another unique WARP IPv4.
+                real_attempts -= 1
+                retry_warp = True
         except TikTokExtractError as e:
             last_error = e
             mark_proxy_cooldown(proxy, 15)
+            if lane == "cloudflare":
+                # Confirmation is based on TikTok's effective public IPv4. WARP
+                # containers with different IPv6 addresses often share it, and
+                # an unknown exit IP must never count as independent evidence.
+                if proxy_exit_ip:
+                    failed_warp_exit_ips.add(proxy_exit_ip)
+                if should_retry_via_indonesia(lane, e, len(failed_warp_exit_ips)):
+                    # Some region-locked posts return the same empty shell on
+                    # multiple WARP exits instead of a 10216/10222 status. The
+                    # second WARP request is a confirmation probe, so preserve
+                    # the normal content-attempt budget for Indonesia failover.
+                    real_attempts -= 1
+                    prefer_indo = True
+                else:
+                    retry_warp = True
             if VERBOSE_LOGS:
-                print(f"  ⚠️ [Attempt {real_attempts}] FAILED on {proxy} (cooldown 15s): {e}", flush=True)
+                retry_lane = (
+                    " -> switching to Indonesia nodes" if prefer_indo
+                    else " -> confirming on another WARP exit" if retry_warp
+                    else ""
+                )
+                print(f"  ⚠️ [Attempt {real_attempts}] FAILED on {proxy} (cooldown 15s){retry_lane}: {e}", flush=True)
             if req_proxy:
                 break
         except Exception as e:

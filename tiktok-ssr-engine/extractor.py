@@ -33,16 +33,17 @@ class TikTokExtractError(Exception):
         super().__init__(msg or self.message)
 
 
-class TikTokGeoBlockedError(TikTokExtractError):
-    """IP blocked / WAF challenge (status 10204). Retry with geo/ID proxies."""
+class TikTokIPBlockedError(TikTokExtractError):
+    """IP blocked / WAF challenge (status 10204). Retry with another exit IP."""
 
     message = "TikTok IP blocked / WAF challenge (code 10204)"
 
 
-class TikTokRegionRestrictedError(TikTokExtractError):
-    """Content is region-restricted or private (status 10216/10222/classified)."""
+class TikTokAccessRestrictedError(TikTokExtractError):
+    """Private post/account or classified content that requires account access."""
 
-    message = "TikTok content is private, removed, or region-restricted"
+    retryable = False
+    message = "TikTok content is private or requires an account with access"
 
 
 class TikTokInfraError(TikTokExtractError):
@@ -56,8 +57,11 @@ def _classify_error(e: Exception) -> TikTokExtractError:
         return e
     code = getattr(e, "code", None)
     msg = str(e).lower()
-    if code in (5, 7, 28) or any(
-        s in msg for s in ("could not resolve", "connection refused", "timed out", "resolve proxy")
+    if code in (5, 7, 28, 97) or any(
+        s in msg for s in (
+            "could not resolve", "connection refused", "timed out", "resolve proxy",
+            "cannot complete socks5 connection",
+        )
     ):
         return TikTokInfraError(str(e))
     return TikTokExtractError(str(e))
@@ -251,14 +255,16 @@ class TikTokSSRExtractor:
                 # Status code classification
                 status_code = detail.get("statusCode")
                 if status_code == 10204:
-                    raise TikTokGeoBlockedError()
+                    raise TikTokIPBlockedError()
                 elif status_code in (10216, 10222):
-                    raise TikTokRegionRestrictedError(f"TikTok content is private, removed, or region-restricted (code {status_code})")
+                    restriction = "private post" if status_code == 10216 else "private account"
+                    raise TikTokAccessRestrictedError(
+                        f"TikTok {restriction}; log into an account that has access (code {status_code})")
                 
                 item = detail.get("itemInfo", {}).get("itemStruct")
                 if item:
                     if item.get("isContentClassified") and not item.get("video") and not item.get("imagePost"):
-                        raise TikTokRegionRestrictedError("TikTok content is age-classified / login required")
+                        raise TikTokAccessRestrictedError("TikTok content is age-classified / login required")
                     return self.build_response_from_ssr(item, canonical_url, source="web_ssr", cookies=session_cookies)
             except TikTokExtractError:
                 raise

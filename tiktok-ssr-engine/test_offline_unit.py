@@ -32,6 +32,7 @@ from proxy_health import (
     record_probe_success,
 )
 from main import (
+    clear_proxy_and_shared_exit_blocked,
     extraction_cache_key,
     mark_proxy_and_shared_exit_blocked,
     should_cooldown_download_failure,
@@ -533,6 +534,21 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertEqual(marked.count(p18), 2)
         self.assertEqual(marked.count(p20), 1)
         self.assertCountEqual(reconnected, marked)
+
+    def test_tiktok_success_clears_block_for_shared_ipv4_siblings(self):
+        p18 = "socks5h://wireproxy-18:1080"
+        p19 = "socks5h://wireproxy-19:1080"
+        p20 = "socks5h://wireproxy-20:1080"
+        exits = {p18: "104.28.197.9", p19: "104.28.197.9", p20: "104.28.197.13"}
+        with patch("main.get_proxy_pool", return_value=[p18, p19, p20]), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: exits[p]), \
+                patch("main.clear_proxy_blocked") as clear_blocked:
+            serving = clear_proxy_and_shared_exit_blocked(p19)
+        self.assertEqual(serving, {p18, p19})
+        self.assertEqual(
+            {call.args[0] for call in clear_blocked.call_args_list},
+            {p18, p19},
+        )
 
     def test_liveness_probe_uses_fallback_and_shared_failure_counter(self):
         proxy = "socks5h://wireproxy-77:1080"

@@ -29,6 +29,7 @@ from extractor import (
     build_filename,
 )
 from proxy_state import (
+    clear_proxy_blocked,
     dec_in_flight,
     get_proxy_exit_ip,
     inc_in_flight,
@@ -115,6 +116,23 @@ def mark_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
         if candidate in warp_proxies:
             request_proxy_reconnect(candidate)
     return blocked
+
+
+def clear_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
+    """Clear only TikTok block state for every proxy sharing a proven exit IPv4."""
+    if not proxy:
+        return set()
+    exit_ip = get_proxy_exit_ip(proxy)
+    serving = {proxy}
+    if exit_ip:
+        serving.update(
+            candidate for candidate in get_proxy_pool()
+            if get_proxy_exit_ip(candidate) == exit_ip
+        )
+        record_exit_block_strike(exit_ip, False)
+    for candidate in serving:
+        clear_proxy_blocked(candidate)
+    return serving
 
 
 def validate_tiktok_post_url(value: str) -> str:
@@ -339,7 +357,10 @@ async def extract_tiktok(
             extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
             result = await extractor.extract(target_url)
             source = result.get("extract_source") or ""
-            mark_proxy_request_success(proxy, tiktok_served=source != "web_fallback")
+            tiktok_served = source != "web_fallback"
+            mark_proxy_request_success(proxy, tiktok_served=tiktok_served)
+            if tiktok_served:
+                clear_proxy_and_shared_exit_blocked(proxy)
             if VERBOSE_LOGS:
                 print(f"  ✅ [Attempt {real_attempts}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
 

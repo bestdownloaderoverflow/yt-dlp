@@ -34,6 +34,7 @@ from proxy_state import (
     mark_proxy_blocked,
     mark_proxy_cooldown,
     mark_proxy_request_success,
+    request_proxy_reconnect,
 )
 from session import get_cached_extraction, get_session, set_cached_extraction
 
@@ -93,8 +94,11 @@ def mark_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
             candidate for candidate in get_proxy_pool()
             if get_proxy_exit_ip(candidate) == exit_ip
         )
+    warp_proxies = set(get_warp_proxies())
     for candidate in blocked:
         mark_proxy_blocked(candidate)
+        if candidate in warp_proxies:
+            request_proxy_reconnect(candidate)
     return blocked
 
 

@@ -13,9 +13,12 @@ them blocked/unblocked so a healthy-but-refused exit IP stops being picked.
 
 import hashlib
 import os
+import re
 import threading
 import time
+from pathlib import Path
 from typing import Dict, Optional
+from urllib.parse import urlsplit
 
 REDIS_URL = os.getenv("REDIS_URL", "")
 
@@ -38,6 +41,8 @@ DEAD_TTL_SECONDS = int(os.getenv("PROXY_DEAD_TTL", "120"))
 COOLDOWN_SECONDS = int(os.getenv("PROXY_COOLDOWN", "60"))
 BLOCKED_TTL_SECONDS = int(os.getenv("PROXY_BLOCKED_TTL", "300"))
 EXIT_IP_TTL_SECONDS = int(os.getenv("PROXY_EXIT_IP_TTL", "600"))
+RECONNECT_SIGNAL_DIR = os.getenv("WIREPROXY_RECONNECT_DIR", "")
+RECONNECT_COOLDOWN_SECONDS = int(os.getenv("WARP_RECONNECT_COOLDOWN", "300"))
 # Safety net for counters orphaned by a worker that died mid-request: the key is
 # refreshed on every increment, so it only expires once a proxy has been idle
 # this long. Must comfortably exceed the slowest single extraction.
@@ -252,6 +257,62 @@ def record_exit_block_strike(exit_ip: str, blocked: bool, ttl_seconds: int = 900
         value = _in_memory_counters.get(name, 0) + 1
         _in_memory_counters[name] = value
         return value
+
+
+def request_proxy_reconnect(proxy_url: str, cooldown_seconds: int = RECONNECT_COOLDOWN_SECONDS) -> bool:
+    """Signal a WireProxy wrapper once per cooldown window.
+
+    The engine deliberately does not get access to the Docker socket. WARP
+    containers watch their own marker in a shared volume and restart only the
+    WireProxy process when the marker changes.
+    """
+    if not proxy_url or not RECONNECT_SIGNAL_DIR:
+        return False
+    hostname = (urlsplit(proxy_url).hostname or "").lower()
+    if not re.fullmatch(r"wireproxy-\d+", hostname):
+        return False
+
+    cooldown = max(1, int(cooldown_seconds))
+    gate = _key(proxy_url, "reconnect")
+    acquired = False
+    use_memory = _redis_client is None
+    if _redis_client is not None:
+        try:
+            acquired = bool(_redis_client.set(gate, str(time.time()), nx=True, ex=cooldown))
+        except Exception:
+            use_memory = True
+    if use_memory:
+        now = time.time()
+        with _lock:
+            if _in_memory_until.get(gate, 0) < now:
+                _in_memory_until[gate] = now + cooldown
+                acquired = True
+    if not acquired:
+        return False
+
+    marker_dir = Path(RECONNECT_SIGNAL_DIR)
+    marker = marker_dir / hostname
+    temporary = marker_dir / f".{hostname}.{os.getpid()}.tmp"
+    try:
+        marker_dir.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(f"{time.time_ns()}\n", encoding="ascii")
+        temporary.replace(marker)
+        return True
+    except OSError as exc:
+        print(f"[ProxyState] reconnect signal failed for {hostname}: {exc}", flush=True)
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        if _redis_client is not None:
+            try:
+                _redis_client.delete(gate)
+            except Exception:
+                pass
+        else:
+            with _lock:
+                _in_memory_until.pop(gate, None)
+        return False
 
 
 def proxy_status(proxy_url: str) -> Dict[str, object]:

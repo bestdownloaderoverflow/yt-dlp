@@ -276,8 +276,11 @@ services:
   wireproxy-18:
     <<: *wireproxy
     container_name: wireproxy-18
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-18
     volumes:
       - ./runtime-configs/wireproxy-18.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -291,8 +294,11 @@ services:
   wireproxy-19:
     <<: *wireproxy
     container_name: wireproxy-19
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-19
     volumes:
       - ./runtime-configs/wireproxy-19.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -306,8 +312,11 @@ services:
   wireproxy-20:
     <<: *wireproxy
     container_name: wireproxy-20
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-20
     volumes:
       - ./runtime-configs/wireproxy-20.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -321,8 +330,11 @@ services:
   wireproxy-21:
     <<: *wireproxy
     container_name: wireproxy-21
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-21
     volumes:
       - ./runtime-configs/wireproxy-21.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -374,8 +386,11 @@ services:
       - PROBE_DEAD_AFTER=3
       - BLOCK_CONFIRMATIONS=2
       - BLOCK_PROBE_STARTUP_DELAY=30
+      - WIREPROXY_RECONNECT_DIR=/var/run/wireproxy-reconnect
+      - WARP_RECONNECT_COOLDOWN=300
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect
     depends_on:
       - redis
       - wireproxy-01
@@ -420,3 +435,4 @@ networks:
 
 volumes:
   redis-data:
+  warp-reconnect-signals:

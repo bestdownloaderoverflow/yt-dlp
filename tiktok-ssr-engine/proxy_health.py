@@ -18,14 +18,16 @@ import os
 import time
 from typing import Optional
 
-from config import get_geo_proxies, get_indo_proxies, get_proxy_pool
+from config import get_geo_proxies, get_indo_proxies, get_proxy_pool, get_warp_proxies
 from proxy_state import (
     clear_proxy_blocked,
+    get_proxy_exit_ip,
     get_proxy_exit_ips_many,
     mark_proxy_blocked,
     mark_proxy_dead,
     mark_proxy_tunnel_alive,
     record_exit_block_strike,
+    request_proxy_reconnect,
     set_proxy_exit_ip,
 )
 
@@ -69,6 +71,21 @@ def _all_proxy_urls():
     return urls
 
 
+def record_probe_success(proxy_url: str, exit_ip: str) -> bool:
+    """Record liveness and clear an old-IP block after a successful reconnect."""
+    previous_exit_ip = get_proxy_exit_ip(proxy_url)
+    changed = bool(previous_exit_ip and exit_ip and previous_exit_ip != exit_ip)
+    mark_proxy_tunnel_alive(proxy_url)
+    if exit_ip:
+        set_proxy_exit_ip(proxy_url, exit_ip)
+    if changed:
+        clear_proxy_blocked(proxy_url)
+        record_exit_block_strike(previous_exit_ip, False)
+        print(f"[Prober] {proxy_url} exit IPv4 changed "
+              f"{previous_exit_ip} -> {exit_ip}; block cleared", flush=True)
+    return changed
+
+
 async def probe_proxy(proxy_url: str) -> bool:
     from curl_cffi.requests import AsyncSession
 
@@ -95,9 +112,7 @@ async def probe_proxy(proxy_url: str) -> bool:
 
     if ok:
         _consecutive_failures.pop(proxy_url, None)
-        mark_proxy_tunnel_alive(proxy_url)
-        if exit_ip:
-            set_proxy_exit_ip(proxy_url, exit_ip)
+        record_probe_success(proxy_url, exit_ip)
     else:
         n = _consecutive_failures.get(proxy_url, 0) + 1
         _consecutive_failures[proxy_url] = n
@@ -210,8 +225,12 @@ def apply_block_verdicts(verdicts: dict) -> bool:
                       f"for IPv4 {exit_ip}; awaiting confirmation", flush=True)
                 continue
             record_exit_block_strike(exit_ip, False)
+            warp_proxies = set(get_warp_proxies())
             for url in members:
                 mark_proxy_blocked(url)
+                if url in warp_proxies and request_proxy_reconnect(url):
+                    print(f"[BlockProbe] reconnect requested for {url} "
+                          f"while IPv4 {exit_ip} is blocked", flush=True)
                 if not _block_state.get(url):
                     print(f"[BlockProbe] {url} is now BLOCKED by TikTok (IPv4 {exit_ip})", flush=True)
         else:

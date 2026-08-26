@@ -4,6 +4,7 @@ Does not require internet access, live servers, or proxies.
 """
 
 import json
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -23,7 +24,7 @@ from extractor import (
     sanitize_filename_part,
     solve_slardar_challenge,
 )
-from proxy_health import apply_block_verdicts, classify_block_response
+from proxy_health import apply_block_verdicts, classify_block_response, record_probe_success
 from main import (
     extraction_cache_key,
     mark_proxy_and_shared_exit_blocked,
@@ -46,6 +47,7 @@ from proxy_state import (
     mark_proxy_tunnel_alive,
     mark_proxy_usable,
     record_exit_block_strike,
+    request_proxy_reconnect,
     set_proxy_exit_ip,
 )
 from session import (
@@ -405,10 +407,14 @@ class TestTikTokSSROffline(unittest.TestCase):
             set_proxy_exit_ip(p20, shared_ip)
             set_proxy_exit_ip(p19, served_ip)
             verdicts = {p18: True, p20: True, p19: False}
-            self.assertTrue(apply_block_verdicts(verdicts))
-            self.assertFalse(is_proxy_blocked(p18))
-            self.assertFalse(is_proxy_blocked(p20))
-            self.assertTrue(apply_block_verdicts(verdicts))
+            with patch("proxy_health.request_proxy_reconnect", return_value=False) as reconnect:
+                self.assertTrue(apply_block_verdicts(verdicts))
+                self.assertFalse(is_proxy_blocked(p18))
+                self.assertFalse(is_proxy_blocked(p20))
+                self.assertTrue(apply_block_verdicts(verdicts))
+            self.assertEqual(
+                {call.args[0] for call in reconnect.call_args_list}, {p18, p20}
+            )
             self.assertTrue(is_proxy_blocked(p18))
             self.assertTrue(is_proxy_blocked(p20))
             self.assertFalse(is_proxy_blocked(p19))
@@ -418,6 +424,33 @@ class TestTikTokSSROffline(unittest.TestCase):
             for url in (p18, p19, p20):
                 clear_proxy_blocked(url)
                 clear_proxy_exit_ip(url)
+
+    def test_exit_ip_change_clears_old_block(self):
+        proxy = "socks5h://wireproxy-18:1080"
+        try:
+            set_proxy_exit_ip(proxy, "104.28.1.1")
+            mark_proxy_blocked(proxy, 60)
+            self.assertTrue(record_probe_success(proxy, "104.28.2.2"))
+            self.assertEqual(get_proxy_exit_ip(proxy), "104.28.2.2")
+            self.assertFalse(is_proxy_blocked(proxy))
+            self.assertFalse(record_probe_success(proxy, "104.28.2.2"))
+        finally:
+            clear_proxy_blocked(proxy)
+            clear_proxy_exit_ip(proxy)
+
+    def test_reconnect_signal_is_deduplicated_during_cooldown(self):
+        proxy = "socks5h://wireproxy-99:1080"
+        with tempfile.TemporaryDirectory() as signal_dir, \
+                patch("proxy_state.RECONNECT_SIGNAL_DIR", signal_dir), \
+                patch("proxy_state._redis_client", None):
+            self.assertTrue(request_proxy_reconnect(proxy, cooldown_seconds=60))
+            marker = f"{signal_dir}/wireproxy-99"
+            with open(marker, encoding="ascii") as handle:
+                first_token = handle.read()
+            self.assertFalse(request_proxy_reconnect(proxy, cooldown_seconds=60))
+            with open(marker, encoding="ascii") as handle:
+                self.assertEqual(handle.read(), first_token)
+            self.assertFalse(request_proxy_reconnect("socks5h://not-wireproxy:1080", 60))
 
     def test_error_classification(self):
         class DummyErr(Exception):
@@ -463,11 +496,14 @@ class TestTikTokSSROffline(unittest.TestCase):
         p20 = "socks5h://wireproxy-20:1080"
         exits = {p18: "104.28.1.1", p19: "104.28.2.2", p20: "104.28.1.1"}
         with patch("main.get_proxy_pool", return_value=[p18, p19, p20]), \
+                patch("main.get_warp_proxies", return_value=[p18, p19, p20]), \
                 patch("main.get_proxy_exit_ip", side_effect=lambda p: exits[p]), \
-                patch("main.mark_proxy_blocked") as mark_blocked:
+                patch("main.mark_proxy_blocked") as mark_blocked, \
+                patch("main.request_proxy_reconnect") as reconnect:
             blocked = mark_proxy_and_shared_exit_blocked(p18)
         self.assertEqual(blocked, {p18, p20})
         self.assertEqual({call.args[0] for call in mark_blocked.call_args_list}, {p18, p20})
+        self.assertEqual({call.args[0] for call in reconnect.call_args_list}, {p18, p20})
 
     def test_build_filename_photo(self):
         s = {"type": "photo", "photo_index": 3, "author": "M_Yusuf"}

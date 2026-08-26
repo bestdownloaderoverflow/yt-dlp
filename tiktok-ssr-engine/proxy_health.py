@@ -14,6 +14,7 @@ one Granian worker runs it instead of every worker probing the same pool.
 """
 
 import asyncio
+import ipaddress
 import os
 import time
 from typing import Optional
@@ -27,6 +28,7 @@ from proxy_state import (
     mark_proxy_dead,
     mark_proxy_tunnel_alive,
     record_exit_block_strike,
+    record_proxy_probe_failure,
     request_proxy_reconnect,
     set_proxy_exit_ip,
 )
@@ -35,6 +37,14 @@ PROBE_INTERVAL_SECONDS = float(os.getenv("PROBE_INTERVAL", "45"))
 PROBE_TIMEOUT_SECONDS = float(os.getenv("PROBE_TIMEOUT", "6"))
 PROBE_CONCURRENCY = int(os.getenv("PROBE_CONCURRENCY", "12"))
 PROBE_DEAD_AFTER = int(os.getenv("PROBE_DEAD_AFTER", "2"))
+PROBE_URLS = tuple(
+    url.strip() for url in os.getenv(
+        "PROBE_URLS",
+        "https://1.1.1.1/cdn-cgi/trace,https://api.ipify.org",
+    ).split(",") if url.strip()
+)
+PROBE_FAILURE_TTL_SECONDS = max(
+    int(PROBE_INTERVAL_SECONDS * (PROBE_DEAD_AFTER + 2)), 60)
 
 BLOCK_PROBE_INTERVAL_SECONDS = float(os.getenv("BLOCK_PROBE_INTERVAL", "300"))
 BLOCK_PROBE_TIMEOUT_SECONDS = float(os.getenv("BLOCK_PROBE_TIMEOUT", "20"))
@@ -57,7 +67,6 @@ BLOCK_STRIKE_TTL_SECONDS = max(int(BLOCK_PROBE_INTERVAL_SECONDS * 3), 60)
 
 _probe_task = None
 _block_task = None
-_consecutive_failures = {}
 _block_state = {}
 
 
@@ -89,33 +98,45 @@ def record_probe_success(proxy_url: str, exit_ip: str) -> bool:
 async def probe_proxy(proxy_url: str) -> bool:
     from curl_cffi.requests import AsyncSession
 
+    ok = False
+    exit_ip = ""
     try:
         async with AsyncSession(
             proxies={"http": proxy_url, "https": proxy_url},
             timeout=PROBE_TIMEOUT_SECONDS,
         ) as session:
-            resp = await session.get(
-                "https://1.1.1.1/cdn-cgi/trace",
-                timeout=PROBE_TIMEOUT_SECONDS,
-                headers={"User-Agent": "curl/8"},
-            )
-            ok = resp.status_code == 200
-            exit_ip = ""
-            if ok:
-                for line in (resp.text or "").splitlines():
-                    if line.startswith("ip="):
-                        exit_ip = line.split("=", 1)[1].strip()
-                        break
+            for probe_url in PROBE_URLS:
+                try:
+                    resp = await session.get(
+                        probe_url,
+                        timeout=PROBE_TIMEOUT_SECONDS,
+                        headers={"User-Agent": "curl/8"},
+                    )
+                    if resp.status_code != 200:
+                        continue
+                    body = (resp.text or "").strip()
+                    candidate = body
+                    for line in body.splitlines():
+                        if line.startswith("ip="):
+                            candidate = line.split("=", 1)[1].strip()
+                            break
+                    try:
+                        exit_ip = str(ipaddress.IPv4Address(candidate))
+                    except ipaddress.AddressValueError:
+                        continue
+                    ok = True
+                    break
+                except Exception:
+                    continue
     except Exception:
-        ok = False
-        exit_ip = ""
+        pass
 
     if ok:
-        _consecutive_failures.pop(proxy_url, None)
+        record_proxy_probe_failure(proxy_url, False)
         record_probe_success(proxy_url, exit_ip)
     else:
-        n = _consecutive_failures.get(proxy_url, 0) + 1
-        _consecutive_failures[proxy_url] = n
+        n = record_proxy_probe_failure(
+            proxy_url, True, ttl_seconds=PROBE_FAILURE_TTL_SECONDS)
         if n >= PROBE_DEAD_AFTER:
             mark_proxy_dead(proxy_url)
     return ok

@@ -214,7 +214,7 @@ def handshake_color(handshake: str) -> str:
 
 def status_palette(row: dict) -> str:
     """Color the row's overall indicator (used in STATUS cell)."""
-    if row["dead"] or not row["tunnel_healthy"]:
+    if row["dead"]:
         return _RED
     if not row["state_known"]:
         return _RED
@@ -224,8 +224,8 @@ def status_palette(row: dict) -> str:
         return _YEL
     if row["active_requests"] > 0:
         return _YEL
-    if not row["exit_ipv4"] or row["http_code"] != 200:
-        return _RED
+    if not row["probe_ok"]:
+        return _YEL
     if row["latency_ms"] > 3000:
         return _YEL
     if row["latency_ms"] > 1500:
@@ -235,7 +235,7 @@ def status_palette(row: dict) -> str:
 
 def status_text(row: dict) -> tuple[str, str]:
     """Return (text, color) for STATUS column."""
-    if row["dead"] or not row["tunnel_healthy"]:
+    if row["dead"]:
         return "DOWN", _RED
     if not row["state_known"]:
         return "NOSTATE", _RED
@@ -245,7 +245,7 @@ def status_text(row: dict) -> tuple[str, str]:
         return "COOL", _YEL
     if not row["usable"]:
         return "UNUSE", _RED
-    if not row["exit_ipv4"] or row["http_code"] != 200:
+    if not row["probe_ok"]:
         return "NOIP", _YEL
     if row["active_requests"] > 0:
         return "BUSY", _YEL
@@ -389,7 +389,7 @@ def main() -> int:
         else:
             country = "Wireproxy"
 
-        is_probe_ok = (http_code == 200 and bool(exit_ipv4))
+        is_probe_ok = (http_code == 200 and bool(probe_ipv4) and ":" not in probe_ipv4)
         has_state = bool(ph)
         dead = bool(ph.get("dead", False))
         blocked = bool(ph.get("blocked", False))
@@ -401,7 +401,10 @@ def main() -> int:
             "container": cid,
             "proxy_id": f"p{i}",
             "country": country,
-            "tunnel_healthy": is_probe_ok and not dead,
+            # Engine liveness is authoritative and already requires repeated,
+            # multi-target failures. This one-shot monitor probe is diagnostic.
+            "tunnel_healthy": has_state and not dead,
+            "probe_ok": is_probe_ok,
             "state_known": has_state,
             "usable": usable,
             "dead": dead,
@@ -488,7 +491,7 @@ def render(health: dict, rows: list, proxy_count: int = 18,
                 blocked_count += 1
             if r["cooldown"]:
                 cooldown_count += 1
-            if not r["exit_ipv4"] or r["http_code"] != 200:
+            if not r["probe_ok"]:
                 no_ip_count += 1
             if r["latency_ms"] > 3000:
                 slow_count += 1

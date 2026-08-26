@@ -25,6 +25,7 @@ from extractor import (
     TikTokIPBlockedError,
     TikTokInfraError,
     TikTokSSRExtractor,
+    _classify_error,
     build_filename,
 )
 from proxy_state import (
@@ -34,6 +35,7 @@ from proxy_state import (
     mark_proxy_blocked,
     mark_proxy_cooldown,
     mark_proxy_request_success,
+    record_exit_block_strike,
     request_proxy_reconnect,
 )
 from session import get_cached_extraction, get_session, set_cached_extraction
@@ -63,6 +65,8 @@ ALLOW_DIRECT_DOWNLOAD_FALLBACK = os.getenv(
     "ALLOW_DIRECT_DOWNLOAD_FALLBACK", "1" if PROXY_COUNT == 0 else "0"
 ).lower() in {"1", "true", "yes"}
 DOWNLOAD_PROXY_ATTEMPTS = max(1, int(os.getenv("DOWNLOAD_PROXY_ATTEMPTS", "3")))
+REQUEST_BLOCK_CONFIRMATIONS = max(1, int(os.getenv("REQUEST_BLOCK_CONFIRMATIONS", "2")))
+REQUEST_BLOCK_STRIKE_TTL = max(60, int(os.getenv("REQUEST_BLOCK_STRIKE_TTL", "900")))
 
 
 class TikTokRequest(BaseModel):
@@ -83,17 +87,28 @@ def should_retry_via_indonesia(
     )
 
 
+def should_cooldown_download_failure(error: Exception) -> bool:
+    """Only transport/proxy failures justify parking a download proxy."""
+    return isinstance(_classify_error(error), TikTokInfraError)
+
+
 def mark_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
-    """Block every configured proxy currently sharing the refused public IPv4."""
+    """Park the refused proxy; fan out to a shared IPv4 only after confirmation."""
     if not proxy:
         return set()
     exit_ip = get_proxy_exit_ip(proxy)
     blocked = {proxy}
+    confirmed = False
     if exit_ip:
+        strikes = record_exit_block_strike(
+            exit_ip, True, ttl_seconds=REQUEST_BLOCK_STRIKE_TTL)
+        confirmed = strikes >= REQUEST_BLOCK_CONFIRMATIONS
+    if exit_ip and confirmed:
         blocked.update(
             candidate for candidate in get_proxy_pool()
             if get_proxy_exit_ip(candidate) == exit_ip
         )
+        record_exit_block_strike(exit_ip, False)
     warp_proxies = set(get_warp_proxies())
     for candidate in blocked:
         mark_proxy_blocked(candidate)
@@ -365,7 +380,6 @@ async def extract_tiktok(
                 retry_warp = True
         except TikTokExtractError as e:
             last_error = e
-            mark_proxy_cooldown(proxy, 15)
             if lane == "cloudflare":
                 # Confirmation is based on TikTok's effective public IPv4. WARP
                 # containers with different IPv6 addresses often share it, and
@@ -387,14 +401,13 @@ async def extract_tiktok(
                     else " -> confirming on another WARP exit" if retry_warp
                     else ""
                 )
-                print(f"  ⚠️ [Attempt {real_attempts}] FAILED on {proxy} (cooldown 15s){retry_lane}: {e}", flush=True)
+                print(f"  ⚠️ [Attempt {real_attempts}] CONTENT/EXTRACT FAIL on {proxy}{retry_lane}: {e}", flush=True)
             if req_proxy:
                 break
         except Exception as e:
             last_error = e
-            mark_proxy_cooldown(proxy, 15)
             if VERBOSE_LOGS:
-                print(f"  ⚠️ [Attempt {real_attempts}] FAILED on {proxy} (cooldown 15s): {e}", flush=True)
+                print(f"  ⚠️ [Attempt {real_attempts}] UNCLASSIFIED FAIL on {proxy}: {e}", flush=True)
             if req_proxy:
                 break
         finally:
@@ -572,6 +585,7 @@ async def download_tiktok_media(
                 tried_exit_ips.add(exit_ip)
             inc_in_flight(candidate_proxy)
         proxy_dict = {"http": candidate_proxy, "https": candidate_proxy} if candidate_proxy else None
+        transport_failed = False
         try:
             client = AsyncSession(impersonate=impersonate, proxies=proxy_dict)
             resp = await client.get(direct_url, headers=upstream_headers, stream=True, allow_redirects=True, timeout=30)
@@ -580,13 +594,15 @@ async def download_tiktok_media(
                 break
             await client.close()
             client = None
-        except Exception:
+        except Exception as exc:
+            transport_failed = should_cooldown_download_failure(exc)
             if client:
                 await client.close()
                 client = None
         if candidate_proxy:
             dec_in_flight(candidate_proxy)
-            mark_proxy_cooldown(candidate_proxy, 30)
+            if transport_failed:
+                mark_proxy_cooldown(candidate_proxy, 30)
         candidate_proxy = get_next_proxy(
             exclude=tried_proxies,
             exclude_exit_ips=tried_exit_ips,

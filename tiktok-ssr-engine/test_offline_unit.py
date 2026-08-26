@@ -3,6 +3,7 @@ Self-contained offline unit tests for tiktok-ssr-engine.
 Does not require internet access, live servers, or proxies.
 """
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -24,10 +25,16 @@ from extractor import (
     sanitize_filename_part,
     solve_slardar_challenge,
 )
-from proxy_health import apply_block_verdicts, classify_block_response, record_probe_success
+from proxy_health import (
+    apply_block_verdicts,
+    classify_block_response,
+    probe_proxy,
+    record_probe_success,
+)
 from main import (
     extraction_cache_key,
     mark_proxy_and_shared_exit_blocked,
+    should_cooldown_download_failure,
     should_retry_via_indonesia,
     validate_tiktok_post_url,
 )
@@ -44,9 +51,11 @@ from proxy_state import (
     mark_proxy_blocked,
     mark_proxy_cooldown,
     mark_proxy_dead,
+    mark_proxy_request_success,
     mark_proxy_tunnel_alive,
     mark_proxy_usable,
     record_exit_block_strike,
+    record_proxy_probe_failure,
     request_proxy_reconnect,
     set_proxy_exit_ip,
 )
@@ -338,6 +347,18 @@ class TestTikTokSSROffline(unittest.TestCase):
         finally:
             clear_proxy_blocked(p)
 
+    def test_official_tiktok_success_clears_old_exit_block_strike(self):
+        p = "socks5h://wireproxy-18:1080"
+        exit_ip = "192.0.2.88"
+        try:
+            set_proxy_exit_ip(p, exit_ip)
+            self.assertEqual(record_exit_block_strike(exit_ip, True), 1)
+            mark_proxy_request_success(p, tiktok_served=True)
+            self.assertEqual(record_exit_block_strike(exit_ip, True), 1)
+        finally:
+            record_exit_block_strike(exit_ip, False)
+            clear_proxy_exit_ip(p)
+
     def test_exit_ip_tracking(self):
         p = "socks5h://audit-proxy.invalid:1080"
         try:
@@ -490,7 +511,7 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertFalse(should_retry_via_indonesia("geo", TikTokExtractError("parse error"), 2))
         self.assertFalse(should_retry_via_indonesia("cloudflare", TikTokInfraError("timeout"), 2))
 
-    def test_ip_block_marks_every_proxy_sharing_public_ipv4(self):
+    def test_ip_block_fans_out_only_after_shared_ipv4_confirmation(self):
         p18 = "socks5h://wireproxy-18:1080"
         p19 = "socks5h://wireproxy-19:1080"
         p20 = "socks5h://wireproxy-20:1080"
@@ -500,10 +521,57 @@ class TestTikTokSSROffline(unittest.TestCase):
                 patch("main.get_proxy_exit_ip", side_effect=lambda p: exits[p]), \
                 patch("main.mark_proxy_blocked") as mark_blocked, \
                 patch("main.request_proxy_reconnect") as reconnect:
-            blocked = mark_proxy_and_shared_exit_blocked(p18)
-        self.assertEqual(blocked, {p18, p20})
-        self.assertEqual({call.args[0] for call in mark_blocked.call_args_list}, {p18, p20})
-        self.assertEqual({call.args[0] for call in reconnect.call_args_list}, {p18, p20})
+            try:
+                first = mark_proxy_and_shared_exit_blocked(p18)
+                second = mark_proxy_and_shared_exit_blocked(p20)
+            finally:
+                record_exit_block_strike(exits[p18], False)
+        self.assertEqual(first, {p18})
+        self.assertEqual(second, {p18, p20})
+        marked = [call.args[0] for call in mark_blocked.call_args_list]
+        reconnected = [call.args[0] for call in reconnect.call_args_list]
+        self.assertEqual(marked.count(p18), 2)
+        self.assertEqual(marked.count(p20), 1)
+        self.assertCountEqual(reconnected, marked)
+
+    def test_liveness_probe_uses_fallback_and_shared_failure_counter(self):
+        proxy = "socks5h://wireproxy-77:1080"
+
+        class FakeResponse:
+            status_code = 200
+            text = "198.51.100.77"
+
+        class FakeSession:
+            calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise TimeoutError("primary probe timed out")
+                return FakeResponse()
+
+        try:
+            record_proxy_probe_failure(proxy, False)
+            self.assertEqual(record_proxy_probe_failure(proxy, True), 1)
+            self.assertEqual(record_proxy_probe_failure(proxy, True), 2)
+            with patch("curl_cffi.requests.AsyncSession", return_value=FakeSession()):
+                self.assertTrue(asyncio.run(probe_proxy(proxy)))
+            self.assertEqual(get_proxy_exit_ip(proxy), "198.51.100.77")
+            self.assertEqual(record_proxy_probe_failure(proxy, True), 1)
+        finally:
+            record_proxy_probe_failure(proxy, False)
+            clear_proxy_exit_ip(proxy)
+            mark_proxy_usable(proxy)
+
+    def test_download_cooldown_only_for_transport_failures(self):
+        self.assertTrue(should_cooldown_download_failure(TimeoutError("timed out")))
+        self.assertFalse(should_cooldown_download_failure(ValueError("bad media metadata")))
 
     def test_build_filename_photo(self):
         s = {"type": "photo", "photo_index": 3, "author": "M_Yusuf"}

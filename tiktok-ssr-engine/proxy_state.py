@@ -178,6 +178,8 @@ def mark_proxy_request_success(proxy_url: str, *, tiktok_served: bool):
     clear_proxy_cooldown(proxy_url)
     if tiktok_served:
         clear_proxy_blocked(proxy_url)
+        if exit_ip := get_proxy_exit_ip(proxy_url):
+            record_exit_block_strike(exit_ip, False)
 
 
 def set_proxy_exit_ip(proxy_url: str, exit_ip: str):
@@ -252,6 +254,32 @@ def record_exit_block_strike(exit_ip: str, blocked: bool, ttl_seconds: int = 900
             pass
     with _lock:
         if not blocked:
+            _in_memory_counters.pop(name, None)
+            return 0
+        value = _in_memory_counters.get(name, 0) + 1
+        _in_memory_counters[name] = value
+        return value
+
+
+def record_proxy_probe_failure(proxy_url: str, failed: bool, ttl_seconds: int = 300) -> int:
+    """Track consecutive liveness failures consistently across Granian workers."""
+    if not proxy_url:
+        return 0
+    name = _key(proxy_url, "probefail")
+    if _redis_client is not None:
+        try:
+            if not failed:
+                _redis_client.delete(name)
+                return 0
+            pipe = _redis_client.pipeline()
+            pipe.incr(name)
+            pipe.expire(name, max(1, ttl_seconds))
+            values = pipe.execute()
+            return int(values[0] or 0)
+        except Exception:
+            pass
+    with _lock:
+        if not failed:
             _in_memory_counters.pop(name, None)
             return 0
         value = _in_memory_counters.get(name, 0) + 1

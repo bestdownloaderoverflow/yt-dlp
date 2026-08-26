@@ -384,7 +384,9 @@ services:
       - DOWNLOAD_PROXY_ATTEMPTS=3
       - PROBE_TIMEOUT=12
       - PROBE_DEAD_AFTER=3
+      - PROBE_URLS=https://1.1.1.1/cdn-cgi/trace,https://api.ipify.org
       - BLOCK_CONFIRMATIONS=2
+      - REQUEST_BLOCK_CONFIRMATIONS=2
       - BLOCK_PROBE_STARTUP_DELAY=30
       - WIREPROXY_RECONNECT_DIR=/var/run/wireproxy-reconnect
       - WARP_RECONNECT_COOLDOWN=300

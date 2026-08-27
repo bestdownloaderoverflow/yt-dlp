@@ -89,6 +89,11 @@ def should_retry_via_indonesia(
     )
 
 
+def should_retry_ip_block_via_indonesia(distinct_exit_failures: int) -> bool:
+    """Treat repeated 10204 across distinct exits as a possible geo restriction."""
+    return distinct_exit_failures >= 2
+
+
 def should_cooldown_download_failure(error: Exception) -> bool:
     """Only transport/proxy failures justify parking a download proxy."""
     return isinstance(_classify_error(error), TikTokInfraError)
@@ -307,6 +312,7 @@ async def extract_tiktok(
     prefer_indo = False
     retry_warp = False
     failed_warp_exit_ips: set[str] = set()
+    failed_ip_block_exit_ips: set[str] = set()
     last_error = None
     tried_proxies: set[str] = set()
     tried_exit_ips: set[str] = set()
@@ -398,16 +404,37 @@ async def extract_tiktok(
         except TikTokIPBlockedError as e:
             inc_counter("tiktok_extract_attempts_total", result="ip_blocked")
             inc_counter("tiktok_proxy_failovers_total", reason="ip_blocked")
-            # WAF verdict on the exit IP itself: park it as blocked so the whole
-            # pool stops picking it, not just this request. This is not evidence
-            # of a region lock, so rotate within the current lane first.
+            # TikTok also returns 10204 for some rights/geo-restricted posts, so
+            # this response alone cannot safely condemn a public exit IP. The
+            # current request already excludes this proxy/IPv4 through
+            # tried_proxies/tried_exit_ips. Only the neutral background block
+            # probe may persist BLOCK and schedule a reconnect for the pool.
             last_error = e
-            blocked_proxies = mark_proxy_and_shared_exit_blocked(proxy)
             if VERBOSE_LOGS:
-                print(f"  🚫 [Attempt {real_attempts}] IP BLOCKED on {proxy} -> marked {len(blocked_proxies)} shared-exit proxies blocked", flush=True)
+                print(f"  🚫 [Attempt {real_attempts}] ambiguous 10204 on {proxy}; "
+                      "excluded for this request only", flush=True)
             if req_proxy:
                 break
-            if lane == "cloudflare":
+            if proxy_exit_ip:
+                failed_ip_block_exit_ips.add(proxy_exit_ip)
+            if (
+                not prefer_indo
+                and should_retry_ip_block_via_indonesia(len(failed_ip_block_exit_ips))
+            ):
+                # Some geo-restricted posts (including sports rights content)
+                # return 10204 outside the permitted country. One 10204 is only
+                # evidence of a bad exit; two distinct public IPv4s are enough
+                # to try the configured Indonesia lane without misclassifying a
+                # single WAF-blocked address as geo-restricted content.
+                real_attempts -= 1
+                retry_warp = False
+                prefer_indo = True
+                inc_counter("tiktok_proxy_failovers_total", reason="ip_block_to_indonesia")
+                if VERBOSE_LOGS:
+                    print(f"  🇮🇩 [Attempt {real_attempts}] 10204 confirmed on "
+                          f"{len(failed_ip_block_exit_ips)} distinct IPv4 exits; "
+                          "switching to Indonesia nodes", flush=True)
+            elif lane == "cloudflare":
                 # A refused IP is a routing/infrastructure failure, not a content
                 # attempt. Preserve the budget and try another unique WARP IPv4.
                 real_attempts -= 1

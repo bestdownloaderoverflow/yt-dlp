@@ -10,7 +10,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
@@ -37,8 +37,10 @@ from proxy_health import (
 from main import (
     clear_proxy_and_shared_exit_blocked,
     extraction_cache_key,
+    extract_tiktok,
     mark_proxy_and_shared_exit_blocked,
     should_cooldown_download_failure,
+    should_retry_ip_block_via_indonesia,
     should_retry_via_indonesia,
     validate_tiktok_post_url,
 )
@@ -719,6 +721,59 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertTrue(should_retry_via_indonesia("cloudflare", empty_shell, 2))
         self.assertFalse(should_retry_via_indonesia("geo", TikTokExtractError("parse error"), 2))
         self.assertFalse(should_retry_via_indonesia("cloudflare", TikTokInfraError("timeout"), 2))
+
+    def test_repeated_10204_retries_via_indonesia(self):
+        self.assertFalse(should_retry_ip_block_via_indonesia(0))
+        self.assertFalse(should_retry_ip_block_via_indonesia(1))
+        self.assertTrue(should_retry_ip_block_via_indonesia(2))
+
+    def test_10204_geo_fallback_does_not_poison_proxy_pool(self):
+        warp = "socks5h://wireproxy-18:1080"
+        geo = "socks5h://wireproxy-02:1080"
+        indo = "socks5h://wireproxy-01:1080"
+        exit_ips = {
+            warp: "104.28.197.9",
+            geo: "138.199.60.173",
+            indo: "93.185.162.26",
+        }
+        used = []
+
+        class FakeExtractor:
+            def __init__(self, proxy=None, impersonate=None):
+                del impersonate
+                self.proxy = proxy
+
+            async def extract(self, _url):
+                used.append(self.proxy)
+                if self.proxy != indo:
+                    raise TikTokIPBlockedError()
+                return {"extract_source": "web_ssr", "title": "Indonesia success"}
+
+        def pick_proxy(**kwargs):
+            if kwargs.get("indo_only"):
+                return indo
+            if kwargs.get("warp_only"):
+                return None if warp in kwargs.get("exclude", set()) else warp
+            return geo
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@vidiosports/video/7677284046552059143",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: exit_ips[p]), \
+                patch("main.TikTokSSRExtractor", FakeExtractor), \
+                patch("main.mark_proxy_and_shared_exit_blocked") as poison_pool, \
+                patch("main.mark_proxy_request_success"), \
+                patch("main.clear_proxy_and_shared_exit_blocked"), \
+                patch("main.set_cached_extraction"):
+            response = asyncio.run(extract_tiktok(request))
+
+        self.assertEqual(used, [warp, geo, indo])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.body)["title"], "Indonesia success")
+        poison_pool.assert_not_called()
 
     def test_ip_block_fans_out_only_after_shared_ipv4_confirmation(self):
         p18 = "socks5h://wireproxy-18:1080"

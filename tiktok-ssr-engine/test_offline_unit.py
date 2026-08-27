@@ -4,6 +4,7 @@ Does not require internet access, live servers, or proxies.
 """
 
 import asyncio
+import importlib.util
 import json
 from pathlib import Path
 import tempfile
@@ -573,6 +574,7 @@ class TestTikTokSSROffline(unittest.TestCase):
                 self.assertEqual(process_proxy_reconnect(proxy), "verification_failed")
                 self.assertGreater(
                     proxy_state.reconnect_state(proxy)["restart_backoff_for_seconds"], 0)
+                self.assertFalse(is_proxy_usable(proxy))
 
                 proxy_state._clear("reconnect_backoff", proxy)
                 self.assertEqual(process_proxy_reconnect(proxy), "signaled")
@@ -582,6 +584,45 @@ class TestTikTokSSROffline(unittest.TestCase):
                 self.assertFalse(is_proxy_usable(proxy))
             finally:
                 clear_proxy_reconnect_state(proxy)
+
+    def test_every_reconnect_lifecycle_state_is_unusable(self):
+        import proxy_state
+
+        proxy = "socks5h://wireproxy-94:1080"
+        try:
+            for state in (
+                "reconnect_pending",
+                "reconnecting",
+                "reconnect_backoff",
+                "quarantine",
+            ):
+                proxy_state._set_until(state, proxy, 60)
+                self.assertFalse(is_proxy_usable(proxy), state)
+                clear_proxy_reconnect_state(proxy)
+        finally:
+            clear_proxy_reconnect_state(proxy)
+
+    def test_monitor_fails_closed_for_reconnect_lifecycle(self):
+        renderer_path = (
+            Path(__file__).resolve().parent.parent
+            / "yt-dlp-wireproxy"
+            / "scripts"
+            / "monitor-wireproxy-render.py"
+        )
+        spec = importlib.util.spec_from_file_location("monitor_wireproxy_render", renderer_path)
+        renderer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(renderer)
+
+        self.assertTrue(renderer.effective_usable({"usable": True}))
+        for state in (
+            {"restart_scheduled": True},
+            {"draining": True},
+            {"reconnecting": True},
+            {"stabilizing": True},
+            {"restart_backoff_for_seconds": 30},
+            {"quarantined": True},
+        ):
+            self.assertFalse(renderer.effective_usable({"usable": True, **state}), state)
 
     def test_prometheus_metrics_include_proxy_runtime_state(self):
         import service_metrics

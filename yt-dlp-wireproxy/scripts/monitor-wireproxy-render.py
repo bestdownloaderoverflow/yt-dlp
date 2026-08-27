@@ -228,6 +228,8 @@ def status_palette(row: dict) -> str:
         return _YEL
     if row["restart_backoff"] > 0:
         return _YEL
+    if row["restart_scheduled"]:
+        return _YEL
     if row["blocked"]:
         return _RED
     if row["cooldown"]:
@@ -259,6 +261,8 @@ def status_text(row: dict) -> tuple[str, str]:
         return "DRAIN", _YEL
     if row["restart_backoff"] > 0:
         return "BACKOFF", _YEL
+    if row["restart_scheduled"]:
+        return "PEND", _YEL
     if row["blocked"]:
         return "BLOCK", _RED
     if row["cooldown"]:
@@ -272,6 +276,20 @@ def status_text(row: dict) -> tuple[str, str]:
     if row["latency_ms"] > 3000:
         return "SLOW", _YEL
     return "OK", _GRN
+
+
+def effective_usable(ph: dict, has_state: bool = True) -> bool:
+    """Fail closed whenever the engine reports an active recovery lifecycle."""
+    if not has_state or not bool(ph.get("usable", False)):
+        return False
+    return not (
+        bool(ph.get("draining", False))
+        or bool(ph.get("reconnecting", False))
+        or bool(ph.get("stabilizing", False))
+        or bool(ph.get("quarantined", False))
+        or int(ph.get("restart_backoff_for_seconds", 0) or 0) > 0
+        or bool(ph.get("restart_scheduled", False))
+    )
 
 
 # --- Rendering ---------------------------------------------------------------
@@ -419,7 +437,10 @@ def main() -> int:
         stabilizing = bool(ph.get("stabilizing", False))
         quarantined = bool(ph.get("quarantined", False))
         restart_backoff = int(ph.get("restart_backoff_for_seconds", 0) or 0)
-        usable = bool(ph.get("usable", False)) if has_state else False
+        restart_scheduled = bool(ph.get("restart_scheduled", False))
+        # Fail closed if an older/mixed engine response reports usable=true
+        # while its lifecycle fields say the proxy is being recovered.
+        usable = effective_usable(ph, has_state)
 
         row = {
             "index": i,
@@ -446,6 +467,7 @@ def main() -> int:
             "stabilizing": stabilizing,
             "quarantined": quarantined,
             "restart_backoff": restart_backoff,
+            "restart_scheduled": restart_scheduled,
             "endpoint": m["endpoint"],
             "handshake": m["handshake"],
             "restart_message": restart["message"],

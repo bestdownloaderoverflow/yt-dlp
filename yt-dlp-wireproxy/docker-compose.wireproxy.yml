@@ -444,7 +444,9 @@ services:
       - WARP_RECONNECT_DRAIN_TIMEOUT=60
       - WARP_RECONNECT_DRAIN_POLL=1
       - WARP_RECONNECT_SCHEDULER_INTERVAL=1
-      - WARP_RECONNECT_VERIFY_TIMEOUT=60
+      # Three liveness intervals (45s each) plus scheduling overhead. A 60s
+      # window produced false verification failures and unnecessary quarantine.
+      - WARP_RECONNECT_VERIFY_TIMEOUT=150
       - WARP_RECONNECT_STABILIZE=2
       - WARP_RECONNECT_BACKOFF_BASE=30
       - WARP_RECONNECT_BACKOFF_MAX=300

@@ -47,7 +47,7 @@ RECONNECT_SIGNAL_DIR = os.getenv("WIREPROXY_RECONNECT_DIR", "")
 RECONNECT_COOLDOWN_SECONDS = int(os.getenv("WARP_RECONNECT_COOLDOWN", "300"))
 RECONNECT_DRAIN_TIMEOUT_SECONDS = float(os.getenv("WARP_RECONNECT_DRAIN_TIMEOUT", "60"))
 RECONNECT_DRAIN_POLL_SECONDS = float(os.getenv("WARP_RECONNECT_DRAIN_POLL", "1"))
-RECONNECT_VERIFY_TIMEOUT_SECONDS = int(os.getenv("WARP_RECONNECT_VERIFY_TIMEOUT", "60"))
+RECONNECT_VERIFY_TIMEOUT_SECONDS = int(os.getenv("WARP_RECONNECT_VERIFY_TIMEOUT", "150"))
 RECONNECT_STABILIZE_SECONDS = float(os.getenv("WARP_RECONNECT_STABILIZE", "2"))
 RECONNECT_BACKOFF_BASE_SECONDS = int(os.getenv("WARP_RECONNECT_BACKOFF_BASE", "30"))
 RECONNECT_BACKOFF_MAX_SECONDS = int(os.getenv("WARP_RECONNECT_BACKOFF_MAX", "300"))
@@ -166,6 +166,7 @@ def is_proxy_usable(proxy_url: str) -> bool:
         and _get_until("blocked", proxy_url) < now
         and _get_until("reconnect_pending", proxy_url) < now
         and _get_until("reconnecting", proxy_url) < now
+        and _get_until("reconnect_backoff", proxy_url) < now
         and _get_until("quarantine", proxy_url) < now
     )
 
@@ -430,7 +431,7 @@ def request_proxy_reconnect(
 ) -> bool:
     """Persist a reconnect request for the managed background scheduler.
 
-    The engine deliberately does not get access to the Docker socket. WARP
+    The engine deliberately does not get access to the Docker socket. WireProxy
     containers watch their own marker in a shared volume and restart only the
     WireProxy process when the marker changes. Redis makes the schedule survive
     a Granian worker exit; reconnect processing is performed under one lease.

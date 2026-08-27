@@ -148,3 +148,38 @@ def set_cached_extraction(url: str, data: Dict[str, Any], ttl: int = 300):
 
     _cleanup_expired()
     _in_memory_sessions[f"extract:{url_hash}"] = (data, time.time() + ttl)
+
+
+def get_geo_hint(url: str) -> bool:
+    """Return whether a recently proven post should start in Indonesia."""
+    if not url:
+        return False
+    url_hash = hashlib.sha256(url.strip().encode()).hexdigest()[:32]
+    key = f"geo_hint:{url_hash}"
+    if _redis_client:
+        try:
+            return bool(_redis_client.get(key))
+        except Exception:
+            pass
+    _cleanup_expired()
+    item = _in_memory_sessions.get(key)
+    if item and item[1] >= time.time():
+        return bool(item[0])
+    _in_memory_sessions.pop(key, None)
+    return False
+
+
+def set_geo_hint(url: str, ttl: int = 600):
+    """Remember a successful Indonesia fallback across Granian workers."""
+    if not url:
+        return
+    url_hash = hashlib.sha256(url.strip().encode()).hexdigest()[:32]
+    key = f"geo_hint:{url_hash}"
+    if _redis_client:
+        try:
+            _redis_client.set(key, "1", ex=max(1, ttl))
+            return
+        except Exception:
+            pass
+    _cleanup_expired()
+    _in_memory_sessions[key] = (True, time.time() + max(1, ttl))

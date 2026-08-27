@@ -43,6 +43,7 @@ DEAD_TTL_SECONDS = int(os.getenv("PROXY_DEAD_TTL", "120"))
 COOLDOWN_SECONDS = int(os.getenv("PROXY_COOLDOWN", "60"))
 BLOCKED_TTL_SECONDS = int(os.getenv("PROXY_BLOCKED_TTL", "300"))
 EXIT_IP_TTL_SECONDS = int(os.getenv("PROXY_EXIT_IP_TTL", "600"))
+CONTROL_VERDICT_TTL_SECONDS = int(os.getenv("PROXY_CONTROL_VERDICT_TTL", "330"))
 RECONNECT_SIGNAL_DIR = os.getenv("WIREPROXY_RECONNECT_DIR", "")
 RECONNECT_COOLDOWN_SECONDS = int(os.getenv("WARP_RECONNECT_COOLDOWN", "300"))
 RECONNECT_DRAIN_TIMEOUT_SECONDS = float(os.getenv("WARP_RECONNECT_DRAIN_TIMEOUT", "60"))
@@ -233,6 +234,9 @@ def mark_proxy_request_success(proxy_url: str, *, tiktok_served: bool):
 def set_proxy_exit_ip(proxy_url: str, exit_ip: str):
     if not proxy_url or not exit_ip:
         return
+    previous_exit_ip = get_proxy_exit_ip(proxy_url)
+    if previous_exit_ip and previous_exit_ip != exit_ip:
+        _clear_string("control_verdict", proxy_url)
     name = _key(proxy_url, "exitip")
     _set_string("exitip_seen_at", proxy_url, str(time.time()), EXIT_IP_TTL_SECONDS)
     if _redis_client is not None:
@@ -270,6 +274,32 @@ def clear_proxy_exit_ip(proxy_url: str):
     with _lock:
         _in_memory_exit_ips.pop(name, None)
     _clear_string("exitip_seen_at", proxy_url)
+    _clear_string("control_verdict", proxy_url)
+
+
+def set_proxy_control_verdict(
+    proxy_url: str,
+    blocked: bool,
+    ttl_seconds: int = CONTROL_VERDICT_TTL_SECONDS,
+):
+    """Cache a neutral TikTok control-post verdict across workers."""
+    if proxy_url:
+        _set_string(
+            "control_verdict",
+            proxy_url,
+            "blocked" if blocked else "serving",
+            max(1, ttl_seconds),
+        )
+
+
+def get_proxy_control_verdict(proxy_url: str) -> Optional[bool]:
+    """Return True/False for a fresh control verdict, or None when unknown."""
+    verdict = _get_string("control_verdict", proxy_url)
+    if verdict == "blocked":
+        return True
+    if verdict == "serving":
+        return False
+    return None
 
 
 def get_proxy_exit_ips_many(proxy_urls) -> Dict[str, str]:

@@ -43,6 +43,7 @@ from main import (
     should_retry_ip_block_via_indonesia,
     should_retry_via_indonesia,
     validate_tiktok_post_url,
+    verify_ambiguous_ip_block,
 )
 from proxy_state import (
     clear_proxy_blocked,
@@ -50,6 +51,7 @@ from proxy_state import (
     clear_proxy_reconnect_state,
     dec_in_flight,
     get_proxy_exit_ip,
+    get_proxy_control_verdict,
     get_in_flight,
     get_in_flight_many,
     inc_in_flight,
@@ -66,12 +68,15 @@ from proxy_state import (
     record_proxy_probe_failure,
     request_proxy_reconnect,
     set_proxy_exit_ip,
+    set_proxy_control_verdict,
 )
 from session import (
     create_session,
     get_cached_extraction,
+    get_geo_hint,
     get_session,
     set_cached_extraction,
+    set_geo_hint,
 )
 
 
@@ -375,6 +380,17 @@ class TestTikTokSSROffline(unittest.TestCase):
         finally:
             clear_proxy_exit_ip(p)
 
+    def test_control_verdict_cache_clears_when_exit_ip_changes(self):
+        proxy = "socks5h://wireproxy-88:1080"
+        try:
+            set_proxy_exit_ip(proxy, "198.51.100.8")
+            set_proxy_control_verdict(proxy, False, ttl_seconds=60)
+            self.assertIs(get_proxy_control_verdict(proxy), False)
+            set_proxy_exit_ip(proxy, "198.51.100.9")
+            self.assertIsNone(get_proxy_control_verdict(proxy))
+        finally:
+            clear_proxy_exit_ip(proxy)
+
     def test_block_classification(self):
         # Marker present means TikTok served real data: never a block.
         self.assertIs(classify_block_response(200, "", 313000, "x", marker_present=True), False)
@@ -418,7 +434,9 @@ class TestTikTokSSROffline(unittest.TestCase):
         try:
             for i, url in enumerate(urls, start=1):
                 set_proxy_exit_ip(url, f"198.51.100.{i}")
-            self.assertFalse(apply_block_verdicts({url: True for url in urls}))
+            with patch("proxy_health.set_proxy_control_verdict") as cache_verdict:
+                self.assertFalse(apply_block_verdicts({url: True for url in urls}))
+            cache_verdict.assert_not_called()
             self.assertTrue(is_proxy_blocked(urls[0]))
         finally:
             for url in urls:
@@ -727,6 +745,42 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertFalse(should_retry_ip_block_via_indonesia(1))
         self.assertTrue(should_retry_ip_block_via_indonesia(2))
 
+    def test_geo_hint_cache(self):
+        key = "https://www.tiktok.com/@geo/video/987654321"
+        with patch("session._redis_client", None):
+            self.assertFalse(get_geo_hint(key))
+            set_geo_hint(key, ttl=60)
+            self.assertTrue(get_geo_hint(key))
+
+    def test_control_verdict_cache_avoids_request_probe(self):
+        with patch("main.get_proxy_control_verdict", return_value=False), \
+                patch("proxy_health.probe_block", AsyncMock()) as live_probe:
+            verdict = asyncio.run(verify_ambiguous_ip_block(
+                "socks5h://wireproxy-18:1080"))
+        self.assertIs(verdict, False)
+        live_probe.assert_not_called()
+
+    def test_10204_short_circuits_same_proxy_fallbacks(self):
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+        extractor = TikTokSSRExtractor(proxy="socks5h://wireproxy-18:1080")
+        with patch("extractor.AsyncSession", return_value=FakeSession()), \
+                patch.object(extractor, "resolve_url", AsyncMock(
+                    return_value="https://www.tiktok.com/@geo/video/123")), \
+                patch.object(extractor, "extract_via_web_ssr", AsyncMock(
+                    side_effect=TikTokIPBlockedError())), \
+                patch.object(extractor, "extract_via_embed_ssr", AsyncMock()) as embed, \
+                patch.object(extractor, "extract_via_web_fallback", AsyncMock()) as fallback:
+            with self.assertRaises(TikTokIPBlockedError):
+                asyncio.run(extractor.extract("https://www.tiktok.com/@geo/video/123"))
+        embed.assert_not_called()
+        fallback.assert_not_called()
+
     def test_10204_geo_fallback_does_not_poison_proxy_pool(self):
         warp = "socks5h://wireproxy-18:1080"
         geo = "socks5h://wireproxy-02:1080"
@@ -761,19 +815,69 @@ class TestTikTokSSROffline(unittest.TestCase):
             "url": "https://www.tiktok.com/@vidiosports/video/7677284046552059143",
         })
         with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=False), \
                 patch("main.get_next_proxy", side_effect=pick_proxy), \
                 patch("main.get_proxy_exit_ip", side_effect=lambda p: exit_ips[p]), \
                 patch("main.TikTokSSRExtractor", FakeExtractor), \
+                patch("main.verify_ambiguous_ip_block", AsyncMock(return_value=False)), \
                 patch("main.mark_proxy_and_shared_exit_blocked") as poison_pool, \
                 patch("main.mark_proxy_request_success"), \
                 patch("main.clear_proxy_and_shared_exit_blocked"), \
-                patch("main.set_cached_extraction"):
+                patch("main.set_cached_extraction"), \
+                patch("main.set_geo_hint") as geo_hint:
             response = asyncio.run(extract_tiktok(request))
 
         self.assertEqual(used, [warp, geo, indo])
         self.assertEqual(response.status_code, 200)
         self.assertEqual(json.loads(response.body)["title"], "Indonesia success")
         poison_pool.assert_not_called()
+        geo_hint.assert_called_once()
+
+    def test_video_error_requires_two_healthy_indonesia_exits(self):
+        proxies = [
+            "socks5h://wireproxy-18:1080",
+            "socks5h://wireproxy-02:1080",
+            "socks5h://wireproxy-01:1080",
+            "socks5h://wireproxy-13:1080",
+        ]
+        exits = {proxy: f"198.51.100.{i}" for i, proxy in enumerate(proxies, 1)}
+        used = []
+
+        class BlockedExtractor:
+            def __init__(self, proxy=None, impersonate=None):
+                del impersonate
+                self.proxy = proxy
+
+            async def extract(self, _url):
+                used.append(self.proxy)
+                raise TikTokIPBlockedError()
+
+        def pick_proxy(**kwargs):
+            excluded = kwargs.get("exclude", set())
+            if kwargs.get("warp_only"):
+                candidates = proxies[:1]
+            elif kwargs.get("indo_only"):
+                candidates = proxies[2:]
+            else:
+                candidates = proxies[1:2]
+            return next((proxy for proxy in candidates if proxy not in excluded), None)
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@geo/video/111222333",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=False), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.get_indo_proxies", return_value=proxies[2:]), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: exits[p]), \
+                patch("main.TikTokSSRExtractor", BlockedExtractor), \
+                patch("main.verify_ambiguous_ip_block", AsyncMock(return_value=False)):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(extract_tiktok(request))
+
+        self.assertEqual(used, proxies)
+        self.assertEqual(raised.exception.status_code, 422)
 
     def test_ip_block_fans_out_only_after_shared_ipv4_confirmation(self):
         p18 = "socks5h://wireproxy-18:1080"

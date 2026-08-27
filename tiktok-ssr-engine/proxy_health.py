@@ -31,6 +31,7 @@ from proxy_state import (
     record_proxy_probe_failure,
     process_proxy_reconnect,
     request_proxy_reconnect,
+    set_proxy_control_verdict,
     set_proxy_exit_ip,
 )
 
@@ -170,7 +171,7 @@ def classify_block_response(status_code: int, location: str, body_len: int, body
     return None
 
 
-async def probe_block(proxy_url: str):
+async def probe_block(proxy_url: str, timeout_seconds: Optional[float] = None):
     """
     Probe TikTok through one proxy.
 
@@ -180,25 +181,32 @@ async def probe_block(proxy_url: str):
     """
     from curl_cffi.requests import AsyncSession
 
+    timeout = timeout_seconds or BLOCK_PROBE_TIMEOUT_SECONDS
     try:
         async with AsyncSession(
             proxies={"http": proxy_url, "https": proxy_url},
-            timeout=BLOCK_PROBE_TIMEOUT_SECONDS,
+            timeout=timeout,
         ) as session:
             resp = await session.get(
                 BLOCK_PROBE_URL,
-                timeout=BLOCK_PROBE_TIMEOUT_SECONDS,
+                timeout=timeout,
                 impersonate="chrome120",
                 allow_redirects=False,
             )
             body = resp.text or ""
-            return classify_block_response(
+            verdict = classify_block_response(
                 resp.status_code,
                 resp.headers.get("location", ""),
                 len(body),
                 body[:20000],
                 BLOCK_PROBE_MARKER in body,
             )
+            # A serving verdict is safe to cache immediately. A blocked verdict
+            # is cached only after apply_block_verdicts passes the pool-wide
+            # sanity ratio and confirmation threshold.
+            if verdict is False:
+                set_proxy_control_verdict(proxy_url, False)
+            return verdict
     except Exception:
         return None
 
@@ -253,6 +261,7 @@ def apply_block_verdicts(verdicts: dict) -> bool:
             record_exit_block_strike(exit_ip, False)
             reconnectable_proxies = set(get_proxy_pool())
             for url in members:
+                set_proxy_control_verdict(url, True)
                 mark_proxy_blocked(url)
                 if url in reconnectable_proxies and request_proxy_reconnect(
                     url, reason="block_probe"):
@@ -263,6 +272,7 @@ def apply_block_verdicts(verdicts: dict) -> bool:
         else:
             record_exit_block_strike(exit_ip, False)
             for url in members:
+                set_proxy_control_verdict(url, False)
                 clear_proxy_blocked(url)
                 if _block_state.get(url):
                     print(f"[BlockProbe] {url} is serving again (IPv4 {exit_ip})", flush=True)

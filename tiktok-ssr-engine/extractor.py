@@ -507,7 +507,11 @@ class TikTokSSRExtractor:
             except Exception as e:
                 classified_error = _classify_error(e)
                 print(f"[SSR Engine] Web SSR failed on proxy {self.proxy}: {e}")
-                if isinstance(classified_error, TikTokInfraError):
+                if isinstance(classified_error, (
+                    TikTokInfraError,
+                    TikTokIPBlockedError,
+                    TikTokAccessRestrictedError,
+                )):
                     raise classified_error
 
             # Strategy 2: Official Embed SSR Scraping (__FRONTITY_CONNECT_STATE__)

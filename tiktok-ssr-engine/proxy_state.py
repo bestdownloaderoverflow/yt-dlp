@@ -4,7 +4,7 @@ States:
   - dead:      proxy tunnel failed a health probe (unusable for N seconds)
   - cooldown:  proxy caused a request failure (parked for N seconds)
   - blocked:   the tunnel is fine but TikTok is refusing this exit IP
-  - in-flight: active request count per worker (in-memory only)
+  - in-flight: active request count shared in Redis (in-memory fallback)
 
 The background prober (proxy_health.py) marks proxies dead/usable so the
 request path never wastes user time on a broken tunnel, and separately marks
@@ -13,6 +13,7 @@ them blocked/unblocked so a healthy-but-refused exit IP stops being picked.
 
 import hashlib
 import os
+import random
 import re
 import threading
 import time
@@ -34,6 +35,7 @@ if REDIS_URL:
 _in_memory_until: Dict[str, float] = {}
 _in_memory_exit_ips: Dict[str, str] = {}
 _in_memory_counters: Dict[str, int] = {}
+_in_memory_strings: Dict[str, tuple[str, float]] = {}
 _in_flight: Dict[str, int] = {}
 _lock = threading.Lock()
 
@@ -43,6 +45,17 @@ BLOCKED_TTL_SECONDS = int(os.getenv("PROXY_BLOCKED_TTL", "300"))
 EXIT_IP_TTL_SECONDS = int(os.getenv("PROXY_EXIT_IP_TTL", "600"))
 RECONNECT_SIGNAL_DIR = os.getenv("WIREPROXY_RECONNECT_DIR", "")
 RECONNECT_COOLDOWN_SECONDS = int(os.getenv("WARP_RECONNECT_COOLDOWN", "300"))
+RECONNECT_DRAIN_TIMEOUT_SECONDS = float(os.getenv("WARP_RECONNECT_DRAIN_TIMEOUT", "60"))
+RECONNECT_DRAIN_POLL_SECONDS = float(os.getenv("WARP_RECONNECT_DRAIN_POLL", "1"))
+RECONNECT_VERIFY_TIMEOUT_SECONDS = int(os.getenv("WARP_RECONNECT_VERIFY_TIMEOUT", "60"))
+RECONNECT_STABILIZE_SECONDS = float(os.getenv("WARP_RECONNECT_STABILIZE", "2"))
+RECONNECT_BACKOFF_BASE_SECONDS = int(os.getenv("WARP_RECONNECT_BACKOFF_BASE", "30"))
+RECONNECT_BACKOFF_MAX_SECONDS = int(os.getenv("WARP_RECONNECT_BACKOFF_MAX", "300"))
+RECONNECT_BACKOFF_JITTER_SECONDS = int(os.getenv("WARP_RECONNECT_BACKOFF_JITTER", "5"))
+RECONNECT_BUDGET_LIMIT = int(os.getenv("WARP_RECONNECT_BUDGET_LIMIT", "3"))
+RECONNECT_BUDGET_WINDOW_SECONDS = int(os.getenv("WARP_RECONNECT_BUDGET_WINDOW", "600"))
+RECONNECT_QUARANTINE_SECONDS = int(os.getenv("WARP_RECONNECT_QUARANTINE", "600"))
+RECONNECT_PENDING_TTL_SECONDS = int(os.getenv("WARP_RECONNECT_PENDING_TTL", "86400"))
 # Safety net for counters orphaned by a worker that died mid-request: the key is
 # refreshed on every increment, so it only expires once a proxy has been idle
 # this long. Must comfortably exceed the slowest single extraction.
@@ -52,6 +65,14 @@ IN_FLIGHT_TTL_SECONDS = int(os.getenv("PROXY_IN_FLIGHT_TTL", "600"))
 def _key(proxy_url: str, kind: str) -> str:
     h = hashlib.sha256(proxy_url.strip().encode()).hexdigest()[:24]
     return f"proxy:{kind}:{h}"
+
+
+def _reconnect_metric(result: str, reason: str = "unknown"):
+    try:
+        from service_metrics import inc_counter
+        inc_counter("tiktok_proxy_reconnect_total", result=result, reason=reason or "unknown")
+    except Exception:
+        pass
 
 
 def _redis_get(name: str) -> Optional[float]:
@@ -96,6 +117,29 @@ def _set_until(kind: str, proxy_url: str, seconds: int):
                 _in_memory_until.pop(k, None)
 
 
+def _acquire_until(kind: str, proxy_url: str, seconds: int) -> bool:
+    """Atomically acquire a time-bounded gate across workers."""
+    if not proxy_url:
+        return False
+    name = _key(proxy_url, kind)
+    ttl = max(1, int(seconds))
+    until = time.time() + ttl
+    if _redis_client is not None:
+        try:
+            if not _redis_client.set(name, str(until), nx=True, ex=ttl):
+                return False
+            with _lock:
+                _in_memory_until[name] = until
+            return True
+        except Exception:
+            pass
+    with _lock:
+        if _in_memory_until.get(name, 0) >= time.time():
+            return False
+        _in_memory_until[name] = until
+        return True
+
+
 def _get_until(kind: str, proxy_url: str) -> float:
     name = _key(proxy_url, kind)
     v = _redis_get(name)
@@ -120,6 +164,9 @@ def is_proxy_usable(proxy_url: str) -> bool:
         _get_until("dead", proxy_url) < now
         and _get_until("cooldown", proxy_url) < now
         and _get_until("blocked", proxy_url) < now
+        and _get_until("reconnect_pending", proxy_url) < now
+        and _get_until("reconnecting", proxy_url) < now
+        and _get_until("quarantine", proxy_url) < now
     )
 
 
@@ -186,6 +233,7 @@ def set_proxy_exit_ip(proxy_url: str, exit_ip: str):
     if not proxy_url or not exit_ip:
         return
     name = _key(proxy_url, "exitip")
+    _set_string("exitip_seen_at", proxy_url, str(time.time()), EXIT_IP_TTL_SECONDS)
     if _redis_client is not None:
         try:
             _redis_client.set(name, exit_ip, ex=EXIT_IP_TTL_SECONDS)
@@ -220,6 +268,7 @@ def clear_proxy_exit_ip(proxy_url: str):
             pass
     with _lock:
         _in_memory_exit_ips.pop(name, None)
+    _clear_string("exitip_seen_at", proxy_url)
 
 
 def get_proxy_exit_ips_many(proxy_urls) -> Dict[str, str]:
@@ -287,40 +336,77 @@ def record_proxy_probe_failure(proxy_url: str, failed: bool, ttl_seconds: int = 
         return value
 
 
-def request_proxy_reconnect(proxy_url: str, cooldown_seconds: int = RECONNECT_COOLDOWN_SECONDS) -> bool:
-    """Signal a WireProxy wrapper once per cooldown window.
-
-    The engine deliberately does not get access to the Docker socket. WARP
-    containers watch their own marker in a shared volume and restart only the
-    WireProxy process when the marker changes.
-    """
-    if not proxy_url or not RECONNECT_SIGNAL_DIR:
-        return False
-    hostname = (urlsplit(proxy_url).hostname or "").lower()
-    if not re.fullmatch(r"wireproxy-\d+", hostname):
-        return False
-
-    cooldown = max(1, int(cooldown_seconds))
-    gate = _key(proxy_url, "reconnect")
-    acquired = False
-    use_memory = _redis_client is None
+def _set_string(kind: str, proxy_url: str, value: str, ttl: int):
+    name = _key(proxy_url, kind)
     if _redis_client is not None:
         try:
-            acquired = bool(_redis_client.set(gate, str(time.time()), nx=True, ex=cooldown))
+            _redis_client.set(name, value, ex=max(1, ttl))
+            return
         except Exception:
-            use_memory = True
-    if use_memory:
-        now = time.time()
-        with _lock:
-            if _in_memory_until.get(gate, 0) < now:
-                _in_memory_until[gate] = now + cooldown
-                acquired = True
-    if not acquired:
-        return False
+            pass
+    with _lock:
+        _in_memory_strings[name] = (value, time.time() + max(1, ttl))
 
+
+def _get_string(kind: str, proxy_url: str) -> str:
+    name = _key(proxy_url, kind)
+    if _redis_client is not None:
+        try:
+            return _redis_client.get(name) or ""
+        except Exception:
+            pass
+    with _lock:
+        item = _in_memory_strings.get(name)
+        if not item:
+            return ""
+        value, expires = item
+        if expires < time.time():
+            _in_memory_strings.pop(name, None)
+            return ""
+        return value
+
+
+def _clear_string(kind: str, proxy_url: str):
+    name = _key(proxy_url, kind)
+    _redis_del(name)
+    with _lock:
+        _in_memory_strings.pop(name, None)
+
+
+def _increment_window_counter(kind: str, proxy_url: str, window_seconds: int) -> int:
+    name = _key(proxy_url, kind)
+    if _redis_client is not None:
+        try:
+            pipe = _redis_client.pipeline()
+            pipe.incr(name)
+            pipe.expire(name, max(1, window_seconds))
+            values = pipe.execute()
+            return int(values[0] or 0)
+        except Exception:
+            pass
+    now = time.time()
+    expiry_key = f"{name}:expires"
+    with _lock:
+        if _in_memory_until.get(expiry_key, 0) < now:
+            _in_memory_counters[name] = 0
+        value = _in_memory_counters.get(name, 0) + 1
+        _in_memory_counters[name] = value
+        _in_memory_until[expiry_key] = now + max(1, window_seconds)
+        return value
+
+
+def _clear_window_counter(kind: str, proxy_url: str):
+    name = _key(proxy_url, kind)
+    _redis_del(name)
+    with _lock:
+        _in_memory_counters.pop(name, None)
+        _in_memory_until.pop(f"{name}:expires", None)
+
+
+def _write_reconnect_marker(hostname: str) -> bool:
     marker_dir = Path(RECONNECT_SIGNAL_DIR)
     marker = marker_dir / hostname
-    temporary = marker_dir / f".{hostname}.{os.getpid()}.tmp"
+    temporary = marker_dir / f".{hostname}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         marker_dir.mkdir(parents=True, exist_ok=True)
         temporary.write_text(f"{time.time_ns()}\n", encoding="ascii")
@@ -332,15 +418,187 @@ def request_proxy_reconnect(proxy_url: str, cooldown_seconds: int = RECONNECT_CO
             temporary.unlink(missing_ok=True)
         except OSError:
             pass
-        if _redis_client is not None:
-            try:
-                _redis_client.delete(gate)
-            except Exception:
-                pass
-        else:
-            with _lock:
-                _in_memory_until.pop(gate, None)
         return False
+
+
+def request_proxy_reconnect(
+    proxy_url: str,
+    cooldown_seconds: int = RECONNECT_COOLDOWN_SECONDS,
+    drain_timeout_seconds: float = RECONNECT_DRAIN_TIMEOUT_SECONDS,
+    drain_poll_seconds: float = RECONNECT_DRAIN_POLL_SECONDS,
+    reason: str = "unknown",
+) -> bool:
+    """Persist a reconnect request for the managed background scheduler.
+
+    The engine deliberately does not get access to the Docker socket. WARP
+    containers watch their own marker in a shared volume and restart only the
+    WireProxy process when the marker changes. Redis makes the schedule survive
+    a Granian worker exit; reconnect processing is performed under one lease.
+
+    cooldown_seconds and drain_poll_seconds remain accepted for API compatibility;
+    backoff and scheduler cadence are configured independently.
+    """
+    if not proxy_url or not RECONNECT_SIGNAL_DIR:
+        return False
+    hostname = (urlsplit(proxy_url).hostname or "").lower()
+    if not re.fullmatch(r"wireproxy-\d+", hostname):
+        return False
+
+    del cooldown_seconds, drain_poll_seconds
+    now = time.time()
+    if (_get_until("reconnecting", proxy_url) >= now
+            or _get_until("quarantine", proxy_url) >= now):
+        _reconnect_metric("deduplicated", _get_string("reconnect_reason", proxy_url) or reason)
+        return False
+    if not _acquire_until("reconnect_pending", proxy_url, RECONNECT_PENDING_TTL_SECONDS):
+        _reconnect_metric("deduplicated", _get_string("reconnect_reason", proxy_url) or reason)
+        return False
+    _set_until("drain_deadline", proxy_url, max(1, int(drain_timeout_seconds)))
+    _clear_string("reconnect_signaled", proxy_url)
+    _set_string("reconnect_old_ip", proxy_url, get_proxy_exit_ip(proxy_url),
+                RECONNECT_PENDING_TTL_SECONDS)
+    _set_string("reconnect_reason", proxy_url, reason or "unknown",
+                RECONNECT_PENDING_TTL_SECONDS)
+    _reconnect_metric("scheduled", reason)
+    return True
+
+
+def reconnect_state(proxy_url: str) -> Dict[str, object]:
+    now = time.time()
+    pending_until = _get_until("reconnect_pending", proxy_url)
+    reconnecting_until = _get_until("reconnecting", proxy_url)
+    backoff_until = _get_until("reconnect_backoff", proxy_url)
+    quarantine_until = _get_until("quarantine", proxy_url)
+    try:
+        recovered_at = float(_get_string("reconnect_recovered_at", proxy_url) or 0)
+    except ValueError:
+        recovered_at = 0
+    return {
+        "restart_scheduled": pending_until >= now,
+        "reconnecting": reconnecting_until >= now,
+        "stabilizing": reconnecting_until >= now and recovered_at > 0,
+        "draining": pending_until >= now and reconnecting_until < now and get_in_flight(proxy_url) > 0,
+        "drain_for_seconds": max(0, int(_get_until("drain_deadline", proxy_url) - now)),
+        "restart_backoff_for_seconds": max(0, int(backoff_until - now)),
+        "quarantined": quarantine_until >= now,
+        "quarantine_for_seconds": max(0, int(quarantine_until - now)),
+        "restart_reason": _get_string("reconnect_reason", proxy_url) or "",
+    }
+
+
+def clear_proxy_reconnect_state(proxy_url: str):
+    """Clear scheduler state; intended for recovery tooling and deterministic tests."""
+    for kind in ("reconnect_pending", "reconnecting", "drain_deadline",
+                 "reconnect_backoff", "quarantine"):
+        _clear(kind, proxy_url)
+    for kind in ("reconnect_old_ip", "reconnect_signaled", "reconnect_reason",
+                 "reconnect_recovered_at"):
+        _clear_string(kind, proxy_url)
+    _clear_window_counter("reconnect_failures", proxy_url)
+
+
+def _record_reconnect_failure(proxy_url: str) -> tuple[int, int, bool]:
+    failures = _increment_window_counter(
+        "reconnect_failures", proxy_url, RECONNECT_BUDGET_WINDOW_SECONDS)
+    if failures >= max(1, RECONNECT_BUDGET_LIMIT):
+        _set_until("quarantine", proxy_url, RECONNECT_QUARANTINE_SECONDS)
+        return failures, RECONNECT_QUARANTINE_SECONDS, True
+    exponent = max(0, min(failures - 1, 8))
+    delay = min(RECONNECT_BACKOFF_MAX_SECONDS,
+                RECONNECT_BACKOFF_BASE_SECONDS * (2 ** exponent))
+    if RECONNECT_BACKOFF_JITTER_SECONDS > 0:
+        delay += random.randint(0, RECONNECT_BACKOFF_JITTER_SECONDS)
+    _set_until("reconnect_backoff", proxy_url, max(1, delay))
+    return failures, delay, False
+
+
+def process_proxy_reconnect(proxy_url: str) -> str:
+    """Advance one persisted reconnect state; returns a metrics-friendly outcome."""
+    now = time.time()
+    reason = _get_string("reconnect_reason", proxy_url) or "unknown"
+    if _get_until("reconnect_pending", proxy_url) < now:
+        return "idle"
+    if _get_until("quarantine", proxy_url) >= now:
+        return "quarantined"
+
+    reconnecting_until = _get_until("reconnecting", proxy_url)
+    if reconnecting_until >= now:
+        old_ip = _get_string("reconnect_old_ip", proxy_url)
+        current_ip = get_proxy_exit_ip(proxy_url)
+        try:
+            signaled_at = float(_get_string("reconnect_signaled", proxy_url) or 0)
+            exit_seen_at = float(_get_string("exitip_seen_at", proxy_url) or 0)
+        except ValueError:
+            signaled_at = exit_seen_at = 0
+        probed_after_signal = exit_seen_at >= signaled_at > 0
+        recovered = probed_after_signal and bool(
+            current_ip and old_ip and current_ip != old_ip)
+        recovered = recovered or (
+            probed_after_signal
+            and bool(current_ip)
+            and not is_proxy_blocked(proxy_url)
+            and _get_until("dead", proxy_url) < now
+        )
+        if recovered:
+            recovered_at_raw = _get_string("reconnect_recovered_at", proxy_url)
+            recovered_at = float(recovered_at_raw or 0)
+            if recovered_at <= 0:
+                _set_string("reconnect_recovered_at", proxy_url, str(now),
+                            RECONNECT_PENDING_TTL_SECONDS)
+                return "stabilizing"
+            if now - recovered_at < max(0, RECONNECT_STABILIZE_SECONDS):
+                return "stabilizing"
+            for kind in ("reconnect_pending", "reconnecting", "drain_deadline",
+                         "reconnect_backoff", "quarantine"):
+                _clear(kind, proxy_url)
+            _clear_string("reconnect_old_ip", proxy_url)
+            _clear_string("reconnect_signaled", proxy_url)
+            _clear_string("reconnect_reason", proxy_url)
+            _clear_string("reconnect_recovered_at", proxy_url)
+            _clear_window_counter("reconnect_failures", proxy_url)
+            _reconnect_metric("verified", reason)
+            return "verified"
+        _clear_string("reconnect_recovered_at", proxy_url)
+        return "verifying"
+
+    # A reconnect was signaled but never verified before the deadline.
+    if _get_string("reconnect_signaled", proxy_url):
+        _clear_string("reconnect_signaled", proxy_url)
+        failures, delay, quarantined = _record_reconnect_failure(proxy_url)
+        if quarantined:
+            print(f"[ProxyState] {proxy_url} quarantined after {failures} failed reconnects", flush=True)
+            _reconnect_metric("quarantined", reason)
+            return "quarantined"
+        print(f"[ProxyState] {proxy_url} reconnect verification failed; "
+              f"retry in {delay}s", flush=True)
+        _reconnect_metric("verification_failed", reason)
+        return "verification_failed"
+
+    if _get_until("reconnect_backoff", proxy_url) >= now:
+        return "backoff"
+
+    active = get_in_flight(proxy_url)
+    if active > 0:
+        if _get_until("drain_deadline", proxy_url) < now:
+            print(f"[ProxyState] drain timeout for {proxy_url}; reconnect postponed "
+                  f"to protect {active} active request(s)", flush=True)
+            _set_until("drain_deadline", proxy_url,
+                       max(1, int(RECONNECT_DRAIN_TIMEOUT_SECONDS)))
+            _reconnect_metric("postponed", reason)
+            return "postponed"
+        return "draining"
+
+    hostname = (urlsplit(proxy_url).hostname or "").lower()
+    if not _write_reconnect_marker(hostname):
+        failures, _delay, quarantined = _record_reconnect_failure(proxy_url)
+        _reconnect_metric("quarantined" if quarantined else "signal_failed", reason)
+        return "quarantined" if quarantined else "signal_failed"
+    _set_string("reconnect_signaled", proxy_url, str(time.time()),
+                RECONNECT_PENDING_TTL_SECONDS)
+    _set_until("reconnecting", proxy_url, RECONNECT_VERIFY_TIMEOUT_SECONDS)
+    print(f"[ProxyState] {hostname} drained; reconnect signal written", flush=True)
+    _reconnect_metric("signaled", reason)
+    return "signaled"
 
 
 def proxy_status(proxy_url: str) -> Dict[str, object]:
@@ -349,6 +607,7 @@ def proxy_status(proxy_url: str) -> Dict[str, object]:
     dead_until = _get_until("dead", proxy_url)
     cooldown_until = _get_until("cooldown", proxy_url)
     blocked_until = _get_until("blocked", proxy_url)
+    reconnect = reconnect_state(proxy_url)
     return {
         "proxy": proxy_url,
         "usable": is_proxy_usable(proxy_url),
@@ -358,6 +617,7 @@ def proxy_status(proxy_url: str) -> Dict[str, object]:
         "blocked_for_seconds": max(0, int(blocked_until - now)),
         "in_flight": get_in_flight(proxy_url),
         "exit_ip": get_proxy_exit_ip(proxy_url),
+        **reconnect,
     }
 
 

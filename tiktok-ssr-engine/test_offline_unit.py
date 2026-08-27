@@ -5,7 +5,9 @@ Does not require internet access, live servers, or proxies.
 
 import asyncio
 import json
+from pathlib import Path
 import tempfile
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -42,6 +44,7 @@ from main import (
 from proxy_state import (
     clear_proxy_blocked,
     clear_proxy_exit_ip,
+    clear_proxy_reconnect_state,
     dec_in_flight,
     get_proxy_exit_ip,
     get_in_flight,
@@ -55,6 +58,7 @@ from proxy_state import (
     mark_proxy_request_success,
     mark_proxy_tunnel_alive,
     mark_proxy_usable,
+    process_proxy_reconnect,
     record_exit_block_strike,
     record_proxy_probe_failure,
     request_proxy_reconnect,
@@ -465,14 +469,151 @@ class TestTikTokSSROffline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as signal_dir, \
                 patch("proxy_state.RECONNECT_SIGNAL_DIR", signal_dir), \
                 patch("proxy_state._redis_client", None):
-            self.assertTrue(request_proxy_reconnect(proxy, cooldown_seconds=60))
-            marker = f"{signal_dir}/wireproxy-99"
-            with open(marker, encoding="ascii") as handle:
-                first_token = handle.read()
-            self.assertFalse(request_proxy_reconnect(proxy, cooldown_seconds=60))
-            with open(marker, encoding="ascii") as handle:
-                self.assertEqual(handle.read(), first_token)
-            self.assertFalse(request_proxy_reconnect("socks5h://not-wireproxy:1080", 60))
+            try:
+                self.assertTrue(request_proxy_reconnect(proxy, cooldown_seconds=60))
+                self.assertFalse(request_proxy_reconnect(proxy, cooldown_seconds=60))
+                self.assertEqual(process_proxy_reconnect(proxy), "signaled")
+                marker = f"{signal_dir}/wireproxy-99"
+                with open(marker, encoding="ascii") as handle:
+                    first_token = handle.read()
+                self.assertFalse(request_proxy_reconnect(proxy, cooldown_seconds=60))
+                with open(marker, encoding="ascii") as handle:
+                    self.assertEqual(handle.read(), first_token)
+                self.assertFalse(request_proxy_reconnect("socks5h://not-wireproxy:1080", 60))
+            finally:
+                clear_proxy_reconnect_state(proxy)
+
+    def test_reconnect_waits_for_active_request_to_drain(self):
+        proxy = "socks5h://wireproxy-97:1080"
+        inc_in_flight(proxy)
+        try:
+            with tempfile.TemporaryDirectory() as signal_dir, \
+                    patch("proxy_state.RECONNECT_SIGNAL_DIR", signal_dir), \
+                    patch("proxy_state._redis_client", None):
+                self.assertTrue(request_proxy_reconnect(
+                    proxy,
+                    cooldown_seconds=60,
+                    drain_timeout_seconds=1,
+                    drain_poll_seconds=0.01,
+                ))
+                marker = f"{signal_dir}/wireproxy-97"
+                self.assertFalse(Path(marker).exists())
+                self.assertFalse(is_proxy_usable(proxy))
+                self.assertEqual(process_proxy_reconnect(proxy), "draining")
+                dec_in_flight(proxy)
+                self.assertEqual(process_proxy_reconnect(proxy), "signaled")
+                self.assertTrue(Path(marker).exists())
+        finally:
+            dec_in_flight(proxy)
+            clear_proxy_reconnect_state(proxy)
+
+    def test_reconnect_is_postponed_after_drain_timeout(self):
+        proxy = "socks5h://wireproxy-98:1080"
+        inc_in_flight(proxy)
+        try:
+            with tempfile.TemporaryDirectory() as signal_dir, \
+                    patch("proxy_state.RECONNECT_SIGNAL_DIR", signal_dir), \
+                    patch("proxy_state._redis_client", None):
+                self.assertTrue(request_proxy_reconnect(
+                    proxy,
+                    cooldown_seconds=60,
+                    drain_timeout_seconds=0.05,
+                    drain_poll_seconds=0.01,
+                ))
+                marker = f"{signal_dir}/wireproxy-98"
+                time.sleep(0.12)
+                self.assertFalse(Path(marker).exists())
+                self.assertEqual(get_in_flight(proxy), 1)
+                self.assertFalse(is_proxy_usable(proxy))
+                import proxy_state
+                proxy_state._set_until("drain_deadline", proxy, -1)
+                self.assertEqual(process_proxy_reconnect(proxy), "postponed")
+                self.assertFalse(Path(marker).exists())
+                dec_in_flight(proxy)
+                self.assertEqual(process_proxy_reconnect(proxy), "signaled")
+                self.assertTrue(Path(marker).exists())
+        finally:
+            dec_in_flight(proxy)
+            clear_proxy_reconnect_state(proxy)
+
+    def test_reconnect_requires_verified_recovery(self):
+        proxy = "socks5h://wireproxy-96:1080"
+        with tempfile.TemporaryDirectory() as signal_dir, \
+                patch("proxy_state.RECONNECT_SIGNAL_DIR", signal_dir), \
+                patch("proxy_state._redis_client", None):
+            try:
+                set_proxy_exit_ip(proxy, "192.0.2.1")
+                mark_proxy_blocked(proxy, 60)
+                self.assertTrue(request_proxy_reconnect(proxy))
+                self.assertEqual(process_proxy_reconnect(proxy), "signaled")
+                self.assertEqual(process_proxy_reconnect(proxy), "verifying")
+                record_probe_success(proxy, "192.0.2.2")
+                with patch("proxy_state.RECONNECT_STABILIZE_SECONDS", 0):
+                    self.assertEqual(process_proxy_reconnect(proxy), "stabilizing")
+                    self.assertEqual(process_proxy_reconnect(proxy), "verified")
+                self.assertTrue(is_proxy_usable(proxy))
+            finally:
+                clear_proxy_reconnect_state(proxy)
+                clear_proxy_blocked(proxy)
+                clear_proxy_exit_ip(proxy)
+
+    def test_failed_reconnects_backoff_then_quarantine(self):
+        import proxy_state
+
+        proxy = "socks5h://wireproxy-95:1080"
+        with tempfile.TemporaryDirectory() as signal_dir, \
+                patch("proxy_state.RECONNECT_SIGNAL_DIR", signal_dir), \
+                patch("proxy_state._redis_client", None), \
+                patch("proxy_state.RECONNECT_BUDGET_LIMIT", 2), \
+                patch("proxy_state.RECONNECT_BACKOFF_JITTER_SECONDS", 0):
+            try:
+                self.assertTrue(request_proxy_reconnect(proxy))
+                self.assertEqual(process_proxy_reconnect(proxy), "signaled")
+                proxy_state._clear("reconnecting", proxy)
+                self.assertEqual(process_proxy_reconnect(proxy), "verification_failed")
+                self.assertGreater(
+                    proxy_state.reconnect_state(proxy)["restart_backoff_for_seconds"], 0)
+
+                proxy_state._clear("reconnect_backoff", proxy)
+                self.assertEqual(process_proxy_reconnect(proxy), "signaled")
+                proxy_state._clear("reconnecting", proxy)
+                self.assertEqual(process_proxy_reconnect(proxy), "quarantined")
+                self.assertTrue(proxy_state.reconnect_state(proxy)["quarantined"])
+                self.assertFalse(is_proxy_usable(proxy))
+            finally:
+                clear_proxy_reconnect_state(proxy)
+
+    def test_prometheus_metrics_include_proxy_runtime_state(self):
+        import service_metrics
+
+        with patch("service_metrics._client", None):
+            service_metrics.inc_counter("test_tiktok_counter_total", result="ok")
+            output = service_metrics.render_prometheus(12, [{
+                "proxy": "socks5h://wireproxy-18:1080",
+                "usable": True,
+                "dead": False,
+                "blocked": False,
+                "draining": True,
+                "reconnecting": False,
+                "quarantined": False,
+                "in_flight": 2,
+            }])
+        self.assertIn('test_tiktok_counter_total{result="ok"}', output)
+        self.assertIn('tiktok_proxy_draining{proxy="socks5h://wireproxy-18:1080"} 1', output)
+        self.assertIn('tiktok_proxy_in_flight{proxy="socks5h://wireproxy-18:1080"} 2', output)
+
+    def test_background_reconnect_scheduler_has_managed_shutdown(self):
+        import proxy_health
+
+        async def exercise():
+            proxy_health.start_prober()
+            self.assertIsNotNone(proxy_health._reconnect_task)
+            await proxy_health.stop_prober()
+            self.assertIsNone(proxy_health._probe_task)
+            self.assertIsNone(proxy_health._block_task)
+            self.assertIsNone(proxy_health._reconnect_task)
+
+        asyncio.run(exercise())
 
     def test_error_classification(self):
         class DummyErr(Exception):

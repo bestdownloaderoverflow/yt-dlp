@@ -29,6 +29,7 @@ from proxy_state import (
     mark_proxy_tunnel_alive,
     record_exit_block_strike,
     record_proxy_probe_failure,
+    process_proxy_reconnect,
     request_proxy_reconnect,
     set_proxy_exit_ip,
 )
@@ -64,9 +65,13 @@ BLOCK_SANITY_RATIO = float(os.getenv("BLOCK_SANITY_RATIO", "0.8"))
 BLOCK_CONFIRMATIONS = max(1, int(os.getenv("BLOCK_CONFIRMATIONS", "2")))
 BLOCK_PROBE_STARTUP_DELAY_SECONDS = float(os.getenv("BLOCK_PROBE_STARTUP_DELAY", "30"))
 BLOCK_STRIKE_TTL_SECONDS = max(int(BLOCK_PROBE_INTERVAL_SECONDS * 3), 60)
+RECONNECT_SCHEDULER_INTERVAL_SECONDS = float(
+    os.getenv("WARP_RECONNECT_SCHEDULER_INTERVAL",
+              os.getenv("WARP_RECONNECT_DRAIN_POLL", "1")))
 
 _probe_task = None
 _block_task = None
+_reconnect_task = None
 _block_state = {}
 
 
@@ -249,7 +254,8 @@ def apply_block_verdicts(verdicts: dict) -> bool:
             warp_proxies = set(get_warp_proxies())
             for url in members:
                 mark_proxy_blocked(url)
-                if url in warp_proxies and request_proxy_reconnect(url):
+                if url in warp_proxies and request_proxy_reconnect(
+                    url, reason="block_probe"):
                     print(f"[BlockProbe] reconnect requested for {url} "
                           f"while IPv4 {exit_ip} is blocked", flush=True)
                 if not _block_state.get(url):
@@ -289,6 +295,19 @@ def _acquire_liveness_lease(ttl: int) -> bool:
         return True
     try:
         return bool(_redis_client.set("proxy:liveness:lease", str(time.time()), nx=True, ex=ttl))
+    except Exception:
+        return True
+
+
+def _acquire_reconnect_lease(ttl: int) -> bool:
+    """One Granian worker advances Redis-backed reconnect schedules."""
+    from proxy_state import _redis_client  # noqa: PLC0415
+
+    if _redis_client is None:
+        return True
+    try:
+        return bool(_redis_client.set("proxy:reconnect:lease", str(time.time()),
+                                      nx=True, ex=max(1, ttl)))
     except Exception:
         return True
 
@@ -344,19 +363,34 @@ async def _prober_loop():
         await asyncio.sleep(PROBE_INTERVAL_SECONDS)
 
 
+async def _reconnect_scheduler_loop():
+    interval = max(0.1, RECONNECT_SCHEDULER_INTERVAL_SECONDS)
+    while True:
+        try:
+            if _acquire_reconnect_lease(max(1, int(interval))):
+                for proxy_url in get_warp_proxies():
+                    process_proxy_reconnect(proxy_url)
+        except Exception as exc:
+            print(f"[ReconnectScheduler] cycle failed: {exc}", flush=True)
+        await asyncio.sleep(interval)
+
+
 def start_prober():
-    global _probe_task, _block_task
+    global _probe_task, _block_task, _reconnect_task
     if _probe_task is None:
         _probe_task = asyncio.create_task(_prober_loop())
         print("[Prober] background proxy health prober started", flush=True)
     if _block_task is None:
         _block_task = asyncio.create_task(_block_prober_loop())
         print("[BlockProbe] background TikTok block prober started", flush=True)
+    if _reconnect_task is None:
+        _reconnect_task = asyncio.create_task(_reconnect_scheduler_loop())
+        print("[ReconnectScheduler] managed reconnect scheduler started", flush=True)
 
 
 async def stop_prober():
-    global _probe_task, _block_task
-    for name in ("_probe_task", "_block_task"):
+    global _probe_task, _block_task, _reconnect_task
+    for name in ("_probe_task", "_block_task", "_reconnect_task"):
         task = globals()[name]
         if task is not None:
             task.cancel()

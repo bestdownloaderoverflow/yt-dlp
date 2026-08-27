@@ -390,6 +390,17 @@ services:
       - BLOCK_PROBE_STARTUP_DELAY=30
       - WIREPROXY_RECONNECT_DIR=/var/run/wireproxy-reconnect
       - WARP_RECONNECT_COOLDOWN=300
+      - WARP_RECONNECT_DRAIN_TIMEOUT=60
+      - WARP_RECONNECT_DRAIN_POLL=1
+      - WARP_RECONNECT_SCHEDULER_INTERVAL=1
+      - WARP_RECONNECT_VERIFY_TIMEOUT=60
+      - WARP_RECONNECT_STABILIZE=2
+      - WARP_RECONNECT_BACKOFF_BASE=30
+      - WARP_RECONNECT_BACKOFF_MAX=300
+      - WARP_RECONNECT_BACKOFF_JITTER=5
+      - WARP_RECONNECT_BUDGET_LIMIT=3
+      - WARP_RECONNECT_BUDGET_WINDOW=600
+      - WARP_RECONNECT_QUARANTINE=600
     volumes:
       - ./cookie/cookie.txt:/app/cookie/cookie.txt:ro
       - warp-reconnect-signals:/var/run/wireproxy-reconnect

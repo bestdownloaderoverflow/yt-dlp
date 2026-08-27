@@ -40,6 +40,7 @@ from proxy_state import (
     request_proxy_reconnect,
 )
 from session import get_cached_extraction, get_session, set_cached_extraction
+from service_metrics import inc_counter, render_prometheus
 
 
 @asynccontextmanager
@@ -114,7 +115,7 @@ def mark_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
     for candidate in blocked:
         mark_proxy_blocked(candidate)
         if candidate in warp_proxies:
-            request_proxy_reconnect(candidate)
+            request_proxy_reconnect(candidate, reason="request_ip_blocked")
     return blocked
 
 
@@ -203,8 +204,12 @@ async def health():
 
 @app.get("/metrics")
 async def metrics():
+    from config import get_geo_proxies, get_warp_proxies
+    from proxy_state import proxy_status
+
+    entries = [proxy_status(url) for url in get_warp_proxies() + get_geo_proxies()]
     return Response(
-        content=f"# HELP tiktok_ssr_uptime_seconds Uptime in seconds\ntiktok_ssr_uptime_seconds {int(time.time() - START_TIME)}\n",
+        content=render_prometheus(int(time.time() - START_TIME), entries),
         media_type="text/plain",
     )
 
@@ -260,6 +265,7 @@ async def extract_tiktok(
     api_key: Optional[str] = Query(None, alias="api_key"),
 ):
     check_auth(x_api_key, api_key)
+    inc_counter("tiktok_extract_requests_total")
 
     target_url = ""
     req_proxy = None
@@ -287,6 +293,7 @@ async def extract_tiktok(
     # 1. Check Redis / In-Memory Extraction Cache first (0.5ms response for viral videos)
     cached = get_cached_extraction(cache_key)
     if cached:
+        inc_counter("tiktok_extract_cache_total", result="hit")
         if VERBOSE_LOGS:
             print(f"⚡ [CACHE HIT] Returning cached result for {target_url}", flush=True)
         return JSONResponse(content=cached)
@@ -366,8 +373,11 @@ async def extract_tiktok(
 
             # Save successful extraction to cache
             set_cached_extraction(cache_key, result, ttl=CACHE_TTL or 300)
+            inc_counter("tiktok_extract_results_total", result="success", source=source or "unknown")
             return JSONResponse(content=result)
         except TikTokInfraError as e:
+            inc_counter("tiktok_extract_attempts_total", result="infra_error")
+            inc_counter("tiktok_proxy_failovers_total", reason="infra_error")
             # Proxy infrastructure failure: switch proxy WITHOUT consuming an attempt
             real_attempts -= 1
             last_error = e
@@ -379,12 +389,15 @@ async def extract_tiktok(
             if lane == "cloudflare" and failed_warp_exit_ips:
                 retry_warp = True
         except TikTokAccessRestrictedError as e:
+            inc_counter("tiktok_extract_attempts_total", result="access_restricted")
             # 10216/10222 are private post/account permissions, not geo codes.
             # Rotating exits cannot grant account access.
             if VERBOSE_LOGS:
                 print(f"  🔒 [Attempt {real_attempts}] ACCESS RESTRICTED on {proxy}: {e}", flush=True)
             raise HTTPException(status_code=403, detail=str(e))
         except TikTokIPBlockedError as e:
+            inc_counter("tiktok_extract_attempts_total", result="ip_blocked")
+            inc_counter("tiktok_proxy_failovers_total", reason="ip_blocked")
             # WAF verdict on the exit IP itself: park it as blocked so the whole
             # pool stops picking it, not just this request. This is not evidence
             # of a region lock, so rotate within the current lane first.
@@ -400,6 +413,7 @@ async def extract_tiktok(
                 real_attempts -= 1
                 retry_warp = True
         except TikTokExtractError as e:
+            inc_counter("tiktok_extract_attempts_total", result="extract_error")
             last_error = e
             if lane == "cloudflare":
                 # Confirmation is based on TikTok's effective public IPv4. WARP
@@ -426,6 +440,7 @@ async def extract_tiktok(
             if req_proxy:
                 break
         except Exception as e:
+            inc_counter("tiktok_extract_attempts_total", result="unclassified")
             last_error = e
             if VERBOSE_LOGS:
                 print(f"  ⚠️ [Attempt {real_attempts}] UNCLASSIFIED FAIL on {proxy}: {e}", flush=True)
@@ -435,6 +450,7 @@ async def extract_tiktok(
             dec_in_flight(proxy)
 
     print(f"❌ [FAILED] Extraction failed for {target_url} after {touches} proxy touches: {last_error}", flush=True)
+    inc_counter("tiktok_extract_results_total", result="failed", source="none")
     raise HTTPException(status_code=502, detail=f"Extraction failed: {last_error}")
 
 
@@ -534,6 +550,7 @@ async def download_tiktok_media(
 
     author = session_data.get("author") or "tiktok"
     media_type = session_data.get("type") or "video"
+    inc_counter("tiktok_download_requests_total", media_type=media_type)
     proxy = session_data.get("proxy") or DEFAULT_PROXY or None
     impersonate = session_data.get("impersonate") or DEFAULT_IMPERSONATE
     session_cookies = session_data.get("cookies")

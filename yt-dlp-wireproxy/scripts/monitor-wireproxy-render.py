@@ -218,6 +218,16 @@ def status_palette(row: dict) -> str:
         return _RED
     if not row["state_known"]:
         return _RED
+    if row["quarantined"]:
+        return _RED
+    if row["stabilizing"]:
+        return _CYN
+    if row["reconnecting"]:
+        return _CYN
+    if row["draining"]:
+        return _YEL
+    if row["restart_backoff"] > 0:
+        return _YEL
     if row["blocked"]:
         return _RED
     if row["cooldown"]:
@@ -239,6 +249,16 @@ def status_text(row: dict) -> tuple[str, str]:
         return "DOWN", _RED
     if not row["state_known"]:
         return "NOSTATE", _RED
+    if row["quarantined"]:
+        return "QUAR", _RED
+    if row["stabilizing"]:
+        return "STABLE", _CYN
+    if row["reconnecting"]:
+        return "RECON", _CYN
+    if row["draining"]:
+        return "DRAIN", _YEL
+    if row["restart_backoff"] > 0:
+        return "BACKOFF", _YEL
     if row["blocked"]:
         return "BLOCK", _RED
     if row["cooldown"]:
@@ -394,6 +414,11 @@ def main() -> int:
         dead = bool(ph.get("dead", False))
         blocked = bool(ph.get("blocked", False))
         cooldown = bool(ph.get("cooldown", False))
+        draining = bool(ph.get("draining", False))
+        reconnecting = bool(ph.get("reconnecting", False))
+        stabilizing = bool(ph.get("stabilizing", False))
+        quarantined = bool(ph.get("quarantined", False))
+        restart_backoff = int(ph.get("restart_backoff_for_seconds", 0) or 0)
         usable = bool(ph.get("usable", False)) if has_state else False
 
         row = {
@@ -416,6 +441,11 @@ def main() -> int:
             "http_code": http_code,
             "active_requests": int(ph.get("in_flight", 0) or 0),
             "cooldown": cooldown,
+            "draining": draining,
+            "reconnecting": reconnecting,
+            "stabilizing": stabilizing,
+            "quarantined": quarantined,
+            "restart_backoff": restart_backoff,
             "endpoint": m["endpoint"],
             "handshake": m["handshake"],
             "restart_message": restart["message"],

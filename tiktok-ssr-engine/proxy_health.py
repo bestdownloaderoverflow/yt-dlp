@@ -251,10 +251,10 @@ def apply_block_verdicts(verdicts: dict) -> bool:
                       f"for IPv4 {exit_ip}; awaiting confirmation", flush=True)
                 continue
             record_exit_block_strike(exit_ip, False)
-            warp_proxies = set(get_warp_proxies())
+            reconnectable_proxies = set(get_proxy_pool())
             for url in members:
                 mark_proxy_blocked(url)
-                if url in warp_proxies and request_proxy_reconnect(
+                if url in reconnectable_proxies and request_proxy_reconnect(
                     url, reason="block_probe"):
                     print(f"[BlockProbe] reconnect requested for {url} "
                           f"while IPv4 {exit_ip} is blocked", flush=True)
@@ -368,7 +368,7 @@ async def _reconnect_scheduler_loop():
     while True:
         try:
             if _acquire_reconnect_lease(max(1, int(interval))):
-                for proxy_url in get_warp_proxies():
+                for proxy_url in get_proxy_pool():
                     process_proxy_reconnect(proxy_url)
         except Exception as exc:
             print(f"[ReconnectScheduler] cycle failed: {exc}", flush=True)

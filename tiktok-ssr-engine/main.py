@@ -111,10 +111,10 @@ def mark_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
             if get_proxy_exit_ip(candidate) == exit_ip
         )
         record_exit_block_strike(exit_ip, False)
-    warp_proxies = set(get_warp_proxies())
+    reconnectable_proxies = set(get_proxy_pool())
     for candidate in blocked:
         mark_proxy_blocked(candidate)
-        if candidate in warp_proxies:
+        if candidate in reconnectable_proxies:
             request_proxy_reconnect(candidate, reason="request_ip_blocked")
     return blocked
 

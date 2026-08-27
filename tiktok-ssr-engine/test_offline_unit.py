@@ -615,6 +615,32 @@ class TestTikTokSSROffline(unittest.TestCase):
 
         asyncio.run(exercise())
 
+    def test_reconnect_scheduler_processes_all_providers(self):
+        import proxy_health
+
+        proxies = [
+            "socks5h://wireproxy-01:1080",
+            "socks5h://wireproxy-13:1080",
+            "socks5h://wireproxy-18:1080",
+        ]
+
+        async def exercise():
+            with patch("proxy_health.RECONNECT_SCHEDULER_INTERVAL_SECONDS", 0.01), \
+                    patch("proxy_health._acquire_reconnect_lease", return_value=True), \
+                    patch("proxy_health.get_proxy_pool", return_value=proxies), \
+                    patch("proxy_health.process_proxy_reconnect") as process:
+                task = asyncio.create_task(proxy_health._reconnect_scheduler_loop())
+                await asyncio.sleep(0)
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            self.assertEqual(
+                {call.args[0] for call in process.call_args_list},
+                set(proxies),
+            )
+
+        asyncio.run(exercise())
+
     def test_error_classification(self):
         class DummyErr(Exception):
             pass
@@ -659,7 +685,6 @@ class TestTikTokSSROffline(unittest.TestCase):
         p20 = "socks5h://wireproxy-20:1080"
         exits = {p18: "104.28.1.1", p19: "104.28.2.2", p20: "104.28.1.1"}
         with patch("main.get_proxy_pool", return_value=[p18, p19, p20]), \
-                patch("main.get_warp_proxies", return_value=[p18, p19, p20]), \
                 patch("main.get_proxy_exit_ip", side_effect=lambda p: exits[p]), \
                 patch("main.mark_proxy_blocked") as mark_blocked, \
                 patch("main.request_proxy_reconnect") as reconnect:
@@ -675,6 +700,25 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertEqual(marked.count(p18), 2)
         self.assertEqual(marked.count(p20), 1)
         self.assertCountEqual(reconnected, marked)
+
+    def test_ip_block_reconnects_surfshark_and_mullvad(self):
+        surfshark = "socks5h://wireproxy-01:1080"
+        mullvad = "socks5h://wireproxy-13:1080"
+        exits = {surfshark: "198.51.100.1", mullvad: "198.51.100.13"}
+        with patch("main.get_proxy_pool", return_value=[surfshark, mullvad]), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: exits[p]), \
+                patch("main.mark_proxy_blocked"), \
+                patch("main.request_proxy_reconnect") as reconnect:
+            try:
+                mark_proxy_and_shared_exit_blocked(surfshark)
+                mark_proxy_and_shared_exit_blocked(mullvad)
+            finally:
+                for exit_ip in exits.values():
+                    record_exit_block_strike(exit_ip, False)
+        self.assertEqual(
+            {call.args[0] for call in reconnect.call_args_list},
+            {surfshark, mullvad},
+        )
 
     def test_tiktok_success_clears_block_for_shared_ipv4_siblings(self):
         p18 = "socks5h://wireproxy-18:1080"

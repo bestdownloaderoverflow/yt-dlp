@@ -21,8 +21,11 @@ services:
   wireproxy-01:
     <<: *wireproxy
     container_name: wireproxy-01
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-01
     volumes:
       - ./runtime-configs/wireproxy-01.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -36,8 +39,11 @@ services:
   wireproxy-02:
     <<: *wireproxy
     container_name: wireproxy-02
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-02
     volumes:
       - ./runtime-configs/wireproxy-02.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -51,8 +57,11 @@ services:
   wireproxy-03:
     <<: *wireproxy
     container_name: wireproxy-03
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-03
     volumes:
       - ./runtime-configs/wireproxy-03.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -66,8 +75,11 @@ services:
   wireproxy-04:
     <<: *wireproxy
     container_name: wireproxy-04
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-04
     volumes:
       - ./runtime-configs/wireproxy-04.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -81,8 +93,11 @@ services:
   wireproxy-05:
     <<: *wireproxy
     container_name: wireproxy-05
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-05
     volumes:
       - ./runtime-configs/wireproxy-05.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -96,8 +111,11 @@ services:
   wireproxy-06:
     <<: *wireproxy
     container_name: wireproxy-06
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-06
     volumes:
       - ./runtime-configs/wireproxy-06.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -111,8 +129,11 @@ services:
   wireproxy-07:
     <<: *wireproxy
     container_name: wireproxy-07
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-07
     volumes:
       - ./runtime-configs/wireproxy-07.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -126,8 +147,11 @@ services:
   wireproxy-08:
     <<: *wireproxy
     container_name: wireproxy-08
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-08
     volumes:
       - ./runtime-configs/wireproxy-08.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -141,8 +165,11 @@ services:
   wireproxy-09:
     <<: *wireproxy
     container_name: wireproxy-09
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-09
     volumes:
       - ./runtime-configs/wireproxy-09.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -156,8 +183,11 @@ services:
   wireproxy-10:
     <<: *wireproxy
     container_name: wireproxy-10
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-10
     volumes:
       - ./runtime-configs/wireproxy-10.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -171,8 +201,11 @@ services:
   wireproxy-11:
     <<: *wireproxy
     container_name: wireproxy-11
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-11
     volumes:
       - ./runtime-configs/wireproxy-11.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -186,8 +219,11 @@ services:
   wireproxy-12:
     <<: *wireproxy
     container_name: wireproxy-12
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-12
     volumes:
       - ./runtime-configs/wireproxy-12.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -201,8 +237,11 @@ services:
   wireproxy-13:
     <<: *wireproxy
     container_name: wireproxy-13
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-13
     volumes:
       - ./runtime-configs/wireproxy-13.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -216,8 +255,11 @@ services:
   wireproxy-14:
     <<: *wireproxy
     container_name: wireproxy-14
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-14
     volumes:
       - ./runtime-configs/wireproxy-14.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -231,8 +273,11 @@ services:
   wireproxy-15:
     <<: *wireproxy
     container_name: wireproxy-15
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-15
     volumes:
       - ./runtime-configs/wireproxy-15.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -246,8 +291,11 @@ services:
   wireproxy-16:
     <<: *wireproxy
     container_name: wireproxy-16
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-16
     volumes:
       - ./runtime-configs/wireproxy-16.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]
@@ -261,8 +309,11 @@ services:
   wireproxy-17:
     <<: *wireproxy
     container_name: wireproxy-17
+    environment:
+      - WIREPROXY_RECONNECT_MARKER=/var/run/wireproxy-reconnect/wireproxy-17
     volumes:
       - ./runtime-configs/wireproxy-17.conf:/etc/wireproxy/wireproxy.conf:ro
+      - warp-reconnect-signals:/var/run/wireproxy-reconnect:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9080/readyz"]

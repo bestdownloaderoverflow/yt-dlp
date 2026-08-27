@@ -4,7 +4,7 @@ set -eu
 marker="${WIREPROXY_RECONNECT_MARKER:-}"
 poll_seconds="${WIREPROXY_RECONNECT_POLL_SECONDS:-2}"
 
-# Non-WARP containers keep the original direct-exec behavior.
+# Containers without a reconnect marker keep the original direct-exec behavior.
 if [ -z "$marker" ]; then
     exec /usr/local/bin/wireproxy-bin "$@"
 fi

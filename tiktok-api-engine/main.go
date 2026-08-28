@@ -209,6 +209,15 @@ func main() {
 	})
 
 	addr := cfg.Host + ":" + cfg.Port
+	if cfg.APIKey == "" {
+		// An unset key disables auth entirely. That is fine behind a private
+		// network and dangerous on a public domain, and the difference is
+		// invisible until someone else is using the service: an empty
+		// TIKTOK_API_KEY in compose looks identical to a configured one.
+		log.Printf("WARNING: TIKTOK_API_KEY is empty, so /fetch is open to anyone "+
+			"who can reach %s. Downloads leave from this host's IP, so abuse "+
+			"lands on it directly. Set the variable unless this port is private.", addr)
+	}
 	log.Printf("tiktok-api-engine listening on %s (region=%s, %d api hosts, proxy=%q)",
 		addr, cfg.Region, len(cfg.APIHosts), cfg.Proxy)
 	server := &http.Server{

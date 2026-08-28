@@ -1,0 +1,88 @@
+# tiktok-api-engine -- the app-API twin of tiktok-ssr-engine.
+#
+# Same request and response contract as the SSR service on 9111, but it reads
+# TikTok's Android app API (/aweme/v1/feed/) instead of scraping rendered HTML.
+# Deployed on its own domain, with its own Redis, so neither service can take
+# the other down: the SSR path breaks when TikTok changes its markup or WAF,
+# this one breaks if the undocumented OPTIONS route is closed. They do not fail
+# together, which is the whole point of keeping them apart.
+
+services:
+  tiktok-api-engine:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: tiktok-api-engine:latest
+    container_name: tiktok-api-engine
+    ports:
+      - "9110:9110"
+    environment:
+      - PORT=9110
+      - TIKTOK_API_KEY=${TIKTOK_API_KEY}
+      - REDIS_URL=redis://redis-api:6379/0
+      # region, not the exit IP, is what decides whether TikTok serves
+      # geo-restricted content. Measured from Singapore and Thailand exits:
+      # region=ID returned the post, region=US returned an unrelated feed.
+      # That is why this service needs no proxy pool at all.
+      - TIKTOK_REGION=ID
+      - TIKTOK_TIMEZONE=Asia/Jakarta
+      - TIKTOK_TIMEZONE_OFFSET=25200
+      - TIKTOK_MCC_MNC=51010
+      # Left unset: the five defaults are the hosts measured at 15/15 direct and
+      # 10/10 through both a Singapore and an Indonesia exit. Override only to
+      # react to a host going bad.
+      # - TIKTOK_API_HOSTS=api19-normal-c-useast2a.tiktokv.com,...
+      - MAX_ATTEMPTS=3
+      - REQUEST_TIMEOUT=15
+      - CACHE_TTL=300
+      - SESSION_TTL=3600
+      # Direct by default. No AAAA exists on any API host (checked against three
+      # resolvers), so a SOCKS proxy is the only way to vary the source address
+      # if TikTok ever starts limiting this box's IP. Wired up, switched off.
+      # - PROXY_URL=socks5h://wireproxy-02:1080
+      # - DOWNLOAD_PROXY_URL=socks5h://wireproxy-02:1080
+      - SLIDESHOW_SECONDS_PER_IMAGE=3
+      - SLIDESHOW_MAX_IMAGES=40
+      - VERBOSE_LOGS=0
+    depends_on:
+      redis-api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9110/readyz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    networks:
+      - tiktok-api-network
+
+  redis-api:
+    image: redis:7-alpine
+    container_name: tiktok-api-redis
+    volumes:
+      - redis-api-data:/data
+    # volatile-lru, not allkeys-lru: everything written here carries a TTL, so
+    # the candidate set is the same, but a key that ever lands without one
+    # cannot be evicted silently.
+    command: redis-server --maxmemory 512mb --maxmemory-policy volatile-lru
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - tiktok-api-network
+
+networks:
+  tiktok-api-network:
+    driver: bridge
+
+volumes:
+  redis-api-data:

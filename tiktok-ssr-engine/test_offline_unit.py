@@ -874,6 +874,23 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertFalse(should_retry_via_indonesia("geo", TikTokExtractError("parse error"), 2))
         self.assertFalse(should_retry_via_indonesia("cloudflare", TikTokInfraError("timeout"), 2))
 
+    def test_single_warp_exit_ip_still_reaches_indonesia(self):
+        # Cloudflare NATs every WARP container behind one public IPv4 in this
+        # pool, so a second distinct WARP exit does not exist. Demanding two of
+        # them left geo-restricted posts that return an empty shell burning the
+        # whole budget on WARP and geo without ever trying Indonesia.
+        empty_shell = TikTokExtractError("empty shell")
+        self.assertTrue(should_retry_via_indonesia(
+            "cloudflare", empty_shell, 1, warp_exhausted=True))
+        # Exhaustion alone is not evidence: something has to have failed.
+        self.assertFalse(should_retry_via_indonesia(
+            "cloudflare", empty_shell, 0, warp_exhausted=True))
+        # And it never rescues the cases the guard exists to exclude.
+        self.assertFalse(should_retry_via_indonesia(
+            "cloudflare", TikTokInfraError("timeout"), 1, warp_exhausted=True))
+        self.assertFalse(should_retry_via_indonesia(
+            "geo", empty_shell, 1, warp_exhausted=True))
+
     def test_repeated_10204_retries_via_indonesia(self):
         self.assertFalse(should_retry_ip_block_via_indonesia(0))
         self.assertFalse(should_retry_ip_block_via_indonesia(1))
@@ -1043,6 +1060,110 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(json.loads(response.body)["title"], "Indonesia success")
         poison_pool.assert_not_called()
+        geo_hint.assert_called_once()
+
+    def test_empty_shell_on_shared_warp_ip_reaches_indonesia(self):
+        # The reported symptom: a geo-restricted post that returns an empty page
+        # rather than a 10204 failed with 502 after three touches, having never
+        # tried Indonesia. Cause: every WARP container shares one public IPv4,
+        # so "confirm on a second distinct WARP exit" waited for evidence that
+        # could not exist.
+        warp = "socks5h://wireproxy-18:1080"
+        indo = "socks5h://wireproxy-01:1080"
+        exit_ips = {warp: "104.28.197.9", indo: "93.185.162.131"}
+        used = []
+
+        class FakeExtractor:
+            def __init__(self, proxy=None, impersonate=None):
+                del impersonate
+                self.proxy = proxy
+
+            async def extract(self, _url):
+                used.append(self.proxy)
+                if self.proxy != indo:
+                    raise TikTokExtractError(
+                        "Unable to extract video or photo slideshow from TikTok.")
+                return {"extract_source": "web_ssr", "title": "Indonesia success"}
+
+        def pick_proxy(**kwargs):
+            excluded = kwargs.get("exclude") or set()
+            excluded_ips = kwargs.get("exclude_exit_ips") or set()
+            if kwargs.get("indo_only"):
+                return indo
+            if kwargs.get("warp_only"):
+                # One IPv4 for the whole WARP lane: once it is excluded there is
+                # no second WARP exit to hand back.
+                if warp in excluded or exit_ips[warp] in excluded_ips:
+                    return None
+                return warp
+            return "socks5h://wireproxy-02:1080"
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@geo/video/7677284046552059143",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=False), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: exit_ips.get(p, "")), \
+                patch("main.TikTokSSRExtractor", FakeExtractor), \
+                patch("main.mark_proxy_request_success"), \
+                patch("main.clear_proxy_and_shared_exit_blocked"), \
+                patch("main.set_cached_extraction"), \
+                patch("main.set_geo_hint") as geo_hint:
+            response = asyncio.run(extract_tiktok(request))
+
+        # Indonesia straight after the single WARP exit is spent -- no geo
+        # detour burning the budget first.
+        self.assertEqual(used, [warp, indo])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.body)["title"], "Indonesia success")
+        geo_hint.assert_called_once()
+
+    def test_lucky_indonesia_pick_from_the_geo_lane_is_remembered(self):
+        # The geo lane holds the Indonesia nodes too, so a retry can land on one
+        # by luck. That used to succeed and teach the service nothing, leaving
+        # the next request for the same post to re-run the failing sequence.
+        warp = "socks5h://wireproxy-18:1080"
+        indo = "socks5h://wireproxy-13:1080"
+        exit_ips = {warp: "104.28.197.9", indo: "129.227.46.150"}
+
+        class FakeExtractor:
+            def __init__(self, proxy=None, impersonate=None):
+                del impersonate
+                self.proxy = proxy
+
+            async def extract(self, _url):
+                if self.proxy != indo:
+                    raise TikTokExtractError("empty shell")
+                return {"extract_source": "web_ssr", "title": "lucky"}
+
+        def pick_proxy(**kwargs):
+            # Never offers the deliberate Indonesia lane: the geo lane is what
+            # hands back an Indonesia node here.
+            if kwargs.get("indo_only"):
+                return None
+            if kwargs.get("warp_only"):
+                return None if warp in (kwargs.get("exclude") or set()) else warp
+            return indo
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@geo/video/7677284046552059144",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=False), \
+                patch("main.get_indo_proxies", return_value=[indo]), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: exit_ips.get(p, "")), \
+                patch("main.TikTokSSRExtractor", FakeExtractor), \
+                patch("main.mark_proxy_request_success"), \
+                patch("main.clear_proxy_and_shared_exit_blocked"), \
+                patch("main.set_cached_extraction"), \
+                patch("main.set_geo_hint") as geo_hint:
+            response = asyncio.run(extract_tiktok(request))
+
+        self.assertEqual(response.status_code, 200)
         geo_hint.assert_called_once()
 
     def test_video_error_requires_two_healthy_indonesia_exits(self):

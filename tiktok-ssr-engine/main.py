@@ -91,14 +91,26 @@ class TikTokRequest(BaseModel):
 
 def should_retry_via_indonesia(
     lane: str, error: Exception, distinct_warp_exit_failures: int,
+    warp_exhausted: bool = False,
 ) -> bool:
-    """Require the same content failure on two WARP exits before using Indonesia."""
-    return (
+    """Same content failure on two WARP exits -- or on every WARP exit there is.
+
+    Cloudflare NATs WARP clients behind few public IPv4s, so all four WARP
+    containers can share one address. Demanding two *distinct* WARP exit IPv4s
+    then asks for evidence that cannot exist, and the Indonesia lane is never
+    reached for geo-restricted posts that return an empty shell instead of a
+    10204. warp_exhausted says the selector has no unused WARP exit left, which
+    means one failure is all the evidence WARP will ever be able to give.
+    """
+    if not (
         lane == "cloudflare"
         and isinstance(error, TikTokExtractError)
         and not isinstance(error, TikTokInfraError)
-        and distinct_warp_exit_failures >= 2
-    )
+    ):
+        return False
+    if distinct_warp_exit_failures >= 2:
+        return True
+    return warp_exhausted and distinct_warp_exit_failures >= 1
 
 
 def should_retry_ip_block_via_indonesia(distinct_exit_failures: int) -> bool:
@@ -439,7 +451,13 @@ async def extract_tiktok(
             mark_proxy_request_success(proxy, tiktok_served=tiktok_served)
             if tiktok_served:
                 clear_proxy_and_shared_exit_blocked(proxy)
-            if lane == "indo" and prefer_indo:
+            # Remember the hint whenever an Indonesia exit is what worked, not
+            # only when the Indonesia lane was chosen deliberately. The geo lane
+            # holds the Indonesia nodes too, so a retry could land on one by
+            # luck, succeed, and teach the service nothing -- leaving the next
+            # request for the same post to re-run the whole failing sequence.
+            # prefer_indo also refreshes the hint on a post that keeps needing it.
+            if (lane == "indo" or proxy in indo_proxies) and (prefer_indo or touches > 1):
                 set_geo_hint(cache_key, ttl=GEO_HINT_TTL_SECONDS)
                 inc_counter("tiktok_geo_hint_total", result="stored")
             if VERBOSE_LOGS:
@@ -537,7 +555,16 @@ async def extract_tiktok(
                 # an unknown exit IP must never count as independent evidence.
                 if proxy_exit_ip:
                     failed_warp_exit_ips.add(proxy_exit_ip)
-                if should_retry_via_indonesia(lane, e, len(failed_warp_exit_ips)):
+                # Ask the selector, not the index ranges, whether another WARP
+                # exit is even available: all four containers routinely share
+                # one public IPv4, so "try a different WARP exit" is often a
+                # move that does not exist.
+                warp_exhausted = not get_next_proxy(
+                    warp_only=True, exclude=tried_proxies,
+                    exclude_exit_ips=tried_exit_ips,
+                )
+                if should_retry_via_indonesia(
+                    lane, e, len(failed_warp_exit_ips), warp_exhausted):
                     # Some region-locked posts return the same empty shell on
                     # multiple WARP exits instead of a 10216/10222 status. The
                     # second WARP request is a confirmation probe, so preserve

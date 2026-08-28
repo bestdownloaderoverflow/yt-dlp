@@ -1,3 +1,4 @@
+import hashlib
 import json
 import secrets
 import time
@@ -106,8 +107,6 @@ def get_session(key: str) -> Optional[Dict[str, Any]]:
         _in_memory_sessions.pop(key, None)
     return None
 
-
-import hashlib
 
 def get_cached_extraction(url: str) -> Optional[Dict[str, Any]]:
     if not url:

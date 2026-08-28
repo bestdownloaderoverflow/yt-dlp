@@ -1,7 +1,8 @@
+import json
 import os
 import random
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from proxy_state import get_in_flight_many, get_proxy_exit_ips_many, is_proxy_usable
 
@@ -20,9 +21,81 @@ PROXY_COUNT = int(os.getenv("PROXY_COUNT", "0"))
 PROXY_HOST_PREFIX = os.getenv("PROXY_HOST_PREFIX", "wireproxy")
 PROXY_PORT = int(os.getenv("PROXY_PORT", "1080"))
 RAW_PROXY_LIST = os.getenv("PROXY_LIST", "")
-INDONESIA_PROXY_INDEXES = [
-    int(i) for i in os.getenv("INDONESIA_PROXIES", "1,13,14").split(",") if i.strip().isdigit()
+
+# Pool manifest written by yt-dlp-wireproxy/scripts/generate-wireproxy-configs.py.
+# The .conf files record a node's country only in a comment, so without this the
+# engine cannot tell Singapore from Jakarta and has to treat "two distinct exit
+# IPv4s failed" as geo evidence -- which proves nothing when 8 of 17 geo nodes
+# sit in one country. Optional: with no manifest the country map is empty, the
+# country preference becomes a no-op, and behaviour is exactly as before.
+POOL_MANIFEST_PATHS = [
+    os.getenv("PROXY_POOL_FILE", ""),
+    "/app/runtime-configs/pool.json",
+    str(Path(__file__).resolve().parent.parent / "yt-dlp-wireproxy" / "runtime-configs" / "pool.json"),
 ]
+
+
+def _load_pool_manifest() -> Dict[int, dict]:
+    for path in POOL_MANIFEST_PATHS:
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            entries = {
+                entry["index"]: entry
+                for entry in (data.get("proxies") or [])
+                if isinstance(entry.get("index"), int)
+            }
+            if entries:
+                return entries
+        except Exception as exc:
+            print(f"[Config] pool manifest {path} unreadable: {exc}", flush=True)
+    return {}
+
+
+POOL_MANIFEST = _load_pool_manifest()
+
+
+def _proxy_url(index: int) -> str:
+    return f"socks5h://{PROXY_HOST_PREFIX}-{index:02d}:{PROXY_PORT}"
+
+
+# Exits whose country is unknown (WARP anycast, or no manifest) are absent here
+# rather than mapped to a placeholder: an unknown country must never be used as
+# evidence that two attempts landed in the same place.
+PROXY_COUNTRIES: Dict[str, str] = {
+    _proxy_url(index): str(entry["country"]).upper()
+    for index, entry in POOL_MANIFEST.items()
+    if entry.get("country")
+}
+
+def derive_indonesia_indexes(manifest: Dict[int, dict], env_value: str = "") -> List[int]:
+    """An explicit INDONESIA_PROXIES wins; otherwise take every ID node.
+
+    Deriving it means re-running the generator cannot leave this pointing at
+    nodes that have since moved out of Indonesia, which is the failure mode of
+    a hand-copied list.
+    """
+    if env_value.strip():
+        return [int(i) for i in env_value.split(",") if i.strip().isdigit()]
+    return sorted(
+        index for index, entry in manifest.items()
+        if str(entry.get("country") or "").upper() == "ID"
+    )
+
+
+_INDONESIA_ENV = os.getenv("INDONESIA_PROXIES", "").strip()
+INDONESIA_PROXY_INDEXES = derive_indonesia_indexes(POOL_MANIFEST, _INDONESIA_ENV)
+if not INDONESIA_PROXY_INDEXES and PROXY_COUNT > 0:
+    print("[Config] no Indonesia exits: INDONESIA_PROXIES is unset and no pool "
+          f"manifest was found in {[p for p in POOL_MANIFEST_PATHS if p]}. "
+          "The Indonesia recovery lane is disabled.", flush=True)
+
+
+def get_proxy_country(proxy_url: str) -> str:
+    """Country code for an exit, or "" when unknown (WARP anycast, no manifest)."""
+    return PROXY_COUNTRIES.get(proxy_url, "")
 
 # Provider layout of the wireproxy pool, matching the index ranges written by
 # yt-dlp-wireproxy/scripts/generate-wireproxy-configs.py. Both bounds inclusive;
@@ -42,47 +115,17 @@ def _proxies(first: int, last: int) -> List[str]:
 
 
 def get_proxy_pool() -> List[str]:
-    """
-    Returns list of SOCKS5 proxies from PROXY_LIST or auto-generated wireproxy-01..wireproxy-NN.
-    Interleaves regions (ID -> SG -> VN -> ID -> SG -> VN...) so every 3 consecutive attempts
-    are guaranteed to touch different geographic regions!
+    """Every proxy the service may route through: PROXY_LIST, or wireproxy-01..NN.
+
+    This is the complete set by construction -- the warp/geo/indo helpers all
+    carve out subranges of 1..PROXY_COUNT -- so callers that need "all proxies"
+    can use this directly rather than unioning the subset helpers.
+
+    Order carries no meaning. _pick_from() selects by in-flight load with a
+    random tie-break, so no caller ever reads the sequence.
     """
     if RAW_PROXY_LIST:
         return [p.strip() for p in RAW_PROXY_LIST.split(",") if p.strip()]
-    if PROXY_COUNT >= WARP_FIRST_INDEX:
-        # Group 1: 18..PROXY_COUNT (Cloudflare WARP - 4 nodes)
-        # Group 2: 13..17 (Mullvad IPv4 SEA - 5 nodes)
-        # Group 3: 01..12 (Surfshark IPv4 SEA - 12 nodes)
-        warp_list = _proxies(WARP_FIRST_INDEX, PROXY_COUNT)
-        mullvad_list = _proxies(MULLVAD_FIRST_INDEX, MULLVAD_LAST_INDEX)
-        surfshark_list = _proxies(SURFSHARK_FIRST_INDEX, SURFSHARK_LAST_INDEX)
-
-        # Interleave Geo nodes (Surfshark + Mullvad alternating)
-        geo_list = []
-        for i in range(max(len(surfshark_list), len(mullvad_list))):
-            if i < len(surfshark_list):
-                geo_list.append(surfshark_list[i])
-            if i < len(mullvad_list):
-                geo_list.append(mullvad_list[i])
-
-        # Distribute Geo nodes evenly across WARP nodes (Uniform Zigzag: ~3 WARP -> 1 Geo -> ~3 WARP -> 1 Geo)
-        final_pool = []
-        w_idx = 0
-        g_idx = 0
-        total_warp = len(warp_list)
-        total_geo = len(geo_list)
-        step = total_warp / total_geo if total_geo > 0 else total_warp
-
-        while w_idx < total_warp or g_idx < total_geo:
-            target_warp = int((g_idx + 1) * step) if g_idx < total_geo else total_warp
-            while w_idx < target_warp and w_idx < total_warp:
-                final_pool.append(warp_list[w_idx])
-                w_idx += 1
-            if g_idx < total_geo:
-                final_pool.append(geo_list[g_idx])
-                g_idx += 1
-
-        return final_pool
     if PROXY_COUNT > 0:
         return _proxies(1, PROXY_COUNT)
     if DEFAULT_PROXY:
@@ -120,13 +163,25 @@ def get_indo_proxies() -> List[str]:
 
 
 def _pick_from(candidates: List[str], exclude: Optional[set[str]] = None,
-               exclude_exit_ips: Optional[set[str]] = None) -> Optional[str]:
+               exclude_exit_ips: Optional[set[str]] = None,
+               avoid_countries: Optional[set[str]] = None) -> Optional[str]:
     """Pick a least-loaded candidate while weighting each public exit IP once."""
     excluded = exclude or set()
     excluded_ips = exclude_exit_ips or set()
     usable = [p for p in candidates if p and p not in excluded and is_proxy_usable(p)]
     if not usable:
         return None
+
+    # Country is a preference, never a filter. Retrying in a country that has
+    # already failed is weak evidence -- 8 of the 17 geo nodes are in Singapore,
+    # so "two distinct exit IPv4s" can easily mean two Singapore exits. But
+    # enforcing it would empty the pool on the countries that hold most of it,
+    # so fall back to the full set when spreading is impossible. Exits with an
+    # unknown country stay eligible: absence of evidence is not a match.
+    if avoid_countries:
+        spread = [p for p in usable if get_proxy_country(p) not in avoid_countries]
+        if spread:
+            usable = spread
 
     loads = get_in_flight_many(usable)
     exit_ips = get_proxy_exit_ips_many(usable)
@@ -158,7 +213,8 @@ def _pick_from(candidates: List[str], exclude: Optional[set[str]] = None,
 
 def get_next_proxy(prefer_geo: bool = False, indo_only: bool = False,
                    warp_only: bool = False, exclude: Optional[set[str]] = None,
-                   exclude_exit_ips: Optional[set[str]] = None) -> Optional[str]:
+                   exclude_exit_ips: Optional[set[str]] = None,
+                   avoid_countries: Optional[set[str]] = None) -> Optional[str]:
     if warp_only:
         # Strict on purpose: the first attempt asks for Cloudflare or nothing, so
         # the caller decides the fallback instead of silently landing on a geo
@@ -166,12 +222,13 @@ def get_next_proxy(prefer_geo: bool = False, indo_only: bool = False,
         return _pick_from(get_warp_proxies(), exclude, exclude_exit_ips)
     if indo_only:
         # Strict like warp_only: callers explicitly decide the fallback lane.
+        # No country preference here -- this lane exists to reach one country.
         return _pick_from(get_indo_proxies(), exclude, exclude_exit_ips)
     if prefer_geo:
-        p = _pick_from(get_geo_proxies(), exclude, exclude_exit_ips)
+        p = _pick_from(get_geo_proxies(), exclude, exclude_exit_ips, avoid_countries)
         if p:
             return p
-    p = _pick_from(get_proxy_pool(), exclude, exclude_exit_ips)
+    p = _pick_from(get_proxy_pool(), exclude, exclude_exit_ips, avoid_countries)
     if p:
         return p
     return DEFAULT_PROXY or None

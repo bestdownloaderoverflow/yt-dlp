@@ -17,7 +17,8 @@ from pydantic import BaseModel
 from config import (
     CACHE_TTL, DEFAULT_IMPERSONATE, DEFAULT_PROXY, HOST, MAX_ATTEMPTS, PORT,
     PROXY_COUNT, TIKTOK_API_KEY, VERBOSE_LOGS, get_geo_proxies,
-    get_indo_proxies, get_next_proxy, get_proxy_pool, get_warp_proxies,
+    get_indo_proxies, get_next_proxy, get_proxy_country, get_proxy_pool,
+    get_warp_proxies,
 )
 from extractor import (
     TikTokAccessRestrictedError,
@@ -138,18 +139,21 @@ def mark_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
         return set()
     exit_ip = get_proxy_exit_ip(proxy)
     blocked = {proxy}
+    # get_proxy_pool() is the complete set; the warp/geo/indo helpers are all
+    # subranges of it, so there is nothing extra to union in here.
+    all_proxies = get_proxy_pool()
     confirmed = False
     if exit_ip:
         strikes = record_exit_block_strike(
-            exit_ip, True, ttl_seconds=REQUEST_BLOCK_STRIKE_TTL)
+            exit_ip, True, ttl_seconds=REQUEST_BLOCK_STRIKE_TTL, source="request")
         confirmed = strikes >= REQUEST_BLOCK_CONFIRMATIONS
     if exit_ip and confirmed:
         blocked.update(
-            candidate for candidate in get_proxy_pool()
+            candidate for candidate in all_proxies
             if get_proxy_exit_ip(candidate) == exit_ip
         )
         record_exit_block_strike(exit_ip, False)
-    reconnectable_proxies = set(get_proxy_pool())
+    reconnectable_proxies = set(all_proxies)
     for candidate in blocked:
         mark_proxy_blocked(candidate)
         if candidate in reconnectable_proxies:
@@ -163,9 +167,10 @@ def clear_proxy_and_shared_exit_blocked(proxy: Optional[str]) -> set[str]:
         return set()
     exit_ip = get_proxy_exit_ip(proxy)
     serving = {proxy}
+    all_proxies = get_proxy_pool()
     if exit_ip:
         serving.update(
-            candidate for candidate in get_proxy_pool()
+            candidate for candidate in all_proxies
             if get_proxy_exit_ip(candidate) == exit_ip
         )
         record_exit_block_strike(exit_ip, False)
@@ -271,6 +276,8 @@ async def proxies_status(
         status = proxy_status(url)
         status["lane"] = "cloudflare" if url in warp else "geo"
         status["indonesia"] = url in indo
+        # "" for WARP anycast, whose egress country is not fixed.
+        status["country"] = get_proxy_country(url)
         entries.append(status)
 
     blocked = [e["proxy"] for e in entries if e["blocked"]]
@@ -288,6 +295,16 @@ async def proxies_status(
         "geo_usable": sum(1 for e in entries if e["lane"] == "geo" and e["usable"]),
         "known_unique_exit_ips": len(known_exit_ips),
         "cloudflare_unique_exit_ips": len(warp_exit_ips),
+        # How concentrated the pool is. Retry evidence is only as good as this:
+        # a pool where one country holds most nodes cannot prove much by trying
+        # "another exit". Empty country means WARP anycast.
+        "usable_by_country": {
+            country: sum(
+                1 for e in entries
+                if e.get("country") == country and e["usable"]
+            )
+            for country in sorted({e.get("country") or "" for e in entries})
+        },
         "proxies": entries,
     }
 
@@ -351,6 +368,7 @@ async def extract_tiktok(
     last_error = None
     tried_proxies: set[str] = set()
     tried_exit_ips: set[str] = set()
+    tried_countries: set[str] = set()
     indo_proxies = set(get_indo_proxies())
 
     if VERBOSE_LOGS:
@@ -387,11 +405,13 @@ async def extract_tiktok(
             if not proxy:
                 proxy = get_next_proxy(
                     prefer_geo=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
+                    avoid_countries=tried_countries,
                 )
                 lane = "geo (no WARP available)"
         else:
             proxy = req_proxy or get_next_proxy(
                 prefer_geo=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
+                avoid_countries=tried_countries,
             )
             lane = "geo"
         proxy = proxy or DEFAULT_PROXY or None
@@ -403,6 +423,8 @@ async def extract_tiktok(
             tried_proxies.add(proxy)
             if proxy_exit_ip := get_proxy_exit_ip(proxy):
                 tried_exit_ips.add(proxy_exit_ip)
+            if proxy_country := get_proxy_country(proxy):
+                tried_countries.add(proxy_country)
         if lane == "indo" and proxy in indo_proxies:
             indonesia_touches += 1
 
@@ -493,8 +515,13 @@ async def extract_tiktok(
                 prefer_indo = True
                 inc_counter("tiktok_proxy_failovers_total", reason="ip_block_to_indonesia")
                 if VERBOSE_LOGS:
+                    # Distinct countries, not just distinct IPv4s: two Singapore
+                    # exits are two addresses but one place, so they are much
+                    # weaker evidence that the post is geo-restricted.
+                    countries = sorted(tried_countries) or ["unknown"]
                     print(f"  🇮🇩 [Attempt {real_attempts}] 10204 confirmed on "
-                          f"{len(failed_ip_block_exit_ips)} distinct IPv4 exits; "
+                          f"{len(failed_ip_block_exit_ips)} distinct IPv4 exits "
+                          f"across {','.join(countries)}; "
                           "switching to Indonesia nodes", flush=True)
             elif lane == "cloudflare":
                 # A refused IP is a routing/infrastructure failure, not a content
@@ -560,16 +587,28 @@ async def extract_tiktok(
     raise HTTPException(status_code=502, detail=f"Extraction failed: {last_error}")
 
 
-async def stream_rendered_slideshow(
+async def render_slideshow(
     photo_urls: list,
     audio_url: Optional[str],
     proxy: Optional[str],
     impersonate: str,
     duration_per_image: int = 3,
     cookies: Optional[str] = None,
-):
+) -> tuple[str, Path]:
+    """Fetch the assets and mux the slideshow; returns (temp_dir, mp4_path).
+
+    Rendering finishes before the response starts. It always did -- the old
+    generator only opened the finished file, so nothing was ever streamed
+    incrementally -- but doing it inside the generator meant a failed ffmpeg run
+    reached the client as a 200 with an empty body, because the headers had
+    already gone out. Raising here surfaces it as a real HTTP error instead.
+
+    The caller owns temp_dir and must remove it once the file is served.
+    """
     # Slideshows pull every photo plus the audio track through the proxy before
-    # ffmpeg runs, so they load a node just like a video download does.
+    # ffmpeg runs, so they load a node just like a video download does. The node
+    # is released as soon as the render is done: serving the local file needs no
+    # proxy traffic.
     if proxy:
         inc_in_flight(proxy)
     temp_dir = tempfile.mkdtemp(prefix="tiktok_slideshow_")
@@ -589,6 +628,12 @@ async def stream_rendered_slideshow(
             for i, img_url in enumerate(photo_urls):
                 img_path = work_dir / f"img_{i}.jpg"
                 res = await session.get(img_url, headers=fetch_headers, timeout=15)
+                # An error page written out as .jpg only fails later, inside
+                # ffmpeg, where the cause is no longer visible.
+                if res.status_code not in (200, 206):
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Slideshow photo {i + 1} unavailable (HTTP {res.status_code})")
                 img_path.write_bytes(res.content)
                 image_paths.append(str(img_path))
 
@@ -596,8 +641,10 @@ async def stream_rendered_slideshow(
             if audio_url:
                 aud_file = work_dir / "audio.mp3"
                 res_aud = await session.get(audio_url, headers=fetch_headers, timeout=15)
-                aud_file.write_bytes(res_aud.content)
-                audio_path = str(aud_file)
+                # Audio is optional: a silent slideshow beats no slideshow.
+                if res_aud.status_code in (200, 206):
+                    aud_file.write_bytes(res_aud.content)
+                    audio_path = str(aud_file)
 
         list_path = work_dir / "images.txt"
         with open(list_path, "w", encoding="utf-8") as f:
@@ -629,16 +676,36 @@ async def stream_rendered_slideshow(
 
         cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-crf", "28", "-pix_fmt", "yuv420p", str(out_mp4)])
 
-        proc = await asyncio.create_subprocess_exec(*cmd)
-        await proc.communicate()
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _stdout, stderr = await proc.communicate()
 
-        if out_mp4.exists():
-            with open(out_mp4, "rb") as vf:
-                while chunk := vf.read(64 * 1024):
-                    yield chunk
+        if proc.returncode != 0 or not out_mp4.exists() or out_mp4.stat().st_size == 0:
+            detail = (stderr or b"").decode("utf-8", "replace").strip()
+            print(f"[Slideshow] ffmpeg exited {proc.returncode} for {len(image_paths)} "
+                  f"image(s): {detail[-500:]}", flush=True)
+            inc_counter("tiktok_slideshow_render_total", result="failed")
+            raise HTTPException(status_code=502, detail="Slideshow render failed")
+
+        inc_counter("tiktok_slideshow_render_total", result="success")
+        return temp_dir, out_mp4
+    except BaseException:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
     finally:
         if proxy:
             dec_in_flight(proxy)
+
+
+async def stream_file_and_cleanup(temp_dir: str, path: Path):
+    try:
+        with open(path, "rb") as vf:
+            while chunk := vf.read(64 * 1024):
+                yield chunk
+    finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
@@ -670,11 +737,16 @@ async def download_tiktok_media(
             raise HTTPException(status_code=400, detail="No photos in slideshow session")
         filename = build_filename(session_data)
         safe_filename = quote(filename)
+        temp_dir, out_mp4 = await render_slideshow(
+            photo_urls, audio_url, proxy, impersonate, cookies=session_cookies)
         return StreamingResponse(
-            stream_rendered_slideshow(photo_urls, audio_url, proxy, impersonate, cookies=session_cookies),
+            stream_file_and_cleanup(temp_dir, out_mp4),
             media_type="video/mp4",
             headers={
                 "Content-Type": "video/mp4",
+                # The file is complete before the response starts, so the length
+                # is known and the client gets a real progress bar.
+                "Content-Length": str(out_mp4.stat().st_size),
                 "Content-Disposition": f"{disposition}; filename=\"{filename}\"; filename*=UTF-8''{safe_filename}",
             },
         )

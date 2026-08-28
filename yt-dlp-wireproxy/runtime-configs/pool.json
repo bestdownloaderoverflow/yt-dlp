@@ -1,0 +1,173 @@
+{
+  "version": 1,
+  "proxies": [
+    {
+      "index": 1,
+      "provider": "surfshark",
+      "country": "ID",
+      "city": "Jakarta",
+      "server": "id-jak.prod.surfshark.com",
+      "endpoint": "id-jak.prod.surfshark.com:51820"
+    },
+    {
+      "index": 2,
+      "provider": "surfshark",
+      "country": "SG",
+      "city": "Singapore",
+      "server": "sg-sng-st008.prod.surfshark.com",
+      "endpoint": "sg-sng-st008.prod.surfshark.com:51820"
+    },
+    {
+      "index": 3,
+      "provider": "surfshark",
+      "country": "MY",
+      "city": "Kuala Lumpur",
+      "server": "my-kul.prod.surfshark.com",
+      "endpoint": "my-kul.prod.surfshark.com:51820"
+    },
+    {
+      "index": 4,
+      "provider": "surfshark",
+      "country": "PH",
+      "city": "Manila",
+      "server": "ph-mnl.prod.surfshark.com",
+      "endpoint": "ph-mnl.prod.surfshark.com:51820"
+    },
+    {
+      "index": 5,
+      "provider": "surfshark",
+      "country": "TH",
+      "city": "Bangkok",
+      "server": "th-bkk.prod.surfshark.com",
+      "endpoint": "th-bkk.prod.surfshark.com:51820"
+    },
+    {
+      "index": 6,
+      "provider": "surfshark",
+      "country": "VN",
+      "city": "Ho Chi Minh City",
+      "server": "vn-hcm.prod.surfshark.com",
+      "endpoint": "vn-hcm.prod.surfshark.com:51820"
+    },
+    {
+      "index": 7,
+      "provider": "surfshark",
+      "country": "SG",
+      "city": "Singapore",
+      "server": "sg-sng-st007.prod.surfshark.com",
+      "endpoint": "sg-sng-st007.prod.surfshark.com:51820"
+    },
+    {
+      "index": 8,
+      "provider": "surfshark",
+      "country": "SG",
+      "city": "Singapore",
+      "server": "sg-sng-st005.prod.surfshark.com",
+      "endpoint": "sg-sng-st005.prod.surfshark.com:51820"
+    },
+    {
+      "index": 9,
+      "provider": "surfshark",
+      "country": "SG",
+      "city": "Singapore",
+      "server": "sg-sng-st010.prod.surfshark.com",
+      "endpoint": "sg-sng-st010.prod.surfshark.com:51820"
+    },
+    {
+      "index": 10,
+      "provider": "surfshark",
+      "country": "SG",
+      "city": "Singapore",
+      "server": "sg-sng.prod.surfshark.com",
+      "endpoint": "sg-sng.prod.surfshark.com:51820"
+    },
+    {
+      "index": 11,
+      "provider": "surfshark",
+      "country": "SG",
+      "city": "Singapore",
+      "server": "sg-sng-st006.prod.surfshark.com",
+      "endpoint": "sg-sng-st006.prod.surfshark.com:51820"
+    },
+    {
+      "index": 12,
+      "provider": "surfshark",
+      "country": "SG",
+      "city": "Singapore",
+      "server": "sg-sng-st009.prod.surfshark.com",
+      "endpoint": "sg-sng-st009.prod.surfshark.com:51820"
+    },
+    {
+      "index": 13,
+      "provider": "mullvad",
+      "country": "ID",
+      "city": "Jakarta",
+      "server": "id-jpu-wg-001",
+      "endpoint": "129.227.46.130:51820"
+    },
+    {
+      "index": 14,
+      "provider": "mullvad",
+      "country": "ID",
+      "city": "Jakarta",
+      "server": "id-jpu-wg-002",
+      "endpoint": "129.227.46.162:51820"
+    },
+    {
+      "index": 15,
+      "provider": "mullvad",
+      "country": "SG",
+      "city": "Singapore",
+      "server": "sg-sin-wg-003",
+      "endpoint": "138.199.60.28:51820"
+    },
+    {
+      "index": 16,
+      "provider": "mullvad",
+      "country": "MY",
+      "city": "Kuala Lumpur",
+      "server": "my-kul-wg-001",
+      "endpoint": "98.98.47.130:51820"
+    },
+    {
+      "index": 17,
+      "provider": "mullvad",
+      "country": "PH",
+      "city": "Manila",
+      "server": "ph-mnl-wg-002",
+      "endpoint": "156.59.127.194:51820"
+    },
+    {
+      "index": 18,
+      "provider": "cloudflare",
+      "country": null,
+      "city": null,
+      "server": "warp anycast",
+      "endpoint": "engage.cloudflareclient.com:2408"
+    },
+    {
+      "index": 19,
+      "provider": "cloudflare",
+      "country": null,
+      "city": null,
+      "server": "warp anycast",
+      "endpoint": "engage.cloudflareclient.com:2408"
+    },
+    {
+      "index": 20,
+      "provider": "cloudflare",
+      "country": null,
+      "city": null,
+      "server": "warp anycast",
+      "endpoint": "engage.cloudflareclient.com:2408"
+    },
+    {
+      "index": 21,
+      "provider": "cloudflare",
+      "country": null,
+      "city": null,
+      "server": "warp anycast",
+      "endpoint": "engage.cloudflareclient.com:2408"
+    }
+  ]
+}

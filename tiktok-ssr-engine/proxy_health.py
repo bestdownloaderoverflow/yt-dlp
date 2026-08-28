@@ -19,7 +19,7 @@ import os
 import time
 from typing import Optional
 
-from config import get_geo_proxies, get_indo_proxies, get_proxy_pool, get_warp_proxies
+from config import get_proxy_pool
 from proxy_state import (
     clear_proxy_blocked,
     get_proxy_exit_ip,
@@ -76,10 +76,20 @@ _reconnect_task = None
 _block_state = {}
 
 
+def _block_cycle_metric(result: str):
+    """One counter per block-probe cycle, so a silently idle prober is visible."""
+    try:
+        from service_metrics import inc_counter
+        inc_counter("tiktok_block_probe_cycles_total", result=result)
+    except Exception:
+        pass
+
+
 def _all_proxy_urls():
+    """Every proxy to probe and schedule. Deduped: PROXY_LIST may repeat entries."""
     urls = []
     seen = set()
-    for u in get_proxy_pool() + get_geo_proxies() + get_indo_proxies():
+    for u in get_proxy_pool():
         if u and u not in seen:
             seen.add(u)
             urls.append(u)
@@ -259,7 +269,7 @@ def apply_block_verdicts(verdicts: dict) -> bool:
                       f"for IPv4 {exit_ip}; awaiting confirmation", flush=True)
                 continue
             record_exit_block_strike(exit_ip, False)
-            reconnectable_proxies = set(get_proxy_pool())
+            reconnectable_proxies = set(all_urls)
             for url in members:
                 set_proxy_control_verdict(url, True)
                 mark_proxy_blocked(url)
@@ -345,12 +355,25 @@ async def _block_prober_loop():
                         for url, res in zip(urls, results)
                         if isinstance(res, bool)
                     }
-                    if apply_block_verdicts(verdicts):
+                    if not verdicts:
+                        # Every exit came back inconclusive. That is what a stale
+                        # BLOCK_PROBE_URL looks like: the loop keeps running and
+                        # commits nothing, forever, without saying so.
+                        print(f"[BlockProbe] no usable verdict from {len(urls)} exits; "
+                              f"probe target {BLOCK_PROBE_URL} may be stale", flush=True)
+                        _block_cycle_metric("no_verdict")
+                    elif apply_block_verdicts(verdicts):
                         hard_signals = sum(1 for v in verdicts.values() if v)
                         print(f"[BlockProbe] cycle done: {hard_signals}/{len(verdicts)} hard-block signals "
                               f"({len(urls) - len(verdicts)} inconclusive)", flush=True)
+                        _block_cycle_metric("applied")
+                    else:
+                        print(f"[BlockProbe] cycle discarded: {len(verdicts)} verdict(s) "
+                              "committed nothing (unknown exit IPs or sanity ratio)", flush=True)
+                        _block_cycle_metric("discarded")
         except Exception as e:
             print(f"[BlockProbe] cycle failed: {e}", flush=True)
+            _block_cycle_metric("error")
         await asyncio.sleep(BLOCK_PROBE_INTERVAL_SECONDS)
 
 
@@ -378,7 +401,10 @@ async def _reconnect_scheduler_loop():
     while True:
         try:
             if _acquire_reconnect_lease(max(1, int(interval))):
-                for proxy_url in get_proxy_pool():
+                # Same list the health loops walk. Reconnects are requested for
+                # any pool member, so scheduling them from a narrower list would
+                # strand pending state on whatever it left out.
+                for proxy_url in _all_proxy_urls():
                     process_proxy_reconnect(proxy_url)
         except Exception as exc:
             print(f"[ReconnectScheduler] cycle failed: {exc}", flush=True)

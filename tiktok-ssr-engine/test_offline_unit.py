@@ -7,6 +7,7 @@ import asyncio
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import tempfile
 import time
 import unittest
@@ -14,7 +15,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
-from config import get_indo_proxies, get_next_proxy, get_proxy_pool, get_warp_proxies
+from config import (
+    get_geo_proxies, get_indo_proxies, get_next_proxy, get_proxy_pool, get_warp_proxies,
+)
 from extractor import (
     TikTokAccessRestrictedError,
     TikTokExtractError,
@@ -39,13 +42,16 @@ from main import (
     extraction_cache_key,
     extract_tiktok,
     mark_proxy_and_shared_exit_blocked,
+    render_slideshow,
     should_cooldown_download_failure,
+    stream_file_and_cleanup,
     should_retry_ip_block_via_indonesia,
     should_retry_via_indonesia,
     validate_tiktok_post_url,
     verify_ambiguous_ip_block,
 )
 from proxy_state import (
+    clear_exit_block_strikes,
     clear_proxy_blocked,
     clear_proxy_exit_ip,
     clear_proxy_reconnect_state,
@@ -225,17 +231,70 @@ class TestTikTokSSROffline(unittest.TestCase):
         session = get_session(ss_key)
         self.assertEqual(session["type"], "slideshow")
 
-    def test_proxy_pool_zigzag_distribution(self):
+    def test_country_preference_spreads_retries_out_of_a_failed_country(self):
+        import config
+
+        sg_a, sg_b = "socks5h://wireproxy-02:1080", "socks5h://wireproxy-07:1080"
+        my = "socks5h://wireproxy-03:1080"
+        with patch("config.PROXY_COUNTRIES", {sg_a: "SG", sg_b: "SG", my: "MY"}), \
+                patch("proxy_state._redis_client", None):
+            # Two of three candidates are Singapore, so picking by load alone
+            # would usually stay there. Retrying inside a country that already
+            # failed is what made "two distinct exits" weak evidence.
+            for _ in range(10):
+                self.assertEqual(
+                    config._pick_from([sg_a, sg_b, my], avoid_countries={"SG"}), my)
+
+    def test_country_preference_never_empties_the_pool(self):
+        import config
+
+        sg_a, sg_b = "socks5h://wireproxy-02:1080", "socks5h://wireproxy-07:1080"
+        with patch("config.PROXY_COUNTRIES", {sg_a: "SG", sg_b: "SG"}), \
+                patch("proxy_state._redis_client", None):
+            # Preference, not filter: 8 of 17 geo nodes are Singapore, so a hard
+            # country filter would strand requests that could still be served.
+            self.assertIn(
+                config._pick_from([sg_a, sg_b], avoid_countries={"SG"}), (sg_a, sg_b))
+
+    def test_unknown_country_exits_stay_eligible(self):
+        import config
+
+        warp, sg = "socks5h://wireproxy-18:1080", "socks5h://wireproxy-02:1080"
+        with patch("config.PROXY_COUNTRIES", {sg: "SG"}), \
+                patch("proxy_state._redis_client", None):
+            # WARP is anycast and has no fixed country. Absence of evidence must
+            # not be read as a match against the avoided set.
+            for _ in range(10):
+                self.assertEqual(
+                    config._pick_from([sg, warp], avoid_countries={"SG"}), warp)
+
+    def test_indonesia_indexes_are_derived_from_the_pool_manifest(self):
+        from config import derive_indonesia_indexes
+
+        manifest = {
+            1: {"index": 1, "country": "ID"},
+            2: {"index": 2, "country": "SG"},
+            13: {"index": 13, "country": "id"},
+            18: {"index": 18, "country": None},
+        }
+        self.assertEqual(derive_indonesia_indexes(manifest), [1, 13])
+        # An explicit setting still wins over the manifest.
+        self.assertEqual(derive_indonesia_indexes(manifest, "4,5"), [4, 5])
+        # No manifest and no override disables the lane rather than guessing.
+        self.assertEqual(derive_indonesia_indexes({}), [])
+
+    def test_proxy_pool_covers_every_subset(self):
+        # The pool is the complete set: main.py and proxy_health.py rely on it
+        # to fan block/reconnect state out to every node, so any proxy a subset
+        # helper can hand out must appear in it.
         with patch("config.PROXY_COUNT", 50):
             pool = get_proxy_pool()
             self.assertEqual(len(pool), 50)
-            
-            geo_indices = []
-            for i, p in enumerate(pool):
-                num = int(p.split("-")[1].split(":")[0])
-                if 1 <= num <= 17:
-                    geo_indices.append(i)
-            
+            self.assertEqual(len(set(pool)), 50)
+            for subset in (get_warp_proxies(), get_geo_proxies(), get_indo_proxies()):
+                self.assertTrue(subset)
+                self.assertTrue(set(subset).issubset(set(pool)))
+
     def test_codec_prioritization_h264(self):
         extractor = TikTokSSRExtractor()
         dummy_item = {
@@ -359,6 +418,39 @@ class TestTikTokSSROffline(unittest.TestCase):
             self.assertFalse(is_proxy_usable(p))
         finally:
             clear_proxy_blocked(p)
+
+    def test_request_and_probe_block_strikes_do_not_add_up(self):
+        # The two observers confirm blocks with their own thresholds. Sharing one
+        # counter let one strike from each reach a confirmation neither asked for.
+        exit_ip = "203.0.113.77"
+        with patch("proxy_state._redis_client", None):
+            try:
+                self.assertEqual(
+                    record_exit_block_strike(exit_ip, True, source="request"), 1)
+                self.assertEqual(
+                    record_exit_block_strike(exit_ip, True, source="probe"), 1)
+                self.assertEqual(
+                    record_exit_block_strike(exit_ip, True, source="request"), 2)
+                self.assertEqual(
+                    record_exit_block_strike(exit_ip, True, source="probe"), 2)
+            finally:
+                record_exit_block_strike(exit_ip, False)
+
+    def test_serving_result_clears_every_observers_strikes(self):
+        # Proof that TikTok serves an exit voids all suspicion of it, not just
+        # the suspicion held by whoever observed the success.
+        exit_ip = "203.0.113.78"
+        with patch("proxy_state._redis_client", None):
+            try:
+                record_exit_block_strike(exit_ip, True, source="request")
+                record_exit_block_strike(exit_ip, True, source="probe")
+                self.assertEqual(clear_exit_block_strikes(exit_ip), 2)
+                self.assertEqual(
+                    record_exit_block_strike(exit_ip, True, source="request"), 1)
+                self.assertEqual(
+                    record_exit_block_strike(exit_ip, True, source="probe"), 1)
+            finally:
+                record_exit_block_strike(exit_ip, False)
 
     def test_official_tiktok_success_clears_old_exit_block_strike(self):
         p = "socks5h://wireproxy-18:1080"
@@ -578,6 +670,48 @@ class TestTikTokSSROffline(unittest.TestCase):
                 clear_proxy_blocked(proxy)
                 clear_proxy_exit_ip(proxy)
 
+    def test_same_exit_ip_reconnect_is_not_counted_as_a_failure(self):
+        import proxy_state
+
+        proxy = "socks5h://wireproxy-93:1080"
+        with tempfile.TemporaryDirectory() as signal_dir, \
+                patch("proxy_state.RECONNECT_SIGNAL_DIR", signal_dir), \
+                patch("proxy_state._redis_client", None), \
+                patch("proxy_state.RECONNECT_BUDGET_LIMIT", 2), \
+                patch("proxy_state.RECONNECT_BACKOFF_JITTER_SECONDS", 0):
+            try:
+                set_proxy_exit_ip(proxy, "192.0.2.10")
+                # TikTok's block outlives the verify window, which is exactly what
+                # makes a same-IP reconnect impossible to verify from inside it.
+                mark_proxy_blocked(proxy, 600)
+                self.assertTrue(request_proxy_reconnect(proxy))
+                self.assertEqual(process_proxy_reconnect(proxy), "signaled")
+                # The tunnel comes back, but on the very same public IPv4: most
+                # exits cannot reroll at all, so this is the common outcome.
+                record_probe_success(proxy, "192.0.2.10")
+                self.assertEqual(process_proxy_reconnect(proxy), "verifying")
+                proxy_state._clear("reconnecting", proxy)
+                self.assertEqual(process_proxy_reconnect(proxy), "unchanged")
+
+                state = proxy_state.reconnect_state(proxy)
+                self.assertFalse(state["quarantined"])
+                self.assertFalse(state["restart_scheduled"])
+                self.assertEqual(state["restart_backoff_for_seconds"], 0)
+
+                # Repeating it must never exhaust the budget: an exit that cannot
+                # reroll would otherwise be quarantined for having working tunnels.
+                for _ in range(3):
+                    self.assertTrue(request_proxy_reconnect(proxy))
+                    self.assertEqual(process_proxy_reconnect(proxy), "signaled")
+                    record_probe_success(proxy, "192.0.2.10")
+                    proxy_state._clear("reconnecting", proxy)
+                    self.assertEqual(process_proxy_reconnect(proxy), "unchanged")
+                self.assertFalse(proxy_state.reconnect_state(proxy)["quarantined"])
+            finally:
+                clear_proxy_reconnect_state(proxy)
+                clear_proxy_blocked(proxy)
+                clear_proxy_exit_ip(proxy)
+
     def test_failed_reconnects_backoff_then_quarantine(self):
         import proxy_state
 
@@ -751,6 +885,84 @@ class TestTikTokSSROffline(unittest.TestCase):
             self.assertFalse(get_geo_hint(key))
             set_geo_hint(key, ttl=60)
             self.assertTrue(get_geo_hint(key))
+
+    def _slideshow_session(self, status_code=200, body=b"\xff\xd8jpeg"):
+        class FakeResponse:
+            def __init__(self):
+                self.status_code = status_code
+                self.content = body
+
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return False
+
+            async def get(self, *_args, **_kwargs):
+                return FakeResponse()
+
+        return FakeSession()
+
+    def test_failed_slideshow_render_raises_instead_of_empty_body(self):
+        # ffmpeg failing used to reach the client as a 200 with a 0-byte mp4,
+        # because the render ran inside the streaming generator after the
+        # headers had already been sent.
+        proc = MagicMock()
+        proc.returncode = 1
+        proc.communicate = AsyncMock(return_value=(b"", b"Invalid data found"))
+
+        with patch("main.AsyncSession", return_value=self._slideshow_session()), \
+                patch("main.asyncio.create_subprocess_exec",
+                      AsyncMock(return_value=proc)):
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(render_slideshow(
+                    ["https://cdn.example/1.jpg"], None, None, "chrome120"))
+        self.assertEqual(caught.exception.status_code, 502)
+        self.assertIn("render failed", caught.exception.detail.lower())
+
+    def test_unreachable_slideshow_photo_is_attributed(self):
+        with patch("main.AsyncSession",
+                   return_value=self._slideshow_session(status_code=403)):
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(render_slideshow(
+                    ["https://cdn.example/1.jpg"], None, None, "chrome120"))
+        self.assertEqual(caught.exception.status_code, 502)
+        self.assertIn("photo 1", caught.exception.detail.lower())
+
+    def test_successful_slideshow_render_hands_over_a_real_file(self):
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+
+        async def fake_exec(*cmd, **_kwargs):
+            # ffmpeg's last argument is the output path; make it non-empty so the
+            # size check passes the way a real render would.
+            Path(cmd[-1]).write_bytes(b"\x00" * 32)
+            return proc
+
+        temp_dir = None
+        try:
+            with patch("main.AsyncSession", return_value=self._slideshow_session()), \
+                    patch("main.asyncio.create_subprocess_exec", fake_exec):
+                temp_dir, out_mp4 = asyncio.run(render_slideshow(
+                    ["https://cdn.example/1.jpg"], None, None, "chrome120"))
+            self.assertTrue(out_mp4.exists())
+            self.assertEqual(out_mp4.stat().st_size, 32)
+
+            chunks = []
+
+            async def drain():
+                async for chunk in stream_file_and_cleanup(temp_dir, out_mp4):
+                    chunks.append(chunk)
+
+            asyncio.run(drain())
+            self.assertEqual(b"".join(chunks), b"\x00" * 32)
+            # The generator owns cleanup, so the temp dir is gone once served.
+            self.assertFalse(Path(temp_dir).exists())
+        finally:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
     def test_control_verdict_cache_avoids_request_probe(self):
         with patch("main.get_proxy_control_verdict", return_value=False), \

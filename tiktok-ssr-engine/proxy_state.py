@@ -228,7 +228,12 @@ def mark_proxy_request_success(proxy_url: str, *, tiktok_served: bool):
     if tiktok_served:
         clear_proxy_blocked(proxy_url)
         if exit_ip := get_proxy_exit_ip(proxy_url):
-            record_exit_block_strike(exit_ip, False)
+            # Correct -- TikTok just served this exit, so no observer's suspicion
+            # of it still stands -- but it means a busy exit rarely accumulates
+            # the strikes a confirmation needs. Say so instead of resetting mute.
+            if discarded := clear_exit_block_strikes(exit_ip):
+                print(f"[ProxyState] {proxy_url} served by TikTok; discarded "
+                      f"{discarded} block strike(s) for IPv4 {exit_ip}", flush=True)
 
 
 def set_proxy_exit_ip(proxy_url: str, exit_ip: str):
@@ -315,16 +320,55 @@ def get_proxy_exit_ips_many(proxy_urls) -> Dict[str, str]:
     return {u: get_proxy_exit_ip(u) for u in urls}
 
 
-def record_exit_block_strike(exit_ip: str, blocked: bool, ttl_seconds: int = 900) -> int:
-    """Persist hard-block confirmation count per public exit IPv4."""
+# Two observers confirm hard blocks independently and with different thresholds:
+# the background prober (BLOCK_CONFIRMATIONS) and the request path
+# (REQUEST_BLOCK_CONFIRMATIONS). They must not share a counter.
+BLOCK_STRIKE_SOURCES = ("probe", "request")
+
+
+def _block_strike_key(exit_ip: str, source: str) -> str:
+    return _key(f"exit:{exit_ip}", f"blockstrike:{source}")
+
+
+def clear_exit_block_strikes(exit_ip: str) -> int:
+    """Drop every observer's suspicion of one exit IPv4; returns strikes discarded."""
     if not exit_ip:
         return 0
-    name = _key(f"exit:{exit_ip}", "blockstrike")
+    discarded = 0
+    for source in BLOCK_STRIKE_SOURCES:
+        name = _block_strike_key(exit_ip, source)
+        if _redis_client is not None:
+            try:
+                raw = _redis_client.get(name)
+                discarded += int(raw or 0)
+                _redis_client.delete(name)
+                continue
+            except Exception:
+                pass
+        with _lock:
+            discarded += _in_memory_counters.pop(name, 0)
+    return discarded
+
+
+def record_exit_block_strike(exit_ip: str, blocked: bool, ttl_seconds: int = 900,
+                             *, source: str = "probe") -> int:
+    """Count hard-block confirmations for one public exit IPv4, per observer.
+
+    Counting both observers into one key meant a single 10204 on the request
+    path plus a single probe verdict added up to a "confirmed" block that
+    neither threshold asked for. Each observer now counts in its own namespace.
+
+    A proven-serving result (blocked=False) clears every observer, not just the
+    caller's: evidence that TikTok serves the exit voids all suspicion of it.
+    """
+    if not exit_ip:
+        return 0
+    if not blocked:
+        clear_exit_block_strikes(exit_ip)
+        return 0
+    name = _block_strike_key(exit_ip, source)
     if _redis_client is not None:
         try:
-            if not blocked:
-                _redis_client.delete(name)
-                return 0
             pipe = _redis_client.pipeline()
             pipe.incr(name)
             pipe.expire(name, max(1, ttl_seconds))
@@ -333,9 +377,6 @@ def record_exit_block_strike(exit_ip: str, blocked: bool, ttl_seconds: int = 900
         except Exception:
             pass
     with _lock:
-        if not blocked:
-            _in_memory_counters.pop(name, None)
-            return 0
         value = _in_memory_counters.get(name, 0) + 1
         _in_memory_counters[name] = value
         return value
@@ -543,6 +584,31 @@ def _record_reconnect_failure(proxy_url: str) -> tuple[int, int, bool]:
     return failures, delay, False
 
 
+def _reconnect_observation(proxy_url: str, now: float) -> tuple[bool, bool]:
+    """Post-signal evidence for one reconnect: (tunnel_back, exit_ip_changed).
+
+    tunnel_back means a liveness probe ran after the signal was written and
+    found a working tunnel, so the WireProxy process did come back.
+    exit_ip_changed additionally means the restart won a different public IPv4.
+    """
+    old_ip = _get_string("reconnect_old_ip", proxy_url)
+    current_ip = get_proxy_exit_ip(proxy_url)
+    try:
+        signaled_at = float(_get_string("reconnect_signaled", proxy_url) or 0)
+        exit_seen_at = float(_get_string("exitip_seen_at", proxy_url) or 0)
+    except ValueError:
+        signaled_at = exit_seen_at = 0
+    probed_after_signal = exit_seen_at >= signaled_at > 0
+    exit_ip_changed = probed_after_signal and bool(
+        current_ip and old_ip and current_ip != old_ip)
+    tunnel_back = (
+        probed_after_signal
+        and bool(current_ip)
+        and _get_until("dead", proxy_url) < now
+    )
+    return tunnel_back, exit_ip_changed
+
+
 def process_proxy_reconnect(proxy_url: str) -> str:
     """Advance one persisted reconnect state; returns a metrics-friendly outcome."""
     now = time.time()
@@ -554,22 +620,9 @@ def process_proxy_reconnect(proxy_url: str) -> str:
 
     reconnecting_until = _get_until("reconnecting", proxy_url)
     if reconnecting_until >= now:
-        old_ip = _get_string("reconnect_old_ip", proxy_url)
-        current_ip = get_proxy_exit_ip(proxy_url)
-        try:
-            signaled_at = float(_get_string("reconnect_signaled", proxy_url) or 0)
-            exit_seen_at = float(_get_string("exitip_seen_at", proxy_url) or 0)
-        except ValueError:
-            signaled_at = exit_seen_at = 0
-        probed_after_signal = exit_seen_at >= signaled_at > 0
-        recovered = probed_after_signal and bool(
-            current_ip and old_ip and current_ip != old_ip)
-        recovered = recovered or (
-            probed_after_signal
-            and bool(current_ip)
-            and not is_proxy_blocked(proxy_url)
-            and _get_until("dead", proxy_url) < now
-        )
+        tunnel_back, exit_ip_changed = _reconnect_observation(proxy_url, now)
+        recovered = exit_ip_changed or (
+            tunnel_back and not is_proxy_blocked(proxy_url))
         if recovered:
             recovered_at_raw = _get_string("reconnect_recovered_at", proxy_url)
             recovered_at = float(recovered_at_raw or 0)
@@ -594,6 +647,25 @@ def process_proxy_reconnect(proxy_url: str) -> str:
 
     # A reconnect was signaled but never verified before the deadline.
     if _get_string("reconnect_signaled", proxy_url):
+        tunnel_back, exit_ip_changed = _reconnect_observation(proxy_url, now)
+        if tunnel_back or exit_ip_changed:
+            # The tunnel did come back; it just kept the same public IPv4 while
+            # TikTok's block on that IP was still live, so the verify window
+            # could never observe a recovery. Only a handful of exits can reroll
+            # at all -- Surfshark endpoints are cluster hostnames that re-resolve
+            # on restart, Mullvad endpoints are pinned relay IPs -- so a failed
+            # reroll is an expected outcome, not a broken reconnect. Counting it
+            # as a failure walks every unrerollable node into quarantine.
+            for kind in ("reconnect_pending", "reconnecting", "drain_deadline",
+                         "reconnect_backoff"):
+                _clear(kind, proxy_url)
+            for kind in ("reconnect_old_ip", "reconnect_signaled",
+                         "reconnect_reason", "reconnect_recovered_at"):
+                _clear_string(kind, proxy_url)
+            print(f"[ProxyState] {proxy_url} reconnected but kept its exit IPv4; "
+                  "no reroll available, not counted as a failure", flush=True)
+            _reconnect_metric("unchanged", reason)
+            return "unchanged"
         _clear_string("reconnect_signaled", proxy_url)
         failures, delay, quarantined = _record_reconnect_failure(proxy_url)
         if quarantined:

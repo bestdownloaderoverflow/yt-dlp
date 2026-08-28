@@ -45,6 +45,7 @@ SURFSHARK_DIR = ROOT_DIR / "surfshark-pay"
 MULLVAD_DIR = ROOT_DIR / "mullvad-new"
 WARP_DIR = ROOT_DIR / "cloudflare-warp"
 DEST_DIR = PROJECT_DIR / "runtime-configs"
+POOL_MANIFEST = DEST_DIR / "pool.json"
 CACHE_DIR = PROJECT_DIR / "scripts" / ".server-cache"
 
 MULLVAD_API = "https://api.mullvad.net/www/relays/wireguard/"
@@ -203,6 +204,24 @@ def assign_servers(accounts: list[dict], servers: list[Server], indonesia_needed
     return list(zip(accounts, chosen))
 
 
+def write_pool_manifest(entries: list[dict]) -> None:
+    """Publish the pool layout for tiktok-ssr-engine to read.
+
+    The .conf files carry the country only in a comment, so the engine had no
+    way to know where a node exits. That left it inferring geo-restriction from
+    "two distinct exit IPv4s failed" -- which proves nothing when most of the
+    pool sits in one country. This manifest is the single source of truth for
+    that, and it also lets INDONESIA_PROXIES be derived instead of hand-copied.
+    """
+    POOL_MANIFEST.write_text(json.dumps({
+        "version": 1,
+        "proxies": entries,
+    }, indent=2) + "\n")
+    # World-readable on purpose: unlike the .conf files this holds no key
+    # material, and the engine container mounts it as an unprivileged reader.
+    POOL_MANIFEST.chmod(0o644)
+
+
 def render(account: dict, server: Server) -> str:
     lines = ["[Interface]", f"PrivateKey = {account['private_key']}", f"Address = {account['address']}"]
     if account["dns"]:
@@ -275,6 +294,7 @@ def main() -> int:
 
     print("\n=== Generated configs ===")
     indonesia_indexes = []
+    pool_entries = []
     idx = 0
 
     for account, server in pairs:
@@ -284,6 +304,14 @@ def main() -> int:
         dest.chmod(0o600)
         if server.country == "ID":
             indonesia_indexes.append(idx)
+        pool_entries.append({
+            "index": idx,
+            "provider": server.provider,
+            "country": server.country,
+            "city": server.city,
+            "server": server.name,
+            "endpoint": server.endpoint,
+        })
         print(f"  wireproxy-{idx:02d}  {server.provider:<9} {server.name:<38} "
               f"[{server.country}/{server.city}]  key={account['source'].name}")
 
@@ -295,13 +323,34 @@ def main() -> int:
             text = text.rstrip("\n") + "\n" + SOCKS_SECTION
         dest.write_text(text)
         dest.chmod(0o600)
+        pool_entries.append({
+            "index": idx,
+            "provider": "cloudflare",
+            # WARP is anycast: the egress country depends on which colo answers
+            # and can change between handshakes, so there is no country to pin.
+            # null means unknown, which the engine treats as "cannot be used as
+            # country evidence" rather than as a country of its own.
+            "country": None,
+            "city": None,
+            "server": "warp anycast",
+            "endpoint": "engage.cloudflareclient.com:2408",
+        })
         print(f"  wireproxy-{idx:02d}  cloudflare {'warp anycast':<38} [--/--]  key={profile.name}")
+
+    write_pool_manifest(pool_entries)
 
     unique = len({(s.provider, s.name) for _, s in pairs})
     print(f"\nDone. {idx} configs written to {DEST_DIR}")
     print(f"Distinct geo servers: {unique} across {len(pairs)} geo nodes")
+    print(f"Wrote {POOL_MANIFEST.name}: the engine reads country per node from it, "
+          "so INDONESIA_PROXIES no longer has to be copied by hand.")
     print(f"Indonesia nodes: {','.join(str(i) for i in indonesia_indexes)}  "
-          f"(set INDONESIA_PROXIES to this)")
+          "(derived automatically; set INDONESIA_PROXIES only to override)")
+    by_country = defaultdict(int)
+    for entry in pool_entries:
+        by_country[entry["country"] or "??"] += 1
+    print("Country spread: " + ", ".join(
+        f"{cc}={n}" for cc, n in sorted(by_country.items(), key=lambda kv: (-kv[1], kv[0]))))
     print("Run: docker compose -f docker-compose.wireproxy.yml restart")
     return 0
 

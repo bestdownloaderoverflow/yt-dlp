@@ -10,7 +10,8 @@ Reads from a per-cycle temp directory:
   lat-XX        - "<http_code> <time_total>" captured from SOCKS5 probe
   restart-XX    - latest restart_log:pN Redis entry
 
-Renders a colored ASCII table grouped by country, sorted by index, to stdout.
+Renders a colored ASCII table grouped by real exit country (from the engine, which
+reads runtime-configs/pool.json), sorted by index, to stdout.
 Auto-strips ANSI when stdout is not a TTY (so piping to a file/log still works).
 """
 
@@ -60,13 +61,36 @@ UNIT_FACTOR = {
     "tib": 1024 ** 4, "tb": 1000 ** 4,
 }
 
-COUNTRY_ORDER = {
-    "Cloudflare WARP": 0,
-    "Mullvad VPN": 1,
-    "Surfshark VPN": 2,
-    "Indonesia": 3,
-    "Singapore": 4,
+COUNTRY_NAMES = {
+    "ID": "Indonesia", "SG": "Singapore", "MY": "Malaysia",
+    "TH": "Thailand", "VN": "Vietnam", "PH": "Philippines", "HK": "Hong Kong",
 }
+
+# Indonesia first: it is the recovery lane for geo-restricted posts, so its
+# count is the one worth seeing without scrolling. Anycast exits sort last
+# because they have no country to group under.
+ANYCAST_GROUP = "WARP anycast"
+
+
+def country_sort_key(code: str) -> tuple:
+    if code == ANYCAST_GROUP:
+        return (2, code)
+    return (0 if code == "ID" else 1, code)
+
+
+def provider_for(index: int) -> str:
+    """Provider stays positional -- that half really is a slot contract.
+
+    Only the country moved to the manifest, because that is the half the
+    generator rerolls.
+    """
+    if index >= 18:
+        return "Cloudflare"
+    if 13 <= index <= 17:
+        return "Mullvad"
+    if 1 <= index <= 12:
+        return "Surfshark"
+    return "Wireproxy"
 
 
 # --- Parsers -----------------------------------------------------------------
@@ -417,15 +441,13 @@ def main() -> int:
             exit_ipv4 = probe_ipv4 if ":" not in probe_ipv4 else ""
         exit_ipv6 = safe_read(os.path.join(cycle_dir, f"ipv6-{idx}")).strip()
 
-        # Determine provider & country
-        if 18 <= i:
-            country = "Cloudflare WARP"
-        elif 13 <= i <= 17:
-            country = "Mullvad VPN"
-        elif 1 <= i <= 12:
-            country = "Surfshark VPN"
-        else:
-            country = "Wireproxy"
+        # Country comes from the engine, which reads runtime-configs/pool.json.
+        # Guessing it from index ranges kept a third copy of the pool layout in
+        # sync by hand; move a provider's slots and the monitor mislabels every
+        # node without erroring. Empty means WARP anycast, which has no fixed
+        # country, or an engine too old to report one.
+        country = str(ph.get("country") or "").upper()
+        provider = provider_for(i)
 
         is_probe_ok = (http_code == 200 and bool(probe_ipv4) and ":" not in probe_ipv4)
         has_state = bool(ph)
@@ -447,6 +469,7 @@ def main() -> int:
             "container": cid,
             "proxy_id": f"p{i}",
             "country": country,
+            "provider": provider,
             # Engine liveness is authoritative and already requires repeated,
             # multi-target failures. This one-shot monitor probe is diagnostic.
             "tunnel_healthy": has_state and not dead,
@@ -513,10 +536,17 @@ def render(health: dict, rows: list, proxy_count: int = 18,
     sep = "  ".join(c(_DIM, "─" * w) for _, w in COLS)
     print("  " + sep)
 
-    # Group by country
+    # Group by country, but only when the engine actually reports one. An older
+    # engine, or an unreachable /proxies, would otherwise sweep every node into
+    # the anycast group and quietly claim the pool has no geography at all.
+    geo_known = any(r["country"] for r in rows)
     by_country: dict[str, list] = {}
     for r in rows:
-        by_country.setdefault(r["country"], []).append(r)
+        if geo_known:
+            key = r["country"] or ANYCAST_GROUP
+        else:
+            key = r["provider"]
+        by_country.setdefault(key, []).append(r)
 
     tunnel_healthy_count = 0
     usable_count = 0
@@ -525,15 +555,18 @@ def render(health: dict, rows: list, proxy_count: int = 18,
     no_ip_count = 0
     slow_count = 0
 
-    country_order = sorted(
-        by_country.keys(),
-        key=lambda k: (COUNTRY_ORDER.get(k, 99), k),
-    )
+    country_order = sorted(by_country.keys(), key=country_sort_key)
 
     for country in country_order:
         crows = sorted(by_country[country], key=lambda r: r["index"])
         print()
-        print("  " + c(_BOLD + _MAG, f"[{country}]"))
+        # The node count is the point of grouping by country: retry evidence is
+        # only as good as the spread, and one country holding most of the pool
+        # is what makes "another exit failed too" weak.
+        label = COUNTRY_NAMES.get(country, country)
+        usable_here = sum(1 for r in crows if r["usable"] and r["tunnel_healthy"])
+        print("  " + c(_BOLD + _MAG, f"[{label}]")
+              + c(_DIM, f"  {usable_here}/{len(crows)} usable"))
         for r in crows:
             if r["tunnel_healthy"]:
                 tunnel_healthy_count += 1
@@ -592,7 +625,7 @@ def render(health: dict, rows: list, proxy_count: int = 18,
 
             cells = [
                 str(r["index"]).ljust(COLS[0][1]),
-                r["country"][: COLS[1][1]].ljust(COLS[1][1]),
+                r["provider"][: COLS[1][1]].ljust(COLS[1][1]),
                 status_cell,
                 pad(ipv4_cell, COLS[3][1]),
                 pad(ipv6_cell, COLS[4][1]),
@@ -638,6 +671,19 @@ def render(health: dict, rows: list, proxy_count: int = 18,
     if slow_count:
         parts.append(c(_YEL, f"{slow_count} slow (>3s)"))
     print("  " + c(_BOLD, "SUMMARY: ") + "  ".join(parts))
+
+    # Retry selection prefers a country that has not failed yet, so how usable
+    # capacity is spread is a health signal of its own: a pool collapsed into
+    # one country cannot spread, no matter how many nodes are up.
+    spread = {}
+    for r in rows:
+        if geo_known and r["usable"] and r["tunnel_healthy"]:
+            key = r["country"] or ANYCAST_GROUP
+            spread[key] = spread.get(key, 0) + 1
+    if spread:
+        cells = [f"{COUNTRY_NAMES.get(k, k)}={v}"
+                 for k, v in sorted(spread.items(), key=lambda kv: country_sort_key(kv[0]))]
+        print("  " + c(_BOLD, "SPREAD:  ") + c(_CYN, "  ".join(cells)))
     print(bar)
 
 

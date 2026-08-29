@@ -7,17 +7,33 @@ import (
 	"time"
 )
 
-// Hosts measured at 15/15 from a direct connection and 10/10 through both a
-// Singapore and an Indonesia SOCKS exit. The useast1a, useast5, alisg and va
-// clusters answer too but only 2/15 to 9/15, which is what makes the reference
-// implementation retry twenty times. Rotating over reliable hosts is cheaper
-// than hammering an unreliable one.
+// Hosts that returned the requested aweme_id on every attempt, measured at
+// 15/15 and re-checked at 8/8 an hour later, then confirmed against a second
+// video and a photo post. Ordered so the five long-serving hosts answer first
+// and the newer ones act as depth behind them.
+//
+// The spread is the point, not the count. Every host here except the .eu and
+// .us entries lives in useast2a behind Fastly; no1a, ie and useastred are
+// separate European clusters, and useast8 is Akamai. A rotation that is all
+// one cluster is one outage away from being no rotation at all.
+//
+// Excluded on purpose: useast1a, eu1a and the non-Singapore ali* clusters
+// answer nothing. alisg answers 4-10 of 15. useast5 is the cautionary one --
+// it measured 14/15, then 1/15 an hour later while these held, serving a feed
+// of other videos rather than the one asked for. Hosts can be withdrawn from a
+// caller without any error to notice, which is why absence is verified against
+// every host before a post is called unavailable.
 var defaultAPIHosts = []string{
 	"api19-normal-c-useast2a.tiktokv.com",
 	"api16-normal-c-useast2a.tiktokv.com",
 	"api22-normal-c-useast2a.tiktokv.com",
 	"api16-normal-no1a.tiktokv.eu",
 	"api19-normal-no1a.tiktokv.eu",
+	"api16-normal-ie.tiktokv.eu",
+	"api16-normal-useastred.tiktokv.eu",
+	"api16-normal-useast8.tiktokv.us",
+	"api16-core-useast8.tiktokv.us",
+	"api19-normal-useast2a.tiktokv.com",
 }
 
 type Config struct {

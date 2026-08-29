@@ -166,8 +166,8 @@ func (c *Client) Fetch(awemeID string) (*Aweme, string, error) {
 	c.next <- (start + 1) % len(hosts)
 
 	var lastErr error
-	tried, absent := 0, 0
 	for attempt := 0; attempt < c.cfg.MaxAttempts; attempt++ {
+		tried, absent := 0, 0
 		for i := range hosts {
 			host := hosts[(start+i)%len(hosts)]
 			item, err := c.fetchFrom(host, awemeID, params)
@@ -180,16 +180,23 @@ func (c *Client) Fetch(awemeID string) (*Aweme, string, error) {
 			}
 			lastErr = err
 		}
+		// A sweep in which every host answered cleanly and none of them had the
+		// post is already unanimous: the post is unavailable (deleted, private,
+		// or refused for this region). Nothing on this side failed, so this is
+		// not an extraction error. Sweeping again only asks the same hosts the
+		// same question -- with ten hosts that is twenty wasted requests and a
+		// minute of latency on a verdict already reached.
+		//
+		// The bar itself is unchanged: every host must agree. One host calling a
+		// post missing is not enough to condemn a live one, which matters because
+		// a host can quietly stop serving a caller -- answering 200 and
+		// status_code 0 with somebody else's feed -- rather than failing outright.
+		if absent == tried {
+			return nil, "", ErrNotFound
+		}
 		// A fresh fingerprint for the next sweep; the previous one may be what
 		// the API objected to.
 		params = c.deviceParams(awemeID)
-	}
-	// Every host answered correctly and none of them had the post. Nothing on
-	// this side failed, so this is an unavailable post (deleted, private or
-	// refused for this region) rather than an extraction error. One host saying
-	// so is not enough -- a single odd answer should not condemn a live post.
-	if tried > 0 && absent == tried {
-		return nil, "", ErrNotFound
 	}
 	if lastErr == nil {
 		lastErr = ErrUnreadable

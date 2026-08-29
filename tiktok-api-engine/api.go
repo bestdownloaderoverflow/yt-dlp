@@ -29,13 +29,14 @@ var (
 var awemeIDPattern = regexp.MustCompile(`/(?:video|photo)/(\d{17,21})`)
 
 type Client struct {
-	cfg   Config
-	http  *http.Client
-	next  chan int // round-robin cursor over cfg.APIHosts
-	short *http.Client
+	cfg     Config
+	http    *http.Client
+	next    chan int // round-robin cursor over cfg.APIHosts
+	short   *http.Client
+	metrics *Metrics
 }
 
-func NewClient(cfg Config) (*Client, error) {
+func NewClient(cfg Config, metrics *Metrics) (*Client, error) {
 	transport := &http.Transport{
 		MaxIdleConnsPerHost: 16,
 		IdleConnTimeout:     90 * time.Second,
@@ -48,9 +49,10 @@ func NewClient(cfg Config) (*Client, error) {
 		transport.Proxy = http.ProxyURL(p)
 	}
 	c := &Client{
-		cfg:  cfg,
-		http: &http.Client{Transport: transport, Timeout: cfg.RequestTimeout},
-		next: make(chan int, 1),
+		cfg:     cfg,
+		metrics: metrics,
+		http:    &http.Client{Transport: transport, Timeout: cfg.RequestTimeout},
+		next:    make(chan int, 1),
 		short: &http.Client{
 			Transport: transport,
 			Timeout:   cfg.RequestTimeout,
@@ -171,6 +173,7 @@ func (c *Client) Fetch(awemeID string) (*Aweme, string, error) {
 		for i := range hosts {
 			host := hosts[(start+i)%len(hosts)]
 			item, err := c.fetchFrom(host, awemeID, params)
+			c.recordHost(host, err)
 			if err == nil {
 				return item, host, nil
 			}
@@ -202,6 +205,26 @@ func (c *Client) Fetch(awemeID string) (*Aweme, string, error) {
 		lastErr = ErrUnreadable
 	}
 	return nil, "", lastErr
+}
+
+// recordHost counts what each host did with a request. A host can stop serving
+// a caller without failing: it answers 200 with status_code 0 and a feed of
+// other videos, which rotation then papers over. Split per host, that shows up
+// as one host's "absent" climbing while the same posts succeed on the others --
+// the only way to see it before enough hosts drift to raise the failure rate.
+func (c *Client) recordHost(host string, err error) {
+	if c.metrics == nil {
+		return
+	}
+	result := "ok"
+	switch {
+	case err == nil:
+	case errors.Is(err, errUnrelatedFeed):
+		result = "absent"
+	default:
+		result = "error"
+	}
+	c.metrics.Inc("tiktok_api_host_total", "host", host, "result", result)
 }
 
 func (c *Client) fetchFrom(host, awemeID, params string) (*Aweme, error) {

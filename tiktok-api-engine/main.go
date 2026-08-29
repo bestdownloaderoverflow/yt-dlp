@@ -43,6 +43,15 @@ func (s *Server) authorized(r *http.Request) bool {
 	return token == s.cfg.APIKey
 }
 
+// failed answers an extraction failure and records why. The three causes reach
+// the caller as different status codes and call for different responses -- a
+// malformed URL is the caller's, an unavailable post is nobody's, a 502 is
+// ours -- so counting them under one label made the failure rate undiagnosable.
+func (s *Server) failed(w http.ResponseWriter, status int, reason, detail string) {
+	s.metrics.Inc("tiktok_extract_results_total", "result", "failed", "reason", reason)
+	writeError(w, status, detail)
+}
+
 func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(r) {
 		writeError(w, http.StatusUnauthorized, "Unauthorized: invalid or missing API key")
@@ -60,13 +69,13 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if strings.TrimSpace(target) == "" {
-		writeError(w, http.StatusBadRequest, "URL is required")
+		s.failed(w, http.StatusBadRequest, "bad_url", "URL is required")
 		return
 	}
 
 	canonical, err := ValidatePostURL(target)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		s.failed(w, http.StatusBadRequest, "bad_url", err.Error())
 		return
 	}
 
@@ -80,30 +89,28 @@ func (s *Server) handleFetch(w http.ResponseWriter, r *http.Request) {
 
 	awemeID, err := s.client.ResolveAwemeID(canonical)
 	if err != nil {
-		s.metrics.Inc("tiktok_extract_results_total", "result", "failed")
-		writeError(w, http.StatusBadRequest, "TikTok URL must point to a video or photo post")
+		s.failed(w, http.StatusBadRequest, "bad_url",
+			"TikTok URL must point to a video or photo post")
 		return
 	}
 
 	item, host, err := s.client.Fetch(awemeID)
 	if err != nil {
-		s.metrics.Inc("tiktok_extract_results_total", "result", "failed")
 		if errors.Is(err, ErrNotFound) {
 			// The API answered and the post is not there: unavailable, private
 			// or removed. Deliberately not a 502 -- nothing on our side failed.
-			writeError(w, http.StatusUnprocessableEntity,
+			s.failed(w, http.StatusUnprocessableEntity, "unavailable",
 				"TikTok video is unavailable or restricted")
 			return
 		}
 		log.Printf("[fetch] %s: %v", awemeID, err)
-		writeError(w, http.StatusBadGateway, "Extraction failed: "+err.Error())
+		s.failed(w, http.StatusBadGateway, "api_error", "Extraction failed: "+err.Error())
 		return
 	}
 
 	result := s.Build(item, canonical)
 	if result == nil {
-		s.metrics.Inc("tiktok_extract_results_total", "result", "failed")
-		writeError(w, http.StatusUnprocessableEntity,
+		s.failed(w, http.StatusUnprocessableEntity, "no_media",
 			"TikTok post contains no downloadable media")
 		return
 	}
@@ -162,7 +169,8 @@ func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
 
 func main() {
 	cfg := LoadConfig()
-	client, err := NewClient(cfg)
+	metrics := NewMetrics()
+	client, err := NewClient(cfg, metrics)
 	if err != nil {
 		log.Fatalf("cannot start: %v", err)
 	}
@@ -183,7 +191,7 @@ func main() {
 		cfg:      cfg,
 		client:   client,
 		sessions: NewStore(cfg),
-		metrics:  NewMetrics(),
+		metrics:  metrics,
 		// No overall timeout: downloads are long-lived streams and are bounded
 		// by the client's context instead.
 		cdn: &http.Client{Transport: cdnTransport},

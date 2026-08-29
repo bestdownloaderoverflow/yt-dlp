@@ -14,6 +14,7 @@ type urlList struct {
 	URLList []string `json:"url_list"`
 	Width   int      `json:"width"`
 	Height  int      `json:"height"`
+	URLKey  string   `json:"url_key"`
 }
 
 func (u urlList) first() string {
@@ -29,7 +30,23 @@ type bitRate struct {
 	GearName    string  `json:"gear_name"`
 	QualityType int     `json:"quality_type"`
 	BitRate     int     `json:"bit_rate"`
+	IsByteVC1   int     `json:"is_bytevc1"`
 	PlayAddr    urlList `json:"play_addr"`
+}
+
+// isHEVC reports whether this rendition is H.265. TikTok calls it bytevc1 and
+// flags it three different ways depending on the post, so all three are read.
+func (b bitRate) isHEVC() bool {
+	return b.IsByteVC1 != 0 ||
+		strings.Contains(b.PlayAddr.URLKey, "bytevc1") ||
+		strings.Contains(b.PlayAddr.first(), "/media-video-hvc1/")
+}
+
+// isByteVC2 marks the newest codec, which almost nothing outside the TikTok app
+// decodes. Dropped outright rather than ranked last, matching 9111.
+func (b bitRate) isByteVC2() bool {
+	return strings.Contains(b.PlayAddr.URLKey, "bytevc2") ||
+		strings.Contains(strings.ToLower(b.GearName), "bytevc2")
 }
 
 type Aweme struct {
@@ -57,6 +74,8 @@ type Aweme struct {
 		// Milliseconds here, unlike the web SSR payload which reports seconds.
 		Duration     int       `json:"duration"`
 		PlayAddr     urlList   `json:"play_addr"`
+		PlayAddrH264 urlList   `json:"play_addr_h264"`
+		IsByteVC1    int       `json:"is_bytevc1"`
 		DownloadAddr urlList   `json:"download_addr"`
 		Cover        urlList   `json:"cover"`
 		OriginCover  urlList   `json:"origin_cover"`
@@ -145,45 +164,67 @@ func mediaIdentity(raw string) string {
 	return u.Path
 }
 
-// bestHD picks the highest-quality rendition.
+// gearResolution reads the vertical resolution out of a gear name
+// (adapt_lower_720_1, adapt_540_1, lowest_540_1 ...), falling back to the
+// dimensions the CDN reports for the rendition.
+func gearResolution(gear string, fallbackHeight int) int {
+	gear = strings.ToLower(gear)
+	for _, p := range []struct {
+		token string
+		value int
+	}{{"2160", 2160}, {"1440", 1440}, {"1080", 1080}, {"720", 720}, {"540", 540}, {"480", 480}, {"360", 360}} {
+		if strings.Contains(gear, p.token) {
+			return p.value
+		}
+	}
+	return fallbackHeight
+}
+
+// bestHD picks the biggest rendition whose codec will actually play, falling
+// back to the biggest rendition of any codec when none of them will.
 //
-// The web SSR path filters on CodecType to prefer H.264 and drop bytevc2. The
-// app API leaves codec_type null, so that discriminator does not exist here.
-// gear_name carries the resolution instead (adapt_lower_720_1, adapt_540_1,
-// lower_540_1 ...), so rank by resolution first and bitrate second.
-func bestHD(rates []bitRate) (string, string) {
+// Two things make this harder than sorting on resolution. The app API leaves
+// codec_type null, so the web path's codec filter does not work here -- the real
+// marker is is_bytevc1, TikTok's name for H.265. And the H.264 renditions are
+// not all in bit_rate: play_addr_h264 sits beside it and is often the only H.264
+// copy on offer, so a search that reads bit_rate alone misses it and concludes
+// the post has no playable rendition at all.
+//
+// Ordering is therefore playable-codec first, then resolution, then bitrate.
+// H.265 still wins when it is the only thing there -- a large file the user may
+// need a codec pack for beats no HD link at all -- and no_watermark stays H.264
+// in that case, so there is always one link that opens anywhere.
+func bestHD(a *Aweme) (string, string) {
 	type scored struct {
 		url      string
 		identity string
+		h264     bool
 		res      int
 		bitrate  int
 	}
 	var out []scored
-	for _, r := range rates {
-		u := r.PlayAddr.first()
-		if u == "" || strings.Contains(u, "/media-video-hvc1/") {
-			continue
+	add := func(u string, h264 bool, res, bitrate int) {
+		if u == "" {
+			return
 		}
-		gear := strings.ToLower(r.GearName)
-		if strings.Contains(gear, "bytevc2") {
-			continue
-		}
-		res := 0
-		for _, p := range []struct {
-			token string
-			value int
-		}{{"2160", 2160}, {"1440", 1440}, {"1080", 1080}, {"720", 720}, {"540", 540}, {"480", 480}, {"360", 360}} {
-			if strings.Contains(gear, p.token) {
-				res = p.value
-				break
-			}
-		}
-		out = append(out, scored{u, mediaIdentity(u), res, r.BitRate})
+		out = append(out, scored{u, mediaIdentity(u), h264, res, bitrate})
 	}
+	for _, r := range a.Video.BitRate {
+		if r.isByteVC2() {
+			continue
+		}
+		add(r.PlayAddr.first(), !r.isHEVC(),
+			gearResolution(r.GearName, r.PlayAddr.Height), r.BitRate)
+	}
+	add(a.Video.PlayAddrH264.first(), true, a.Video.PlayAddrH264.Height, 0)
+	add(a.Video.PlayAddr.first(), a.Video.IsByteVC1 == 0, a.Video.PlayAddr.Height, 0)
 	if len(out) == 0 {
 		return "", ""
 	}
 	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].h264 != out[j].h264 {
+			return out[i].h264
+		}
 		if out[i].res != out[j].res {
 			return out[i].res > out[j].res
 		}
@@ -324,9 +365,14 @@ func (s *Server) buildPicker(r *Response, a *Aweme, canonicalURL, safeAuthor str
 func (s *Server) buildVideo(r *Response, a *Aweme, canonicalURL, safeAuthor string,
 	audio string) *Response {
 
-	play := a.Video.PlayAddr.first()
+	// play_addr_h264 is the guaranteed H.264 twin of play_addr; when the post is
+	// published as H.265, play_addr itself is the one that will not play.
+	play := a.Video.PlayAddrH264.first()
+	if play == "" {
+		play = a.Video.PlayAddr.first()
+	}
 	download := a.Video.DownloadAddr.first()
-	hd, hdIdentity := bestHD(a.Video.BitRate)
+	hd, hdIdentity := bestHD(a)
 	if play == "" && hd == "" && download == "" {
 		return nil
 	}

@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import time
+import uuid
 from typing import Optional
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -81,6 +82,7 @@ REQUEST_BLOCK_VERIFY_TIMEOUT_SECONDS = max(
     1.0, float(os.getenv("REQUEST_BLOCK_VERIFY_TIMEOUT", "6")))
 GEO_HINT_TTL_SECONDS = max(60, int(os.getenv("GEO_HINT_TTL", "600")))
 MAX_EXTRACTION_TOUCHES = max(1, int(os.getenv("MAX_EXTRACTION_TOUCHES", "4")))
+MAX_INDONESIA_TOUCHES = max(1, int(os.getenv("MAX_INDONESIA_TOUCHES", "2")))
 
 
 class TikTokRequest(BaseModel):
@@ -113,9 +115,27 @@ def should_retry_via_indonesia(
     return warp_exhausted and distinct_warp_exit_failures >= 1
 
 
-def should_retry_ip_block_via_indonesia(distinct_exit_failures: int) -> bool:
-    """Treat repeated 10204 across distinct exits as a possible geo restriction."""
-    return distinct_exit_failures >= 2
+def should_retry_ip_block_via_indonesia(
+    distinct_exit_failures: int, control_served: bool = False,
+) -> bool:
+    """Try Indonesia for content-specific or repeated ambiguous 10204 responses.
+
+    A serving neutral control post proves the exit itself still reaches TikTok,
+    so one target-only 10204 is enough to justify a bounded Indonesia attempt.
+    An inconclusive control still requires two distinct public IPv4 failures.
+    This only changes the lane for the current request; it never persists a geo
+    hint unless Indonesia actually succeeds.
+    """
+    return control_served or distinct_exit_failures >= 2
+
+
+def _attempt_trace_summary(entries: list[dict]) -> str:
+    if not entries:
+        return "none"
+    return ",".join(
+        f"{entry['touch']}:{entry['lane']}:{entry['proxy']}:{entry['result']}"
+        for entry in entries
+    )
 
 
 async def verify_ambiguous_ip_block(proxy_url: Optional[str]) -> Optional[bool]:
@@ -356,13 +376,15 @@ async def extract_tiktok(
     target_url = validate_tiktok_post_url(target_url)
     req_proxy = validate_requested_proxy(req_proxy)
     cache_key = extraction_cache_key(target_url)
+    request_id = uuid.uuid4().hex[:10]
 
     # 1. Check Redis / In-Memory Extraction Cache first (0.5ms response for viral videos)
     cached = get_cached_extraction(cache_key)
     if cached:
         inc_counter("tiktok_extract_cache_total", result="hit")
         if VERBOSE_LOGS:
-            print(f"⚡ [CACHE HIT] Returning cached result for {target_url}", flush=True)
+            print(f"⚡ [req={request_id}] [CACHE HIT] Returning cached result for "
+                  f"{target_url}", flush=True)
         return JSONResponse(content=cached)
 
     impersonate = req_impersonate or DEFAULT_IMPERSONATE
@@ -376,21 +398,27 @@ async def extract_tiktok(
     failed_warp_exit_ips: set[str] = set()
     failed_ip_block_exit_ips: set[str] = set()
     healthy_control_exit_ips: set[str] = set()
+    healthy_indonesia_proxies: set[str] = set()
     indonesia_touches = 0
     last_error = None
+    attempt_trace: list[dict] = []
     tried_proxies: set[str] = set()
     tried_exit_ips: set[str] = set()
     tried_countries: set[str] = set()
     indo_proxies = set(get_indo_proxies())
+    indonesia_touch_limit = min(MAX_INDONESIA_TOUCHES, len(indo_proxies)) \
+        if indo_proxies else 1
 
     if VERBOSE_LOGS:
-        print(f"📥 [REQUEST] Extracting: {target_url}", flush=True)
+        print(f"📥 [req={request_id}] [REQUEST] Extracting: {target_url}", flush=True)
 
-    while real_attempts < max_attempts and touches < max_touches:
-        if prefer_indo and indonesia_touches >= 2:
+    while real_attempts < max_attempts and (
+        touches < max_touches
+        or (prefer_indo and indonesia_touches < indonesia_touch_limit)
+    ):
+        if prefer_indo and indonesia_touches >= indonesia_touch_limit:
             break
-        touches += 1
-        real_attempts += 1
+        next_attempt = real_attempts + 1
 
         if prefer_indo:
             # Region-locked content still overrides everything: only Indonesia exits
@@ -400,11 +428,9 @@ async def extract_tiktok(
             )
             lane = "indo"
             if not proxy:
-                proxy = get_next_proxy(
-                    prefer_geo=True, exclude=tried_proxies, exclude_exit_ips=tried_exit_ips,
-                )
-                lane = "geo (no Indonesia available)"
-        elif real_attempts == 1 or retry_warp:
+                last_error = TikTokInfraError("No usable Indonesia proxy exits available")
+                break
+        elif next_attempt == 1 or retry_warp:
             # First attempt goes through Cloudflare WARP, falling back to the geo
             # pool only when every WARP node is dead, cooling down or blocked.
             # A generic content failure gets one confirmation attempt on a
@@ -430,6 +456,8 @@ async def extract_tiktok(
         if PROXY_COUNT > 0 and not proxy:
             last_error = TikTokInfraError("No usable proxy exits available")
             break
+        touches += 1
+        real_attempts += 1
         proxy_exit_ip = ""
         if proxy:
             tried_proxies.add(proxy)
@@ -440,12 +468,23 @@ async def extract_tiktok(
         if lane == "indo" and proxy in indo_proxies:
             indonesia_touches += 1
 
+        trace_entry = {
+            "touch": touches,
+            "lane": lane,
+            "proxy": (urlsplit(proxy).hostname if proxy else None) or "direct",
+            "result": "pending",
+        }
+        attempt_trace.append(trace_entry)
+
         if VERBOSE_LOGS:
-            print(f"  🔄 [Attempt {real_attempts}/{max_attempts}] lane={lane} proxy={proxy}", flush=True)
+            print(f"  🔄 [req={request_id}] [Attempt {real_attempts}/{max_attempts}] "
+                  f"lane={lane} proxy={proxy}", flush=True)
         inc_in_flight(proxy)
         try:
             extractor = TikTokSSRExtractor(proxy=proxy, impersonate=impersonate)
+            extractor.request_id = request_id
             result = await extractor.extract(target_url)
+            trace_entry["result"] = "success"
             source = result.get("extract_source") or ""
             tiktok_served = source != "web_fallback"
             mark_proxy_request_success(proxy, tiktok_served=tiktok_served)
@@ -461,13 +500,16 @@ async def extract_tiktok(
                 set_geo_hint(cache_key, ttl=GEO_HINT_TTL_SECONDS)
                 inc_counter("tiktok_geo_hint_total", result="stored")
             if VERBOSE_LOGS:
-                print(f"  ✅ [Attempt {real_attempts}] SUCCESS ({result.get('extract_source')}) - Title: {result.get('title', '')[:40]}", flush=True)
+                print(f"  ✅ [req={request_id}] [Attempt {real_attempts}] SUCCESS "
+                      f"({result.get('extract_source')}) - "
+                      f"Title: {result.get('title', '')[:40]}", flush=True)
 
             # Save successful extraction to cache
             set_cached_extraction(cache_key, result, ttl=CACHE_TTL or 300)
             inc_counter("tiktok_extract_results_total", result="success", source=source or "unknown")
             return JSONResponse(content=result)
         except TikTokInfraError as e:
+            trace_entry["result"] = "infra"
             inc_counter("tiktok_extract_attempts_total", result="infra_error")
             inc_counter("tiktok_proxy_failovers_total", reason="infra_error")
             # Proxy infrastructure failure: switch proxy WITHOUT consuming an attempt
@@ -475,19 +517,23 @@ async def extract_tiktok(
             last_error = e
             mark_proxy_cooldown(proxy, 60)
             if VERBOSE_LOGS:
-                print(f"  ⚠️ [Touch {touches}] INFRA FAIL on {proxy} (attempt not consumed, cooldown 60s): {e}", flush=True)
+                print(f"  ⚠️ [req={request_id}] [Touch {touches}] INFRA FAIL "
+                      f"on {proxy} (attempt not consumed, cooldown 60s): {e}", flush=True)
             if req_proxy:
                 break
             if lane == "cloudflare" and failed_warp_exit_ips:
                 retry_warp = True
         except TikTokAccessRestrictedError as e:
+            trace_entry["result"] = "access_restricted"
             inc_counter("tiktok_extract_attempts_total", result="access_restricted")
             # 10216/10222 are private post/account permissions, not geo codes.
             # Rotating exits cannot grant account access.
             if VERBOSE_LOGS:
-                print(f"  🔒 [Attempt {real_attempts}] ACCESS RESTRICTED on {proxy}: {e}", flush=True)
+                print(f"  🔒 [req={request_id}] [Attempt {real_attempts}] "
+                      f"ACCESS RESTRICTED on {proxy}: {e}", flush=True)
             raise HTTPException(status_code=403, detail=str(e))
         except TikTokIPBlockedError as e:
+            trace_entry["result"] = "10204"
             inc_counter("tiktok_extract_attempts_total", result="ip_blocked")
             inc_counter("tiktok_proxy_failovers_total", reason="ip_blocked")
             # TikTok also returns 10204 for some rights/geo-restricted posts, so
@@ -497,37 +543,46 @@ async def extract_tiktok(
             # probe may persist BLOCK and schedule a reconnect for the pool.
             last_error = e
             if VERBOSE_LOGS:
-                print(f"  🚫 [Attempt {real_attempts}] ambiguous 10204 on {proxy}; "
+                print(f"  🚫 [req={request_id}] [Attempt {real_attempts}] "
+                      f"ambiguous 10204 on {proxy}; "
                       "excluded for this request only", flush=True)
             if req_proxy:
                 break
             control_verdict = await verify_ambiguous_ip_block(proxy)
             if control_verdict is True:
+                trace_entry["result"] = "10204_exit_blocked"
                 blocked_proxies = mark_proxy_and_shared_exit_blocked(proxy)
                 if VERBOSE_LOGS:
-                    print(f"  🧱 [Attempt {real_attempts}] control post also blocked; "
+                    print(f"  🧱 [req={request_id}] [Attempt {real_attempts}] "
+                          "control post also blocked; "
                           f"parked {len(blocked_proxies)} proxy(s)", flush=True)
             elif control_verdict is False:
+                trace_entry["result"] = "10204_content_specific"
                 if proxy_exit_ip:
                     failed_ip_block_exit_ips.add(proxy_exit_ip)
                     healthy_control_exit_ips.add(proxy_exit_ip)
+                if proxy in indo_proxies:
+                    healthy_indonesia_proxies.add(proxy)
                 if VERBOSE_LOGS:
-                    print(f"  ✅ [Attempt {real_attempts}] control post served; "
+                    print(f"  ✅ [req={request_id}] [Attempt {real_attempts}] "
+                          "control post served; "
                           "10204 is content-specific", flush=True)
             elif proxy_exit_ip:
+                trace_entry["result"] = "10204_inconclusive"
                 # Still allow Indonesia as a recovery lane after two distinct
                 # target failures, but do not later call the video itself bad
                 # unless a neutral control request proved TikTok serves an exit.
                 failed_ip_block_exit_ips.add(proxy_exit_ip)
             if (
                 not prefer_indo
-                and should_retry_ip_block_via_indonesia(len(failed_ip_block_exit_ips))
+                and should_retry_ip_block_via_indonesia(
+                    len(failed_ip_block_exit_ips), control_served=control_verdict is False,
+                )
             ):
                 # Some geo-restricted posts (including sports rights content)
-                # return 10204 outside the permitted country. One 10204 is only
-                # evidence of a bad exit; two distinct public IPv4s are enough
-                # to try the configured Indonesia lane without misclassifying a
-                # single WAF-blocked address as geo-restricted content.
+                # return 10204 outside the permitted country. One target-only
+                # 10204 with a serving neutral control is sufficient; otherwise
+                # retain the two-distinct-IPv4 confirmation requirement.
                 real_attempts -= 1
                 retry_warp = False
                 prefer_indo = True
@@ -537,7 +592,8 @@ async def extract_tiktok(
                     # exits are two addresses but one place, so they are much
                     # weaker evidence that the post is geo-restricted.
                     countries = sorted(tried_countries) or ["unknown"]
-                    print(f"  🇮🇩 [Attempt {real_attempts}] 10204 confirmed on "
+                    print(f"  🇮🇩 [req={request_id}] [Attempt {real_attempts}] "
+                          "10204 target-specific or confirmed on "
                           f"{len(failed_ip_block_exit_ips)} distinct IPv4 exits "
                           f"across {','.join(countries)}; "
                           "switching to Indonesia nodes", flush=True)
@@ -547,6 +603,7 @@ async def extract_tiktok(
                 real_attempts -= 1
                 retry_warp = True
         except TikTokExtractError as e:
+            trace_entry["result"] = "extract_error"
             inc_counter("tiktok_extract_attempts_total", result="extract_error")
             last_error = e
             if lane == "cloudflare":
@@ -579,37 +636,50 @@ async def extract_tiktok(
                     else " -> confirming on another WARP exit" if retry_warp
                     else ""
                 )
-                print(f"  ⚠️ [Attempt {real_attempts}] CONTENT/EXTRACT FAIL on {proxy}{retry_lane}: {e}", flush=True)
+                print(f"  ⚠️ [req={request_id}] [Attempt {real_attempts}] "
+                      f"CONTENT/EXTRACT FAIL on {proxy}{retry_lane}: {e}", flush=True)
             if req_proxy:
                 break
         except Exception as e:
+            trace_entry["result"] = "unclassified"
             inc_counter("tiktok_extract_attempts_total", result="unclassified")
             last_error = e
             if VERBOSE_LOGS:
-                print(f"  ⚠️ [Attempt {real_attempts}] UNCLASSIFIED FAIL on {proxy}: {e}", flush=True)
+                print(f"  ⚠️ [req={request_id}] [Attempt {real_attempts}] "
+                      f"UNCLASSIFIED FAIL on {proxy}: {e}", flush=True)
             if req_proxy:
                 break
         finally:
             dec_in_flight(proxy)
 
-    print(f"❌ [FAILED] Extraction failed for {target_url} after {touches} proxy touches: {last_error}", flush=True)
+    trace_summary = _attempt_trace_summary(attempt_trace)
+    print(f"❌ [req={request_id}] [FAILED] Extraction failed for {target_url} "
+          f"after {touches} proxy touches: {last_error}; trace={trace_summary}", flush=True)
     inc_counter("tiktok_extract_results_total", result="failed", source="none")
+    if prefer_indo:
+        if indonesia_touches < indonesia_touch_limit:
+            raise HTTPException(
+                status_code=503,
+                detail="Not enough usable Indonesia exits to verify this video",
+            )
+        if (
+            isinstance(last_error, TikTokIPBlockedError)
+            and len(healthy_indonesia_proxies) >= indonesia_touch_limit
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail=("TikTok video is unavailable or restricted after verification "
+                        "on healthy Indonesia exits"),
+            )
+        raise HTTPException(
+            status_code=503,
+            detail="Indonesia exits could not serve this video; retry later",
+        )
     if isinstance(last_error, TikTokIPBlockedError):
         if not healthy_control_exit_ips:
             raise HTTPException(
                 status_code=503,
                 detail="No healthy TikTok exit could verify this video; retry later",
-            )
-        if prefer_indo and indonesia_touches < 2:
-            raise HTTPException(
-                status_code=503,
-                detail="Not enough usable Indonesia exits to verify this video",
-            )
-        if prefer_indo and indonesia_touches >= 2:
-            raise HTTPException(
-                status_code=422,
-                detail=("TikTok video is unavailable or restricted after verification "
-                        "on healthy Indonesia exits"),
             )
     raise HTTPException(status_code=502, detail=f"Extraction failed: {last_error}")
 

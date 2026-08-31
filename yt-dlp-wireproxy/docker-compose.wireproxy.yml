@@ -448,6 +448,9 @@ services:
       - ALLOW_DIRECT_DOWNLOAD_FALLBACK=false
       - DOWNLOAD_PROXY_ATTEMPTS=3
       - MAX_EXTRACTION_TOUCHES=4
+      # Once target-specific geo evidence exists, reserve two strict Indonesia
+      # attempts even when the generic four-touch budget has already been used.
+      - MAX_INDONESIA_TOUCHES=2
       - GEO_HINT_TTL=600
       - REQUEST_BLOCK_VERIFY_TIMEOUT=6
       - PROBE_TIMEOUT=12

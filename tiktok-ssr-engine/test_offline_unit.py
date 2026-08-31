@@ -895,6 +895,8 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertFalse(should_retry_ip_block_via_indonesia(0))
         self.assertFalse(should_retry_ip_block_via_indonesia(1))
         self.assertTrue(should_retry_ip_block_via_indonesia(2))
+        self.assertTrue(should_retry_ip_block_via_indonesia(
+            0, control_served=True))
 
     def test_geo_hint_cache(self):
         key = "https://www.tiktok.com/@geo/video/987654321"
@@ -1056,7 +1058,10 @@ class TestTikTokSSROffline(unittest.TestCase):
                 patch("main.set_geo_hint") as geo_hint:
             response = asyncio.run(extract_tiktok(request))
 
-        self.assertEqual(used, [warp, geo, indo])
+        # The neutral control proves WARP itself is serving TikTok, so the
+        # target-only 10204 goes straight to Indonesia without wasting a touch
+        # on another non-ID geo exit.
+        self.assertEqual(used, [warp, indo])
         self.assertEqual(response.status_code, 200)
         self.assertEqual(json.loads(response.body)["title"], "Indonesia success")
         poison_pool.assert_not_called()
@@ -1120,13 +1125,47 @@ class TestTikTokSSROffline(unittest.TestCase):
         self.assertEqual(json.loads(response.body)["title"], "Indonesia success")
         geo_hint.assert_called_once()
 
-    def test_lucky_indonesia_pick_from_the_geo_lane_is_remembered(self):
-        # The geo lane holds the Indonesia nodes too, so a retry can land on one
-        # by luck. That used to succeed and teach the service nothing, leaving
-        # the next request for the same post to re-run the failing sequence.
+    def test_confirmed_geo_does_not_fall_back_to_non_indonesia(self):
+        indo = "socks5h://wireproxy-01:1080"
+        non_indo = "socks5h://wireproxy-04:1080"
+        selections = []
+
+        def pick_proxy(**kwargs):
+            selections.append(kwargs)
+            if kwargs.get("indo_only"):
+                return None
+            return non_indo
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@geo/video/7677284046552059144",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=True), \
+                patch("main.get_indo_proxies", return_value=[indo]), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.TikTokSSRExtractor") as extractor:
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(extract_tiktok(request))
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertIn("Indonesia", raised.exception.detail)
+        extractor.assert_not_called()
+        self.assertTrue(selections[0].get("indo_only"))
+        self.assertFalse(any(call.get("prefer_geo") for call in selections))
+
+    def test_confirmed_geo_reserves_indonesia_touch_after_generic_budget(self):
         warp = "socks5h://wireproxy-18:1080"
-        indo = "socks5h://wireproxy-13:1080"
-        exit_ips = {warp: "104.28.197.9", indo: "129.227.46.150"}
+        geo = [f"socks5h://wireproxy-{i:02d}:1080" for i in (2, 3, 4)]
+        indo = "socks5h://wireproxy-01:1080"
+        exits = {
+            warp: "104.28.197.9",
+            geo[0]: "198.51.100.2",
+            geo[1]: "198.51.100.3",
+            geo[2]: "198.51.100.4",
+            indo: "203.0.113.1",
+        }
+        used = []
 
         class FakeExtractor:
             def __init__(self, proxy=None, impersonate=None):
@@ -1134,37 +1173,203 @@ class TestTikTokSSROffline(unittest.TestCase):
                 self.proxy = proxy
 
             async def extract(self, _url):
-                if self.proxy != indo:
-                    raise TikTokExtractError("empty shell")
-                return {"extract_source": "web_ssr", "title": "lucky"}
+                used.append(self.proxy)
+                if self.proxy in {warp, geo[0], geo[1]}:
+                    raise TikTokInfraError("timeout")
+                if self.proxy == geo[2]:
+                    raise TikTokIPBlockedError()
+                return {"extract_source": "web_ssr", "title": "Indonesia success"}
 
         def pick_proxy(**kwargs):
-            # Never offers the deliberate Indonesia lane: the geo lane is what
-            # hands back an Indonesia node here.
+            excluded = kwargs.get("exclude") or set()
             if kwargs.get("indo_only"):
-                return None
+                return None if indo in excluded else indo
             if kwargs.get("warp_only"):
-                return None if warp in (kwargs.get("exclude") or set()) else warp
-            return indo
+                return None if warp in excluded else warp
+            return next((proxy for proxy in geo if proxy not in excluded), None)
 
         request = MagicMock(method="POST")
         request.json = AsyncMock(return_value={
-            "url": "https://www.tiktok.com/@geo/video/7677284046552059144",
+            "url": "https://www.tiktok.com/@vidiosports/video/7677284046552059143",
         })
         with patch("main.get_cached_extraction", return_value=None), \
                 patch("main.get_geo_hint", return_value=False), \
                 patch("main.get_indo_proxies", return_value=[indo]), \
                 patch("main.get_next_proxy", side_effect=pick_proxy), \
-                patch("main.get_proxy_exit_ip", side_effect=lambda p: exit_ips.get(p, "")), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: exits[p]), \
                 patch("main.TikTokSSRExtractor", FakeExtractor), \
+                patch("main.verify_ambiguous_ip_block", AsyncMock(return_value=False)), \
+                patch("main.mark_proxy_cooldown"), \
                 patch("main.mark_proxy_request_success"), \
                 patch("main.clear_proxy_and_shared_exit_blocked"), \
                 patch("main.set_cached_extraction"), \
                 patch("main.set_geo_hint") as geo_hint:
             response = asyncio.run(extract_tiktok(request))
 
+        self.assertEqual(used, [warp, *geo, indo])
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(json.loads(response.body)["title"], "Indonesia success")
         geo_hint.assert_called_once()
+
+    def test_public_non_geo_success_never_touches_indonesia(self):
+        warp = "socks5h://wireproxy-18:1080"
+        indo = "socks5h://wireproxy-01:1080"
+        selections = []
+
+        class FakeExtractor:
+            def __init__(self, proxy=None, impersonate=None):
+                del impersonate
+                self.proxy = proxy
+
+            async def extract(self, _url):
+                return {"extract_source": "web_ssr", "title": "Public success"}
+
+        def pick_proxy(**kwargs):
+            selections.append(kwargs)
+            return indo if kwargs.get("indo_only") else warp
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@public/video/111",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=False), \
+                patch("main.get_indo_proxies", return_value=[indo]), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.get_proxy_exit_ip", return_value="104.28.197.9"), \
+                patch("main.TikTokSSRExtractor", FakeExtractor), \
+                patch("main.verify_ambiguous_ip_block", AsyncMock()) as control_probe, \
+                patch("main.mark_proxy_request_success"), \
+                patch("main.clear_proxy_and_shared_exit_blocked"), \
+                patch("main.set_cached_extraction"):
+            response = asyncio.run(extract_tiktok(request))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(selections), 1)
+        self.assertTrue(selections[0].get("warp_only"))
+        control_probe.assert_not_called()
+
+    def test_infrastructure_failures_alone_never_trigger_indonesia(self):
+        warp = "socks5h://wireproxy-18:1080"
+        geo = [f"socks5h://wireproxy-{i:02d}:1080" for i in (2, 3, 4)]
+        indo = "socks5h://wireproxy-01:1080"
+        used = []
+        selections = []
+
+        class FailingExtractor:
+            def __init__(self, proxy=None, impersonate=None):
+                del impersonate
+                self.proxy = proxy
+
+            async def extract(self, _url):
+                used.append(self.proxy)
+                raise TikTokInfraError("timeout")
+
+        def pick_proxy(**kwargs):
+            selections.append(kwargs)
+            excluded = kwargs.get("exclude") or set()
+            if kwargs.get("indo_only"):
+                return indo
+            if kwargs.get("warp_only"):
+                return None if warp in excluded else warp
+            return next((proxy for proxy in geo if proxy not in excluded), None)
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@public/video/222",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=False), \
+                patch("main.get_indo_proxies", return_value=[indo]), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: p), \
+                patch("main.TikTokSSRExtractor", FailingExtractor), \
+                patch("main.mark_proxy_cooldown"), \
+                patch("builtins.print") as log:
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(extract_tiktok(request))
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertEqual(used, [warp, *geo])
+        self.assertFalse(any(call.get("indo_only") for call in selections))
+        final_log = " ".join(str(arg) for call in log.call_args_list for arg in call.args)
+        self.assertIn("trace=", final_log)
+        self.assertIn("wireproxy-04:infra", final_log)
+
+    def test_access_restriction_returns_403_without_indonesia_retry(self):
+        warp = "socks5h://wireproxy-18:1080"
+        indo = "socks5h://wireproxy-01:1080"
+        selections = []
+
+        class RestrictedExtractor:
+            def __init__(self, proxy=None, impersonate=None):
+                del impersonate
+                self.proxy = proxy
+
+            async def extract(self, _url):
+                raise TikTokAccessRestrictedError("private account")
+
+        def pick_proxy(**kwargs):
+            selections.append(kwargs)
+            return indo if kwargs.get("indo_only") else warp
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@private/video/333",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=False), \
+                patch("main.get_indo_proxies", return_value=[indo]), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.get_proxy_exit_ip", return_value="104.28.197.9"), \
+                patch("main.TikTokSSRExtractor", RestrictedExtractor):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(extract_tiktok(request))
+
+        self.assertEqual(raised.exception.status_code, 403)
+        self.assertEqual(len(selections), 1)
+        self.assertFalse(selections[0].get("indo_only"))
+
+    def test_real_exit_block_does_not_misroute_to_indonesia(self):
+        warp = "socks5h://wireproxy-18:1080"
+        geo = [f"socks5h://wireproxy-{i:02d}:1080" for i in (2, 3, 4)]
+        indo = "socks5h://wireproxy-01:1080"
+        selections = []
+
+        class BlockedExtractor:
+            def __init__(self, proxy=None, impersonate=None):
+                del impersonate
+                self.proxy = proxy
+
+            async def extract(self, _url):
+                raise TikTokIPBlockedError()
+
+        def pick_proxy(**kwargs):
+            selections.append(kwargs)
+            excluded = kwargs.get("exclude") or set()
+            if kwargs.get("indo_only"):
+                return indo
+            if kwargs.get("warp_only"):
+                return None if warp in excluded else warp
+            return next((proxy for proxy in geo if proxy not in excluded), None)
+
+        request = MagicMock(method="POST")
+        request.json = AsyncMock(return_value={
+            "url": "https://www.tiktok.com/@public/video/444",
+        })
+        with patch("main.get_cached_extraction", return_value=None), \
+                patch("main.get_geo_hint", return_value=False), \
+                patch("main.get_indo_proxies", return_value=[indo]), \
+                patch("main.get_next_proxy", side_effect=pick_proxy), \
+                patch("main.get_proxy_exit_ip", side_effect=lambda p: p), \
+                patch("main.TikTokSSRExtractor", BlockedExtractor), \
+                patch("main.verify_ambiguous_ip_block", AsyncMock(return_value=True)), \
+                patch("main.mark_proxy_and_shared_exit_blocked"):
+            with self.assertRaises(HTTPException) as raised:
+                asyncio.run(extract_tiktok(request))
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertFalse(any(call.get("indo_only") for call in selections))
 
     def test_video_error_requires_two_healthy_indonesia_exits(self):
         proxies = [
@@ -1209,7 +1414,7 @@ class TestTikTokSSROffline(unittest.TestCase):
             with self.assertRaises(HTTPException) as raised:
                 asyncio.run(extract_tiktok(request))
 
-        self.assertEqual(used, proxies)
+        self.assertEqual(used, [proxies[0], proxies[2], proxies[3]])
         self.assertEqual(raised.exception.status_code, 422)
 
     def test_ip_block_fans_out_only_after_shared_ipv4_confirmation(self):

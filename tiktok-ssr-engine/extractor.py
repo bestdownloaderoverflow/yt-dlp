@@ -205,6 +205,12 @@ class TikTokSSRExtractor:
     def __init__(self, proxy: Optional[str] = None, impersonate: Optional[str] = None):
         self.proxy = proxy
         self.impersonate = impersonate or DEFAULT_IMPERSONATE
+        self.request_id = ""
+
+    def _failure_log(self, strategy: str, error: Exception):
+        request_label = f"[req={self.request_id}]" if self.request_id else ""
+        print(f"[SSR Engine]{request_label} {strategy} failed on proxy "
+              f"{self.proxy}: {error}", flush=True)
 
     async def resolve_url(self, session: AsyncSession, url: str) -> str:
         clean_url = url.split("?")[0].strip()
@@ -506,7 +512,7 @@ class TikTokSSRExtractor:
                     return res
             except Exception as e:
                 classified_error = _classify_error(e)
-                print(f"[SSR Engine] Web SSR failed on proxy {self.proxy}: {e}")
+                self._failure_log("Web SSR", e)
                 if isinstance(classified_error, (
                     TikTokInfraError,
                     TikTokIPBlockedError,
@@ -524,7 +530,7 @@ class TikTokSSRExtractor:
                         return res
                 except Exception as e:
                     classified_error = _classify_error(e)
-                    print(f"[SSR Engine] Embed SSR failed on proxy {self.proxy}: {e}")
+                    self._failure_log("Embed SSR", e)
                     if isinstance(classified_error, TikTokInfraError):
                         raise classified_error
 
@@ -535,7 +541,7 @@ class TikTokSSRExtractor:
                     return res
             except Exception as e:
                 classified_error = _classify_error(e)
-                print(f"[SSR Engine] Web Fallback failed on proxy {self.proxy}: {e}")
+                self._failure_log("Web Fallback", e)
                 if isinstance(classified_error, TikTokInfraError):
                     raise classified_error
 

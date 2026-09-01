@@ -27,13 +27,16 @@ var defaultAPIHosts = []string{
 	"api19-normal-c-useast2a.tiktokv.com",
 	"api16-normal-c-useast2a.tiktokv.com",
 	"api22-normal-c-useast2a.tiktokv.com",
+	"api19-normal-useast2a.tiktokv.com",
+	"api16-core-c-useast2a.tiktokv.com",
+	"api16-normal-useast8.tiktokv.us",
+	"api16-core-useast8.tiktokv.us",
+	"api19-normal-useast8.tiktokv.us",
 	"api16-normal-no1a.tiktokv.eu",
 	"api19-normal-no1a.tiktokv.eu",
 	"api16-normal-ie.tiktokv.eu",
+	"api16-core-ie.tiktokv.eu",
 	"api16-normal-useastred.tiktokv.eu",
-	"api16-normal-useast8.tiktokv.us",
-	"api16-core-useast8.tiktokv.us",
-	"api19-normal-useast2a.tiktokv.com",
 }
 
 type Config struct {
